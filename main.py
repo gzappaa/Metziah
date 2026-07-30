@@ -1,15 +1,25 @@
 import asyncio
+import pandas as pd
 
-from chains.mahsanei_ashuk import MahsaneiAshukScraper
+from chains.machsenei_hashuk import MachseneiHashukScraper
 
 
 async def main():
 
-    scraper = MahsaneiAshukScraper()
+    scraper = MachseneiHashukScraper()
 
     products = await scraper.scrape()
 
-    print(products[:5])
+    df = pd.DataFrame(
+        [product.__dict__ for product in products]
+    )
+
+    df.to_csv(
+        "machsenei_hashuk_prices.csv",
+        index=False,
+        encoding="utf-8-sig"
+    )
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

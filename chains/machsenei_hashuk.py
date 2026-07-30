@@ -1,8 +1,9 @@
 from clients.laibcatalog import LaibcatalogClient
 import gzip
+from parsers.xml import MachseneiXmlParser
 
 
-class MahsaneiAshukScraper:
+class MachseneiHashukScraper:
 
     def __init__(self):
 
@@ -10,12 +11,12 @@ class MahsaneiAshukScraper:
             "7290661400001"
         )
 
+        self.parser = MachseneiXmlParser()
+
 
     async def scrape(self):
 
-        files = await self.client.get_files(
-            "7290661400001"
-        )
+        files = await self.client.get_files()
 
         urls = []
 
@@ -49,7 +50,8 @@ class MahsaneiAshukScraper:
 
 
         # inspect XML
-        print(xml_content[:1000])
+        products = self.parser.parse_price_file(
+    xml_content
+)
 
-
-        return xml_content
+        return products

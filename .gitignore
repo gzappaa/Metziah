@@ -2,4 +2,5 @@ venv
 .env
 **/__pycache__/
 *.pyc
-
+machsenei_hashuk_prices.csv
+machsenei_hashuk_stores.json
