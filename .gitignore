@@ -4,3 +4,6 @@ venv
 *.pyc
 machsenei_hashuk_prices.csv
 machsenei_hashuk_stores.json
+__init__.py
+notes.md
+data/reports/report.json

@@ -10,23 +10,6 @@ class LaibcatalogClient:
         self.chain_id = chain_id
 
 
-    async def get_branches(self):
-
-        async with httpx.AsyncClient() as client:
-
-            response = await client.get(
-                f"{self.BASE_URL}/webapi/api/getbranches",
-                params={
-                    "edi": self.chain_id
-                }
-            )
-
-            response.raise_for_status()
-
-            return response.json()
-
-
-
     async def get_files(self, branch_number=None):
 
         params = {

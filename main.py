@@ -1,5 +1,4 @@
 import asyncio
-import pandas as pd
 
 from chains.machsenei_hashuk import MachseneiHashukScraper
 
@@ -8,18 +7,15 @@ async def main():
 
     scraper = MachseneiHashukScraper()
 
-    products = await scraper.scrape()
+    stores = scraper.load_stores()
 
-    df = pd.DataFrame(
-        [product.__dict__ for product in products]
+    store = next(
+        s for s in stores
+        if s["store_id"] == "263"
     )
 
-    df.to_csv(
-        "machsenei_hashuk_prices.csv",
-        index=False,
-        encoding="utf-8-sig"
-    )
+    products = await scraper.get_store_prices(store)
 
+    print(products[:5])
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
