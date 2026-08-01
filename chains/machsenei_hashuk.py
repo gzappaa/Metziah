@@ -16,47 +16,6 @@ class MachseneiHashukScraper:
         self.parser = MachseneiXmlParser()
 
 
-    async def scrape(self):
-
-        files = await self.client.get_files()
-
-        urls = []
-
-        for file in files:
-
-            url = self.client.build_download_url(
-                file["fileName"]
-            )
-
-            urls.append(url)
-
-
-        # choose one price file
-        price_url = next(
-            url for url in urls
-            if "/Price" in url
-        )
-
-        print("Downloading:")
-        print(price_url)
-
-
-        # download gzip file
-        content = await self.client.download_file(
-            price_url
-        )
-
-
-        # decompress gzip -> XML bytes
-        xml_content = gzip.decompress(content)
-
-
-        # inspect XML
-        products = self.parser.parse_price_file(
-    xml_content
-)
-
-        return products
 
     def load_stores(self):
 
@@ -68,36 +27,6 @@ class MachseneiHashukScraper:
 
             return json.load(file)
 
-
-
-
-    async def find_price_file(self, store):
-
-        files = await self.client.get_files()
-
-        price_files = []
-
-        for file in files:
-
-            filename = file["fileName"]
-
-            if (
-                "PriceFull" in filename
-                and f"-{store['sub_chain_id']}-{store['store_id']}-" in filename
-            ):
-                price_files.append(filename)
-
-
-        if not price_files:
-            return None
-
-
-        latest = max(
-            price_files,
-            key=lambda x: self.extract_timestamp(x)
-        )
-
-        return latest
 
 
     def extract_timestamp(self, filename):
@@ -115,9 +44,43 @@ class MachseneiHashukScraper:
         )
 
 
+ 
+    async def find_price_file(self, store):
+
+        files = await self.client.get_files()
+
+
+        price_files = [
+            file["fileName"]
+            for file in files
+            if (
+                "PriceFull" in file["fileName"]
+                and f"-{store['store_id']}-" in file["fileName"]
+            )
+        ]
+
+
+        if not price_files:
+            return None
+
+
+        price_files.sort(
+            key=self.extract_timestamp,
+            reverse=True
+        )
+
+
+        return price_files[0]
+
+
     async def get_store_prices(self, store):
 
         filename = await self.find_price_file(store)
+
+        if filename is None:
+            raise Exception(
+                f"No PriceFull found for {store['store_id']}"
+            )
 
         url = self.client.build_download_url(
             filename
@@ -127,10 +90,10 @@ class MachseneiHashukScraper:
             url
         )
 
-        xml_content = gzip.decompress(content)
-
-        products = self.parser.parse_price_file(
-            xml_content
+        xml_content = gzip.decompress(
+            content
         )
 
-        return products
+        return self.parser.parse_price_file(
+            xml_content
+        )

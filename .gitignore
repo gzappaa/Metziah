@@ -6,4 +6,9 @@ machsenei_hashuk_prices.csv
 machsenei_hashuk_stores.json
 __init__.py
 notes.md
-data/reports/report.json
+data/reports/
+reports
+data/failed_stores.json
+xml_samples
+data/feeds
+logs

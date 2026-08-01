@@ -3,19 +3,29 @@ import asyncio
 from chains.machsenei_hashuk import MachseneiHashukScraper
 
 
-async def main():
+async def find_price_file(self, store):
 
-    scraper = MachseneiHashukScraper()
-
-    stores = scraper.load_stores()
-
-    store = next(
-        s for s in stores
-        if s["store_id"] == "263"
+    files = await self.client.get_files(
+        branch_number=store["store_id"]
     )
 
-    products = await scraper.get_store_prices(store)
 
-    print(products[:5])
+    price_files = [
+        file["fileName"]
+        for file in files
+        if "PriceFull" in file["fileName"]
+    ]
 
-asyncio.run(main())
+
+    if not price_files:
+        print("No PriceFull found:")
+        print(store)
+        return None
+
+
+    # return newest file
+    price_files.sort(
+        reverse=True
+    )
+
+    return price_files[0]
