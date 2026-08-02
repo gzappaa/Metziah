@@ -1,17 +1,37 @@
 import asyncio
+import logging
 import re
 
 from pathlib import Path
 from datetime import datetime
 
 from clients.laibcatalog import LaibcatalogClient
-
+from chains.registry import CHAINS
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 DATA_DIR = BASE_DIR / "data" / "feeds"
 
-CHAIN_ID = "7290661400001"
+CHAIN = CHAINS["machsenei_hashuk"]
+CHAIN_ID = CHAIN.chain_id
+
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(
+            LOG_DIR / "prices.log"
+        ),
+        logging.StreamHandler(),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(
@@ -24,10 +44,9 @@ FILENAME_PATTERN = re.compile(
 )
 
 
-
 def parse_filename(filename):
 
-    match = FILENAME_PATTERN.match(filename)
+    match = FILENAME_PATTERN.fullmatch(filename)
 
     if not match:
         return None
@@ -52,9 +71,22 @@ async def download_prices():
 
     client = LaibcatalogClient(CHAIN_ID)
 
-    print("Getting files from API...")
+    logger.info("Getting files from API...")
 
-    files = await client.get_files()
+
+    try:
+
+        files = await client.get_files()
+
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting file list from Laibcatalog"
+        )
+
+        return
+
 
 
     price_files = [
@@ -67,9 +99,11 @@ async def download_prices():
     ]
 
 
-    print(
-        f"Found {len(price_files)} Price files"
+    logger.info(
+        "Found %d Price files",
+        len(price_files)
     )
+
 
 
     # newest Price per store
@@ -80,8 +114,16 @@ async def download_prices():
 
         meta = parse_filename(filename)
 
+
         if not meta:
+
+            logger.warning(
+                "Skipping invalid filename: %s",
+                filename
+            )
+
             continue
+
 
 
         store_key = (
@@ -91,10 +133,22 @@ async def download_prices():
         )
 
 
-        file_datetime = datetime.strptime(
-            meta["date"] + meta["time"],
-            "%Y%m%d%H%M%S"
-        )
+        try:
+
+            file_datetime = datetime.strptime(
+                meta["date"] + meta["time"],
+                "%Y%m%d%H%M%S"
+            )
+
+        except ValueError:
+
+            logger.warning(
+                "Invalid datetime: %s",
+                filename
+            )
+
+            continue
+
 
 
         if (
@@ -110,18 +164,20 @@ async def download_prices():
 
 
 
-    print(
-        f"Keeping {len(latest_files)} newest Price files"
+    logger.info(
+        "Keeping %d newest Price files",
+        len(latest_files)
     )
+
 
 
     downloaded = 0
     skipped = 0
+    failed = 0
 
 
 
     for _, filename, meta in latest_files.values():
-
 
         folder = get_storage_path(meta)
 
@@ -135,73 +191,115 @@ async def download_prices():
 
 
 
-        # remove old price snapshot
+        if destination.exists():
+
+            logger.info(
+                "UP TO DATE: %s",
+                filename
+            )
+
+            skipped += 1
+
+
+        else:
+
+            logger.info(
+                "DOWNLOAD: %s",
+                filename
+            )
+
+
+            try:
+
+                url = client.build_download_url(
+                    filename
+                )
+
+
+                content = await client.download_file(
+                    url
+                )
+
+
+                destination.write_bytes(
+                    content
+                )
+
+
+                downloaded += 1
+
+
+            except Exception:
+
+                logger.exception(
+                    "FAILED downloading %s",
+                    filename
+                )
+
+                failed += 1
+
+                continue
+
+
+
+        # Always remove old snapshots
         for old_file in folder.glob(
             "Price*.gz"
         ):
 
             if old_file.name != filename:
 
-                print(
-                    "REMOVE OLD:",
-                    old_file.name
-                )
+                try:
 
-                old_file.unlink()
+                    logger.info(
+                        "REMOVE OLD: %s",
+                        old_file.name
+                    )
+
+                    old_file.unlink()
 
 
+                except Exception:
 
-        if destination.exists():
-
-            print(
-                "UP TO DATE:",
-                filename
-            )
-
-            skipped += 1
-            continue
+                    logger.exception(
+                        "FAILED removing %s",
+                        old_file.name
+                    )
 
 
 
-        print(
-            "DOWNLOAD:",
-            filename
-        )
+    logger.info("Finished")
 
-
-        url = client.build_download_url(
-            filename
-        )
-
-
-        content = await client.download_file(
-            url
-        )
-
-
-        destination.write_bytes(
-            content
-        )
-
-
-        downloaded += 1
-
-
-
-    print("\nFinished")
-    print(
-        "Downloaded:",
+    logger.info(
+        "Downloaded: %d",
         downloaded
     )
-    print(
-        "Skipped:",
+
+    logger.info(
+        "Skipped: %d",
         skipped
+    )
+
+    logger.info(
+        "Failed: %d",
+        failed
     )
 
 
 
 if __name__ == "__main__":
 
-    asyncio.run(
-        download_prices()
-    )
+    try:
+
+        asyncio.run(
+            download_prices()
+        )
+
+
+    except Exception:
+
+        logger.exception(
+            "Prices downloader crashed"
+        )
+
+        raise

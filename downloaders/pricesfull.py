@@ -1,21 +1,40 @@
 import asyncio
 import re
+import logging
 
 from pathlib import Path
 from datetime import datetime
 
 from clients.laibcatalog import LaibcatalogClient
-
+from chains.registry import CHAINS
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 DATA_DIR = BASE_DIR / "data" / "feeds"
 
-CHAIN_ID = "7290661400001"
+CHAIN = CHAINS["machsenei_hashuk"]
+CHAIN_ID = CHAIN.chain_id
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(
+            LOG_DIR / "pricesfull.log"
+        ),
+        logging.StreamHandler(),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(
-    r"PromoFull"
+    r"PriceFull"
     r"(?P<chain>\d+)-"
     r"(?P<subchain>\d+)-"
     r"(?P<store>\d+)-"
@@ -24,10 +43,9 @@ FILENAME_PATTERN = re.compile(
 )
 
 
-
 def parse_filename(filename):
 
-    match = FILENAME_PATTERN.match(filename)
+    match = FILENAME_PATTERN.fullmatch(filename)
 
     if not match:
         return None
@@ -43,49 +61,67 @@ def get_storage_path(meta):
         / meta["chain"]
         / meta["subchain"]
         / meta["store"]
-        / "promosfull"
+        / "pricesfull"
     )
 
 
 
-async def download_promofull():
+async def download_pricefull():
 
     client = LaibcatalogClient(CHAIN_ID)
 
-    print("Getting files from API...")
-
-    files = await client.get_files()
+    logger.info("Getting files from API...")
 
 
-    promofull_files = [
+    try:
+
+        files = await client.get_files()
+
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting file list from Laibcatalog"
+        )
+
+        return
+
+
+
+    pricefull_files = [
         f["fileName"]
         for f in files
-        if f["fileName"].startswith("PromoFull")
+        if f["fileName"].startswith("PriceFull")
     ]
 
 
-    print(
-        f"Found {len(promofull_files)} PromoFull files"
+    logger.info(
+        "Found %d PriceFull files",
+        len(pricefull_files)
     )
 
 
-    downloaded = 0
-    skipped = 0
-
-
-    # Keep only newest PromoFull per store per day
     latest_files = {}
 
 
-    for filename in promofull_files:
+    # Find newest file per store + day
+    for filename in pricefull_files:
 
         meta = parse_filename(filename)
 
+
         if not meta:
+
+            logger.warning(
+                "Skipping invalid filename: %s",
+                filename
+            )
+
             continue
 
 
-        store_key = (
+
+        key = (
             meta["chain"],
             meta["subchain"],
             meta["store"],
@@ -100,20 +136,29 @@ async def download_promofull():
 
 
         if (
-            store_key not in latest_files
-            or file_datetime > latest_files[store_key][0]
+            key not in latest_files
+            or file_datetime > latest_files[key][0]
         ):
 
-            latest_files[store_key] = (
+            latest_files[key] = (
                 file_datetime,
                 filename,
                 meta
             )
 
 
-    print(
-        f"Keeping {len(latest_files)} latest PromoFull files"
+
+    logger.info(
+        "Keeping %d latest PriceFull files",
+        len(latest_files)
     )
+
+
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+
 
 
     for _, filename, meta in latest_files.values():
@@ -129,10 +174,12 @@ async def download_promofull():
         destination = folder / filename
 
 
+
+        # Already downloaded newest version
         if destination.exists():
 
-            print(
-                "UP TO DATE:",
+            logger.info(
+                "UP TO DATE: %s",
                 filename
             )
 
@@ -141,20 +188,53 @@ async def download_promofull():
 
 
 
-        # Remove older PromoFull from same day
-        for old_file in folder.glob("PromoFull*.gz"):
+        logger.info(
+            "DOWNLOAD: %s",
+            filename
+        )
 
-            old_meta = parse_filename(
-                old_file.name
+
+        try:
+
+            url = client.build_download_url(filename)
+
+            content = await client.download_file(url)
+
+            destination.write_bytes(content)
+
+            downloaded += 1
+
+
+        except Exception:
+
+            logger.exception(
+                "FAILED downloading %s",
+                filename
             )
+
+            failed += 1
+
+            continue
+
+
+
+        # Only clean old same-day files after successful download
+        for old_file in folder.glob("PriceFull*.gz"):
+
+            if old_file.name == filename:
+                continue
+
+
+            old_meta = parse_filename(old_file.name)
+
 
             if (
                 old_meta
                 and old_meta["date"] == meta["date"]
             ):
 
-                print(
-                    "REMOVE OLD SAME DAY:",
+                logger.info(
+                    "REMOVE OLD SAME DAY: %s",
                     old_file.name
                 )
 
@@ -162,45 +242,40 @@ async def download_promofull():
 
 
 
-        print(
-            "DOWNLOAD:",
-            filename
-        )
+    logger.info("Finished")
 
-
-        url = client.build_download_url(
-            filename
-        )
-
-
-        content = await client.download_file(
-            url
-        )
-
-
-        destination.write_bytes(
-            content
-        )
-
-
-        downloaded += 1
-
-
-
-    print("\nFinished")
-    print(
-        "Downloaded:",
+    logger.info(
+        "Downloaded: %d",
         downloaded
     )
-    print(
-        "Skipped:",
+
+    logger.info(
+        "Skipped: %d",
         skipped
     )
+
+    logger.info(
+        "Failed: %d",
+        failed
+    )
+
+
 
 
 
 if __name__ == "__main__":
 
-    asyncio.run(
-        download_promofull()
-    )
+    try:
+
+        asyncio.run(
+            download_pricefull()
+        )
+
+
+    except Exception:
+
+        logger.exception(
+            "PriceFull downloader crashed"
+        )
+
+        raise
