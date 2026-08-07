@@ -1,107 +1,266 @@
 import asyncio
 import gzip
 import json
+import re
 
-from clients.laibcatalog import LaibcatalogClient
-from lxml import etree
+from dataclasses import asdict
 from pathlib import Path
+from datetime import datetime
+
+from lxml import etree
+
+from chains.registry import CHAINS
+from clients.laibcatalog import LaibcatalogClient
+from models.store import Store
 
 
-Path(__file__).resolve().parent.parent
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
-STORES_FILE = DATA_DIR / "stores.json"
 
-CHAIN_ID = "7290661400001"
+STORES_DIR = DATA_DIR / "stores"
+LOGS_DIR = DATA_DIR / "logs"
 
-
-async def get_stores():
-
-    client = LaibcatalogClient(CHAIN_ID)
+STORES_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-    # get available files
+def clean_address(address: str | None) -> str | None:
+    if not address:
+        return None
+
+    address = re.sub(
+        r"https?://\S*",
+        "",
+        address,
+        flags=re.IGNORECASE,
+    )
+
+    address = re.sub(
+        r"\bhttps?\b",
+        "",
+        address,
+        flags=re.IGNORECASE,
+    )
+
+    address = re.sub(
+        r"\s+",
+        " ",
+        address,
+    )
+
+    return address.strip()
+
+
+
+async def get_stores(chain_id: str):
+
+    client = LaibcatalogClient(chain_id)
+
     files = await client.get_files()
 
-
-    # find stores XML
     store_file = next(
-        file for file in files
+        file
+        for file in files
         if "Stores" in file["fileName"]
     )
 
+    print(f"Downloading {store_file['fileName']}")
 
-    print("Downloading:")
-    print(store_file["fileName"])
-
-
-    # download
     url = client.build_download_url(
         store_file["fileName"]
     )
 
     content = await client.download_file(url)
 
-
-    # gzip -> xml
     xml_content = gzip.decompress(content)
-
 
     root = etree.fromstring(xml_content)
 
-
-    stores = []
-
+    stores: list[Store] = []
 
     for subchain in root.findall(".//SubChain"):
 
-        sub_chain_id = subchain.findtext(
-            "SubChainId"
-        )
-
-
-        for store in subchain.findall(
-            ".//Store"
-        ):
+        for store in subchain.findall(".//Store"):
 
             stores.append(
-                {
-                    "sub_chain_id": sub_chain_id,
-                    "store_id": store.findtext("StoreID"),
-                    "store_name": store.findtext("StoreName"),
-                    "address": store.findtext("Address"),
-                    "city": store.findtext("City"),
-                    "zip_code": store.findtext("ZipCode"),
-                }
+                Store(
+                    chain_id=chain_id,
+                    store_id=store.findtext("StoreID"),
+                    name=store.findtext("StoreName"),
+                    address=clean_address(
+                        store.findtext("Address")
+                    ),
+                    city=store.findtext("City"),
+                    zip_code=store.findtext("ZipCode"),
+                )
             )
-
 
     return stores
 
 
 
-async def main():
+def load_existing(path: Path):
 
-    stores = await get_stores()
+    if not path.exists():
+        return {}
+
+    with open(path, encoding="utf-8") as f:
+        stores = json.load(f)
+
+    return {
+        store["store_id"]: store
+        for store in stores
+    }
 
 
-    with open(
-        STORES_FILE,
-        "w",
-        encoding="utf-8"
-    ) as f:
 
-        json.dump(
-            stores,
-            f,
-            ensure_ascii=False,
-            indent=4
+def compare_stores(old, new):
+
+    changes = []
+
+    old_ids = set(old.keys())
+    new_ids = {
+        store.store_id
+        for store in new
+    }
+
+
+    for store_id in new_ids - old_ids:
+
+        changes.append(
+            f"NEW STORE: {store_id}"
         )
 
 
-    print(
-        f"Saved {len(stores)} stores"
-    )
+    for store_id in old_ids - new_ids:
+
+        changes.append(
+            f"REMOVED STORE: {store_id}"
+        )
+
+
+    for store in new:
+
+        if store.store_id not in old:
+            continue
+
+        previous = old[store.store_id]
+
+        fields = [
+            "name",
+            "address",
+            "city",
+            "zip_code",
+        ]
+
+        for field in fields:
+
+            if previous.get(field) != getattr(store, field):
+
+                changes.append(
+                    f"CHANGED {store_id} "
+                    f"{field}: "
+                    f"{previous.get(field)} -> "
+                    f"{getattr(store, field)}"
+                )
+
+
+    return changes
+
+
+
+def save_changes_log(chain_key, changes):
+
+    if not changes:
+        return
+
+    log_file = LOGS_DIR / "store_changes.log"
+
+    with open(
+        log_file,
+        "a",
+        encoding="utf-8",
+    ) as f:
+
+        f.write(
+            "\n"
+            + "=" * 50
+            + "\n"
+        )
+
+        f.write(
+            datetime.now().isoformat()
+            + "\n"
+        )
+
+        f.write(
+            f"{chain_key}\n"
+        )
+
+        for change in changes:
+            f.write(
+                change + "\n"
+            )
+
+
+
+async def main():
+
+    for chain_key, config in CHAINS.items():
+
+        print(f"\nProcessing {config.name}")
+
+        output_file = STORES_DIR / f"{chain_key}.json"
+
+
+        old_stores = load_existing(
+            output_file
+        )
+
+
+        stores = await get_stores(
+            config.chain_id
+        )
+
+
+        changes = compare_stores(
+            old_stores,
+            stores,
+        )
+
+
+        save_changes_log(
+            chain_key,
+            changes,
+        )
+
+
+        with open(
+            output_file,
+            "w",
+            encoding="utf-8",
+        ) as f:
+
+            json.dump(
+                [asdict(store) for store in stores],
+                f,
+                ensure_ascii=False,
+                indent=4,
+            )
+
+
+        print(
+            f"Saved {len(stores)} stores"
+        )
+
+        if changes:
+            print(
+                f"Found {len(changes)} changes"
+            )
+        else:
+            print(
+                "No changes"
+            )
 
 
 
