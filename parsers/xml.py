@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from lxml import etree
 
 from models.product import Product
+
+logger = logging.getLogger(__name__)
 
 
 class MachseneiXmlParser:
@@ -20,67 +23,79 @@ class MachseneiXmlParser:
 
         for item in root.findall("./Items/Item"):
 
-            item_type_text = item.findtext("ItemType")
-            qty_in_package_text = item.findtext("QtyInPackage")
+            item_code = item.findtext("ItemCode")
 
-            products.append(
-                Product(
-                    chain_id=chain_id,
-                    sub_chain_id=sub_chain_id,
-                    store_id=store_id,
+            try:
+                item_type_text = item.findtext("ItemType")
+                qty_in_package_text = item.findtext("QtyInPackage")
 
-                    item_code=item.findtext("ItemCode"),
-                    name=item.findtext("ItemName"),
+                products.append(
+                    Product(
+                        chain_id=chain_id,
+                        sub_chain_id=sub_chain_id,
+                        store_id=store_id,
 
-                    price=self.parse_decimal(
-                        item.findtext("ItemPrice"), "ItemPrice"
-                    ),
+                        item_code=item_code,
+                        name=item.findtext("ItemName"),
 
-                    unit_price=self.parse_decimal(
-                        item.findtext("UnitOfMeasurePrice"), "UnitOfMeasurePrice"
-                    ),
+                        price=self.parse_decimal(
+                            item.findtext("ItemPrice"), "ItemPrice"
+                        ),
 
-                    quantity=self.parse_decimal(
-                        item.findtext("Quantity"), "Quantity"
-                    ),
+                        unit_price=self.parse_decimal(
+                            item.findtext("UnitOfMeasurePrice"), "UnitOfMeasurePrice"
+                        ),
 
-                    unit_qty=item.findtext("UnitQty"),
-                    unit_measure=item.findtext("UnitOfMeasure"),
+                        quantity=self.parse_decimal(
+                            item.findtext("Quantity"), "Quantity"
+                        ),
 
-                    manufacturer=item.findtext("ManufactureName"),
-                    manufacturer_country=item.findtext("ManufactureCountry"),
+                        unit_qty=item.findtext("UnitQty"),
+                        unit_measure=item.findtext("UnitOfMeasure"),
 
-                    price_update_time=self.parse_datetime(
-                        item.findtext("PriceUpdateTime")
-                    ),
+                        manufacturer=item.findtext("ManufactureName"),
+                        manufacturer_country=item.findtext("ManufactureCountry"),
 
-                    last_sale_datetime=self.parse_datetime(
-                        item.findtext("LastSaleDateTime")
-                    ),
+                        price_update_time=self.parse_datetime(
+                            item.findtext("PriceUpdateTime")
+                        ),
 
-                    weighted=item.findtext("bIsWeighted") == "1",
+                        last_sale_datetime=self.parse_datetime(
+                            item.findtext("LastSaleDateTime")
+                        ),
 
-                    allow_discount=item.findtext("AllowDiscount") == "1",
+                        weighted=item.findtext("bIsWeighted") == "1",
 
-                    # ItemType=0 is a real, common value (seen ~1600 times),
-                    # so we distinguish "present with value 0" from "tag missing"
-                    # using presence (is not None), not truthiness.
-                    item_type=(
-                        int(item_type_text)
-                        if item_type_text is not None else None
-                    ),
+                        allow_discount=item.findtext("AllowDiscount") == "1",
 
-                    # QtyInPackage never legitimately appears as 0 in real data,
-                    # so a missing/empty tag maps cleanly to None instead of a
-                    # fake 0 that could be confused with a real value later.
-                    package_quantity=(
-                        int(qty_in_package_text)
-                        if qty_in_package_text else None
-                    ),
+                        # ItemType=0 is a real, common value (seen ~1600 times),
+                        # so we distinguish "present with value 0" from "tag missing"
+                        # using presence (is not None), not truthiness.
+                        item_type=(
+                            int(item_type_text)
+                            if item_type_text is not None else None
+                        ),
 
-                    status=item.findtext("ItemStatus") or None,
+                        # QtyInPackage never legitimately appears as 0 in real data,
+                        # so a missing/empty tag maps cleanly to None instead of a
+                        # fake 0 that could be confused with a real value later.
+                        package_quantity=(
+                            int(qty_in_package_text)
+                            if qty_in_package_text else None
+                        ),
+
+                        status=item.findtext("ItemStatus") or None,
+                    )
                 )
-            )
+            except Exception as e:
+                # One malformed <Item> shouldn't take down the whole file --
+                # every other item in this store's price file is still good
+                # data and shouldn't be thrown away over one bad row.
+                logger.warning(
+                    "Skipping malformed item (chain_id=%s store_id=%s item_code=%s): %s",
+                    chain_id, store_id, item_code, e,
+                )
+                continue
 
         return products
 
@@ -89,7 +104,14 @@ class MachseneiXmlParser:
         if not value:
             return None
 
-        return datetime.fromisoformat(value)
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            # Some feeds send garbage placeholder dates (e.g. all-zero
+            # "0000-00-00 00:00:00") for fields like LastSaleDateTime when
+            # an item has never sold. That's not a real date -- treat it
+            # as missing rather than crashing over one field.
+            return None
 
     def parse_decimal(self, value, field_name):
         try:

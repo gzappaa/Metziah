@@ -12,3 +12,5 @@ data/failed_stores.json
 xml_samples
 data/feeds
 logs
+.pytest_cache
+check_log.py

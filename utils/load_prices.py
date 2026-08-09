@@ -17,9 +17,11 @@ from pathlib import Path
 
 from db import get_connection
 from parsers.xml import MachseneiXmlParser
-from storage.records import split_product
-from storage.repository import (
+from database.records import split_product
+from database.repository import (
+    ensure_chain,
     reconcile_removed_items,
+    update_store_subchain,
     upsert_prices,
     upsert_products,
     upsert_store_products,
@@ -44,7 +46,7 @@ def find_price_files(feeds_dir: Path):
     yield from feeds_dir.glob("*/*/*/prices/*.gz")
 
 
-def load_one_file(conn, parser: MachseneiXmlParser, filepath: Path) -> None:
+def load_one_file(conn, parser: MachseneiXmlParser, filepath: Path, feeds_dir: Path) -> None:
     with gzip.open(filepath, "rb") as f:
         xml_content = f.read()
 
@@ -56,6 +58,15 @@ def load_one_file(conn, parser: MachseneiXmlParser, filepath: Path) -> None:
 
     chain_id = products[0].chain_id
     store_id_text = products[0].store_id
+
+    # Path is data/feeds/{chain_id}/{sub_chain_id}/{store_id}/prices/file.gz --
+    # the path itself is the source of truth for sub_chain_id, regenerated
+    # fresh on every download, so it's trusted over whatever a one-time
+    # store seed said.
+    path_chain_id, path_sub_chain_id, path_store_id = filepath.relative_to(feeds_dir).parts[:3]
+
+    ensure_chain(conn, path_chain_id)
+    update_store_subchain(conn, path_chain_id, path_store_id, path_sub_chain_id)
 
     product_records = []
     store_product_records = []
@@ -112,7 +123,7 @@ def main():
 
         for filepath in files:
             try:
-                load_one_file(conn, xml_parser, filepath)
+                load_one_file(conn, xml_parser, filepath, args.feeds_dir)
                 processed += 1
             except KeyError as e:
                 # Store not seeded yet -- skip, don't crash the whole run

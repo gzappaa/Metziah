@@ -1,4 +1,19 @@
 -- ============================================================
+-- RESET DATABASE (DEV ONLY)
+-- ============================================================
+
+DROP TABLE IF EXISTS prices CASCADE;
+DROP TABLE IF EXISTS store_products CASCADE;
+DROP TABLE IF EXISTS products CASCADE;
+DROP TABLE IF EXISTS stores CASCADE;
+DROP TABLE IF EXISTS sub_chains CASCADE;
+DROP TABLE IF EXISTS chains CASCADE;
+
+DROP EXTENSION IF EXISTS pg_trgm CASCADE;
+DROP EXTENSION IF EXISTS postgis CASCADE;
+
+
+-- ============================================================
 -- EXTENSIONS
 -- ============================================================
 
@@ -79,6 +94,7 @@ USING GIST (location);
 CREATE TABLE products (
     item_code             TEXT PRIMARY KEY,
     name                  TEXT,
+    name_count             INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,
@@ -111,13 +127,15 @@ USING GIN (manufacturer gin_trgm_ops);
 -- ============================================================
 CREATE TABLE store_products (
     chain_id              TEXT NOT NULL REFERENCES chains(chain_id),
+    store_id              INTEGER NOT NULL REFERENCES stores(id),
     item_code             TEXT NOT NULL,
     name                  TEXT,
+    name_count             INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,
     updated_at            TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (chain_id, item_code)
+    PRIMARY KEY (chain_id, store_id, item_code)
 );
 
 CREATE INDEX idx_store_products_name_trgm

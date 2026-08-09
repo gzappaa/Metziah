@@ -8,9 +8,11 @@ you. The database splits that into three tables:
   - products        -- real barcodes only (EAN-8/12/13-style item_code).
                         Global identity, shared across chains.
   - store_products   -- internal/non-barcode item_codes (e.g. loose
-                        produce, deli). These collide across chains, so
-                        they're scoped to (chain_id, item_code) instead
-                        of being globally unique.
+                        produce, deli). Scoped to (chain_id, store_id,
+                        item_code) -- different branches of the same
+                        chain can report different name/manufacturer
+                        text for the same internal code, so store_id is
+                        part of the identity, not just metadata.
   - prices           -- per-store price state, for BOTH kinds of item.
                         item_code here is intentionally unconstrained
                         (no FK) since it may point at either products
@@ -54,11 +56,13 @@ class ProductRecord:
 class StoreProductRecord:
     """
     Maps 1:1 to the `store_products` table (non-barcode item_codes).
-    Scoped to (chain_id, item_code) -- these codes are assigned per
-    retailer's internal catalog, not globally unique like a barcode.
+    Scoped to (chain_id, store_id, item_code) -- store_id here is the
+    text StoreID from the XML (e.g. "018"), same as PriceRecord; the
+    repository layer resolves it to stores.id before writing.
     """
 
     chain_id: str
+    store_id: str
     item_code: str
     name: str
     manufacturer: str | None
@@ -114,6 +118,7 @@ def split_product(
     else:
         store_product_record = StoreProductRecord(
             chain_id=product.chain_id,
+            store_id=product.store_id,
             item_code=product.item_code,
             name=product.name,
             manufacturer=product.manufacturer,
