@@ -1,27 +1,32 @@
 import asyncio
 import gzip
 import json
+import logging
 import re
 
 from dataclasses import asdict
 from pathlib import Path
-from datetime import datetime
 
 from lxml import etree
 
 from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
 from models.store import Store
+from logging_config import setup_general_logging, setup_isolated_logging
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
 STORES_DIR = DATA_DIR / "stores"
-LOGS_DIR = DATA_DIR / "logs"
 
 STORES_DIR.mkdir(parents=True, exist_ok=True)
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+setup_general_logging()
+
+logger = logging.getLogger(__name__)
+store_changes_logger = setup_isolated_logging("store_changes")
 
 
 def clean_address(address: str | None) -> str | None:
@@ -51,7 +56,6 @@ def clean_address(address: str | None) -> str | None:
     return address.strip()
 
 
-
 async def get_stores(chain_id: str):
 
     client = LaibcatalogClient(chain_id)
@@ -64,7 +68,10 @@ async def get_stores(chain_id: str):
         if "Stores" in file["fileName"]
     )
 
-    print(f"Downloading {store_file['fileName']}")
+    logger.info(
+        "Downloading %s",
+        store_file["fileName"],
+    )
 
     url = client.build_download_url(
         store_file["fileName"]
@@ -98,7 +105,6 @@ async def get_stores(chain_id: str):
     return stores
 
 
-
 def load_existing(path: Path):
 
     if not path.exists():
@@ -113,17 +119,16 @@ def load_existing(path: Path):
     }
 
 
-
 def compare_stores(old, new):
 
     changes = []
 
     old_ids = set(old.keys())
+
     new_ids = {
         store.store_id
         for store in new
     }
-
 
     for store_id in new_ids - old_ids:
 
@@ -131,13 +136,11 @@ def compare_stores(old, new):
             f"NEW STORE: {store_id}"
         )
 
-
     for store_id in old_ids - new_ids:
 
         changes.append(
             f"REMOVED STORE: {store_id}"
         )
-
 
     for store in new:
 
@@ -158,15 +161,13 @@ def compare_stores(old, new):
             if previous.get(field) != getattr(store, field):
 
                 changes.append(
-                    f"CHANGED {store_id} "
+                    f"CHANGED {store.store_id} "
                     f"{field}: "
                     f"{previous.get(field)} -> "
                     f"{getattr(store, field)}"
                 )
 
-
     return changes
-
 
 
 def save_changes_log(chain_key, changes):
@@ -174,66 +175,44 @@ def save_changes_log(chain_key, changes):
     if not changes:
         return
 
-    log_file = LOGS_DIR / "store_changes.log"
+    store_changes_logger.info(
+        "CHAIN: %s | %d change(s)",
+        chain_key,
+        len(changes),
+    )
 
-    with open(
-        log_file,
-        "a",
-        encoding="utf-8",
-    ) as f:
-
-        f.write(
-            "\n"
-            + "=" * 50
-            + "\n"
-        )
-
-        f.write(
-            datetime.now().isoformat()
-            + "\n"
-        )
-
-        f.write(
-            f"{chain_key}\n"
-        )
-
-        for change in changes:
-            f.write(
-                change + "\n"
-            )
-
+    for change in changes:
+        store_changes_logger.info(change)
 
 
 async def main():
 
     for chain_key, config in CHAINS.items():
 
-        print(f"\nProcessing {config.name}")
+        logger.info(
+            "Processing %s",
+            config.name,
+        )
 
         output_file = STORES_DIR / f"{chain_key}.json"
-
 
         old_stores = load_existing(
             output_file
         )
 
-
         stores = await get_stores(
             config.chain_id
         )
-
 
         changes = compare_stores(
             old_stores,
             stores,
         )
 
-
         save_changes_log(
             chain_key,
             changes,
         )
-
 
         with open(
             output_file,
@@ -248,21 +227,27 @@ async def main():
                 indent=4,
             )
 
-
-        print(
-            f"Saved {len(stores)} stores"
+        logger.info(
+            "Saved %d stores",
+            len(stores),
         )
 
         if changes:
-            print(
-                f"Found {len(changes)} changes"
+            logger.info(
+                "Found %d changes",
+                len(changes),
             )
         else:
-            print(
-                "No changes"
-            )
-
+            logger.info("No changes")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    try:
+        asyncio.run(main())
+
+    except Exception:
+        logger.exception(
+            "Store update crashed"
+        )
+        raise

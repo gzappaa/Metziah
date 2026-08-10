@@ -1,5 +1,6 @@
 venv
-.env
+.env*
+*.env
 **/__pycache__/
 *.pyc
 machsenei_hashuk_prices.csv

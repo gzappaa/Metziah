@@ -1,13 +1,15 @@
 import asyncio
 import json
-import os
+
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 
+import logging
 
-load_dotenv()
+from logging_config import setup_general_logging
+
+from config import settings
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,11 +22,13 @@ GOOGLE_GEOCODE_URL = (
 )
 
 
-API_KEY = os.getenv("GEOCODE_API")
+API_KEY = settings.GEOCODE_API if settings.ENV == "dev" else None
 
 
 REQUEST_DELAY_SECONDS = 0.1
 
+setup_general_logging()
+logger = logging.getLogger(__name__)
 
 async def geocode(
     client: httpx.AsyncClient,
@@ -41,17 +45,32 @@ async def geocode(
     }
 
 
-    response = await client.get(
-        GOOGLE_GEOCODE_URL,
-        params=params,
-    )
+    try:
+        response = await client.get(
+            GOOGLE_GEOCODE_URL,
+            params=params,
+        )
 
-    response.raise_for_status()
+        response.raise_for_status()
+
+    except httpx.HTTPError:
+        logger.exception(
+            "Geocoding request failed for %s, %s",
+            address,
+            city,
+        )
+        return None, None
 
     data = response.json()
 
 
     if data.get("status") != "OK":
+        logger.warning(
+            "Geocoding failed for %s, %s: status=%s",
+            address,
+            city,
+            data.get("status"),
+        )
         return None, None
 
 
@@ -88,8 +107,9 @@ async def geocode_file(path: Path):
 
 
             if not store.get("address") or not store.get("city"):
-                print(
-                    f"  skip {store.get('store_id')}: missing address/city"
+                logger.info(
+                    "Skip %s: missing address/city",
+                    store.get("store_id"),
                 )
                 continue
 
@@ -108,9 +128,11 @@ async def geocode_file(path: Path):
             status = "ok" if lat else "not found"
 
 
-            print(
-                f"  {store['store_id']} "
-                f"{store['address']} -> {status}"
+            logger.info(
+                "%s %s -> %s",
+                store["store_id"],
+                store["address"],
+                status,
             )
 
 
@@ -132,15 +154,19 @@ async def geocode_file(path: Path):
 
 async def main():
 
-    if not API_KEY:
+    if settings.ENV != "dev":
         raise RuntimeError(
-            "Missing GEOCODE_API in .env"
+            "Google Geocoding is only available in dev environment"
         )
 
+    if not API_KEY:
+        raise RuntimeError(
+            "Missing GEOCODE_API in .env.dev"
+        )
 
     for path in STORES_DIR.glob("*.json"):
 
-        print(f"\nGeocoding {path.name}")
+        logger.info("Geocoding %s", path.name)
 
         await geocode_file(path)
 

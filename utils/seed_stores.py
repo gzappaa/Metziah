@@ -20,10 +20,9 @@ from database.repository import ensure_chain, upsert_stores
 from db import get_connection
 from models.store import Store
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+from logging_config import setup_general_logging
+
+setup_general_logging()
 logger = logging.getLogger(__name__)
 
 

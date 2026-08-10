@@ -7,6 +7,7 @@ via its own cron entry, pointed at whatever's already on disk.
 
 Usage:
     python scripts/load_prices.py
+    python scripts/load_prices.py --dev
     python scripts/load_prices.py --feeds-dir data/feeds
 """
 
@@ -15,6 +16,7 @@ import gzip
 import logging
 from pathlib import Path
 
+from config import settings
 from db import get_connection
 from parsers.xml import MachseneiXmlParser
 from database.records import split_product
@@ -27,10 +29,9 @@ from database.repository import (
     upsert_store_products,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+from logging_config import setup_general_logging
+
+setup_general_logging()
 logger = logging.getLogger(__name__)
 
 DEFAULT_FEEDS_DIR = Path("data/feeds")
@@ -101,13 +102,31 @@ def load_one_file(conn, parser: MachseneiXmlParser, filepath: Path, feeds_dir: P
 
 def main():
     parser_args = argparse.ArgumentParser()
+
+    parser_args.add_argument(
+        "--dev",
+        action="store_true",
+        help="Allow loading into the development database",
+    )
+
     parser_args.add_argument(
         "--feeds-dir",
         type=Path,
         default=DEFAULT_FEEDS_DIR,
         help="Root of the feeds tree (default: data/feeds)",
     )
+
     args = parser_args.parse_args()
+
+    if settings.ENV == "dev" and not args.dev:
+        raise RuntimeError(
+            "Development database selected. Run with --dev to confirm."
+        )
+
+    if settings.ENV != "dev" and args.dev:
+        raise RuntimeError(
+            "--dev was provided, but the configured environment is not dev."
+        )
 
     xml_parser = MachseneiXmlParser()
 

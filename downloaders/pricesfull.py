@@ -1,6 +1,7 @@
 import asyncio
 import re
-import logging
+from logging_config import setup_logging
+
 
 from pathlib import Path
 from datetime import datetime
@@ -15,22 +16,9 @@ DATA_DIR = BASE_DIR / "data" / "feeds"
 CHAIN = CHAINS["machsenei_hashuk"]
 CHAIN_ID = CHAIN.chain_id
 
-LOG_DIR = BASE_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+logger = setup_logging("pricesfull")
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(
-            LOG_DIR / "pricesfull.log"
-        ),
-        logging.StreamHandler(),
-    ],
-)
-
-logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(

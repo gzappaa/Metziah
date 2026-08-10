@@ -1,5 +1,4 @@
 from datetime import datetime
-import logging
 import subprocess
 from pathlib import Path
 import sys
@@ -10,25 +9,20 @@ PROJECT_DIR = BASE_DIR.parent
 
 sys.path.insert(0, str(PROJECT_DIR))
 
+from logging_config import setup_logging
 from db import get_connection
 from utils.update_prices import load_files
 
 FEEDS_DIR = PROJECT_DIR / "data" / "feeds"
 
 PYTHON = sys.executable
-LOG_FILE = PROJECT_DIR / "logs" / "scheduler.log"
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE)],
-)
-logger = logging.getLogger(__name__)
+
+
+logger = setup_logging("scheduler")
 
 def run(script) -> bool:
     logger.info("Starting %s", script)
-
     try:
         module = f"downloaders.{script.removesuffix('.py')}"
         subprocess.run(

@@ -159,8 +159,9 @@ def _log_changes(
 
         if old_resolved != new_resolved:
             logger.info(
-                "ITEM METADATA CHANGED item_code=%s old=%s new=%s",
+                "ITEM METADATA CHANGED item_code=%s name=%s old=%s new=%s",
                 r.item_code,
+                old_name,
                 old_resolved,
                 new_resolved,
             )
@@ -213,13 +214,16 @@ def _log_changes(
 
         if old_resolved != new_resolved:
             logger.info(
-                "ITEM METADATA CHANGED item_code=%s old=%s new=%s",
+                "ITEM METADATA CHANGED item_code=%s name=%s old=%s new=%s",
                 r.item_code,
+                old_name,
                 old_resolved,
                 new_resolved,
             )
 
     # Prices are allowed to change on every price-file load.
+    name_lookup = {r.item_code: r.name for r in product_records}
+    name_lookup.update({r.item_code: r.name for r in store_product_records})
     for r in price_records:
         old = existing_prices.get(r.item_code)
 
@@ -230,7 +234,7 @@ def _log_changes(
                 store_id_text,
                 r.item_code,
                 r.price,
-                r.name,
+                name_lookup.get(r.item_code),
             )
 
         elif old[0] != r.price or old[1] != r.unit_price:
@@ -242,7 +246,7 @@ def _log_changes(
                 r.item_code,
                 old[0],
                 r.price,
-                r.name,
+                name_lookup.get(r.item_code),
             )
 
 
@@ -305,23 +309,30 @@ def load_one_file(
         item_codes_in_file.add(product.item_code)
 
     # Snapshot BEFORE writing -- this is what makes the log show real diffs.
+    existing_prices = _fetch_existing_prices(
+        conn,
+        chain_id,
+        store_id_int,
+    )
+
+    all_relevant_codes = item_codes_in_file | set(existing_prices)
+
     existing_products = _fetch_existing_products(
         conn,
-        [r.item_code for r in product_records],
+        list(all_relevant_codes),
     )
 
     existing_store_products = _fetch_existing_store_products(
         conn,
         chain_id,
         store_id_int,
-        [r.item_code for r in store_product_records],
+        list(all_relevant_codes),
     )
 
-    existing_prices = _fetch_existing_prices(
-        conn,
-        chain_id,
-        store_id_int,
-    )
+
+    # item_code -> name, used only for logging ITEM REMOVED
+    # (existing_prices itself has no name column to draw from).
+    removed_item_names = {**existing_products, **existing_store_products}
 
     _log_changes(
         chain_id,
@@ -348,11 +359,15 @@ def load_one_file(
     )
 
     for code in removed_codes:
+        name_tuple = removed_item_names.get(code)
+        removed_name = name_tuple[0] if name_tuple else None
+
         logger.info(
-            "ITEM REMOVED chain_id=%s store_id=%s item_code=%s (was price=%s)",
+            "ITEM REMOVED chain_id=%s store_id=%s item_code=%s name=%s (was price=%s)",
             chain_id,
             store_id_text,
             code,
+            removed_name,
             existing_prices[code][0],
         )
 

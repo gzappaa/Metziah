@@ -130,22 +130,24 @@ def test_invalid_xml_raises(parser):
         parser.parse_price_file(b"<Root><Items><Item>")
 
 
-def test_invalid_price_format_raises(parser):
-    xml = make_xml(real_item_xml(price="7,90"))
-    with pytest.raises(ValueError):
-        parser.parse_price_file(xml)
+@pytest.mark.parametrize("price", ["7,90", " ", "abc"])
+def test_invalid_price_is_skipped(parser, price):
+    xml = make_xml(real_item_xml(price=price))
+    products = parser.parse_price_file(xml)
+    assert products == []
 
 
-def test_whitespace_price_raises(parser):
-    xml = make_xml(real_item_xml(price=" "))
-    with pytest.raises(ValueError):
-        parser.parse_price_file(xml)
+def test_invalid_item_is_skipped_and_valid_item_is_parsed(parser):
+    xml = make_xml(
+        real_item_xml(item_code="111", price="abc")
+        + real_item_xml(item_code="222", price="10.50")
+    )
 
+    products = parser.parse_price_file(xml)
 
-def test_non_numeric_price_raises(parser):
-    xml = make_xml(real_item_xml(price="abc"))
-    with pytest.raises(ValueError):
-        parser.parse_price_file(xml)
+    assert len(products) == 1
+    assert products[0].item_code == "222"
+    assert products[0].price == Decimal("10.50")
 
 
 # ---- boolean conversions ----
