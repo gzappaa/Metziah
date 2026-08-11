@@ -28,15 +28,18 @@ geocode_google.py, etc. -- should just do
 point already configured root.
 """
 
+# logging_config.py
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from config import settings
+
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
-ENV = os.environ.get("METZIA_ENV", "dev")  # dev | test | prod
+ENV = settings.ENV  # dev | test | prod -- now reads from config.py / .env.test
 
 _ENV_LEVELS = {
     "dev": logging.INFO,    ## CHANGE IT LATER
@@ -116,7 +119,12 @@ def setup_isolated_logging(
     logger.setLevel(_ENV_LEVELS.get(ENV, logging.INFO))
     logger.propagate = False
 
-    logger.addHandler(_make_file_handler(f"{name}.log"))
+    if ENV == "test":
+        filename = f"{name}.test.log"
+    else:
+        filename = f"{name}.log"
+
+    logger.addHandler(_make_file_handler(filename))
 
     if log_to_console:
         console_handler = logging.StreamHandler()

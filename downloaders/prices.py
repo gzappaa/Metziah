@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import re
 from datetime import datetime
@@ -7,9 +8,11 @@ from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
 from logging_config import setup_logging
 
+# Use --test to download the first 5 stores into data/test_feeds.
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "feeds"
+TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 
 CHAIN = CHAINS["machsenei_hashuk"]
 CHAIN_ID = CHAIN.chain_id
@@ -36,9 +39,9 @@ def parse_filename(filename):
     return match.groupdict()
 
 
-def get_storage_path(meta):
+def get_storage_path(meta, data_dir):
     return (
-        DATA_DIR
+        data_dir
         / meta["chain"]
         / meta["subchain"]
         / meta["store"]
@@ -46,7 +49,9 @@ def get_storage_path(meta):
     )
 
 
-async def download_prices():
+async def download_prices(test=False):
+    data_dir = TEST_DATA_DIR if test else DATA_DIR
+
     client = LaibcatalogClient(CHAIN_ID)
 
     logger.info("Getting files from API...")
@@ -103,6 +108,10 @@ async def download_prices():
                 meta,
             )
 
+    if test:
+        latest_files = dict(list(latest_files.items())[:5])
+        logger.info("TEST MODE: keeping first 5 stores")
+
     logger.info(
         "Keeping %d newest Price files",
         len(latest_files),
@@ -113,7 +122,7 @@ async def download_prices():
     failed = 0
 
     for _, filename, meta in latest_files.values():
-        folder = get_storage_path(meta)
+        folder = get_storage_path(meta, data_dir)
         folder.mkdir(parents=True, exist_ok=True)
 
         destination = folder / filename
@@ -161,8 +170,24 @@ async def download_prices():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Download only the first 5 stores into data/test_feeds",
+    )
+    args = parser.parse_args()
+
+    if args.test and TEST_DATA_DIR.exists():
+        logger.warning(
+            "TEST MODE: deleting existing %s",
+            TEST_DATA_DIR,
+        )
+        import shutil
+        shutil.rmtree(TEST_DATA_DIR)
+
     try:
-        asyncio.run(download_prices())
+        asyncio.run(download_prices(test=args.test))
 
     except Exception:
         logger.exception("Prices downloader crashed")

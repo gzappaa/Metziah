@@ -110,6 +110,12 @@ def main():
     )
 
     parser_args.add_argument(
+        "--test",
+        action="store_true",
+        help="Load the test database using data/test_feeds",
+    )
+
+    parser_args.add_argument(
         "--feeds-dir",
         type=Path,
         default=DEFAULT_FEEDS_DIR,
@@ -128,6 +134,14 @@ def main():
             "--dev was provided, but the configured environment is not dev."
         )
 
+    if args.test and settings.ENV != "test":
+        raise RuntimeError(
+            "--test was provided, but the configured environment is not test."
+        )
+
+    if args.test:
+        args.feeds_dir = Path("data/test_feeds")
+
     xml_parser = MachseneiXmlParser()
 
     files = list(find_price_files(args.feeds_dir))
@@ -145,7 +159,6 @@ def main():
                 load_one_file(conn, xml_parser, filepath, args.feeds_dir)
                 processed += 1
             except KeyError as e:
-                # Store not seeded yet -- skip, don't crash the whole run
                 logger.error("Skipping %s: %s", filepath, e)
                 conn.rollback()
                 failed += 1
@@ -155,7 +168,6 @@ def main():
                 failed += 1
 
     logger.info("Done. processed=%d failed=%d", processed, failed)
-
 
 if __name__ == "__main__":
     main()

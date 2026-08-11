@@ -26,9 +26,9 @@ from database.repository import (
     _resolve_fill_only,
 )
 from parsers.xml import MachseneiXmlParser
-from logging_config import setup_logging
+from logging_config import setup_isolated_logging
 
-logger = setup_logging("price_changes")
+logger = setup_isolated_logging("price_changes")
 
 
 def _fetch_existing_prices(conn, chain_id, store_id_int):

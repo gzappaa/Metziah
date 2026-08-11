@@ -9,6 +9,7 @@ after a DROP DATABASE, or after re-geocoding a store.
 
 Usage:
     python -m utils.seed_stores data/stores/machsenei_hashuk.json
+    python -m utils.seed_stores data/stores/machsenei_hashuk.json --test
 """
 
 import argparse
@@ -48,9 +49,23 @@ def load_stores_from_json(path: Path) -> list[Store]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("json_path", type=Path)
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Seed only stores present in data/test_feeds",
+    )
     args = parser.parse_args()
 
     stores = load_stores_from_json(args.json_path)
+
+    if args.test:
+        test_feeds_dir = Path(__file__).resolve().parent.parent / "data" / "test_feeds"
+        store_ids = {
+            path.name
+            for path in test_feeds_dir.glob("*/*/*")
+        }
+        stores = [store for store in stores if store.store_id in store_ids]
+
     logger.info("Loaded %d store(s) from %s", len(stores), args.json_path)
 
     if not stores:
