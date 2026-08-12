@@ -18,13 +18,15 @@ FEEDS_DIR = PROJECT_DIR / "data" / "feeds"
 PYTHON = sys.executable
 
 
-
 logger = setup_logging("scheduler")
+
 
 def run(script) -> bool:
     logger.info("Starting %s", script)
+
     try:
         module = f"downloaders.{script.removesuffix('.py')}"
+
         subprocess.run(
             [PYTHON, "-m", module],
             cwd=PROJECT_DIR,
@@ -32,15 +34,31 @@ def run(script) -> bool:
             capture_output=True,
             text=True,
         )
+
         logger.info("Finished %s", script)
         return True
 
     except subprocess.CalledProcessError as e:
-        logger.error("Failed %s (exit code %s)", script, e.returncode)
+        logger.error(
+            "Failed %s (exit code %s)",
+            script,
+            e.returncode,
+        )
+
         if e.stdout:
-            logger.error("stdout for %s:\n%s", script, e.stdout.strip())
+            logger.error(
+                "stdout for %s:\n%s",
+                script,
+                e.stdout.strip(),
+            )
+
         if e.stderr:
-            logger.error("stderr for %s:\n%s", script, e.stderr.strip())
+            logger.error(
+                "stderr for %s:\n%s",
+                script,
+                e.stderr.strip(),
+            )
+
         return False
 
 
@@ -48,22 +66,55 @@ def run_prices_and_load():
     start_time = time.time()
 
     success = run("prices.py")
+
     if not success:
-        logger.error("Skipping DB load -- prices.py download failed")
+        logger.error(
+            "Skipping DB load -- prices.py download failed"
+        )
         return
 
     new_files = [
-        f for f in FEEDS_DIR.glob("*/*/*/prices/*.gz")
+        f
+        for f in FEEDS_DIR.glob("*/*/*/prices/*.gz")
         if f.stat().st_mtime >= start_time
     ]
 
     if not new_files:
-        logger.warning("prices.py succeeded but no new .gz files found")
+        logger.warning(
+            "prices.py succeeded but no new .gz files found"
+        )
         return
 
-    logger.info("Loading %d new price file(s) into DB", len(new_files))
+    logger.info(
+        "Loading %d new price file(s) into DB",
+        len(new_files),
+    )
+
     with get_connection() as conn:
-        load_files(conn, new_files, FEEDS_DIR)
+        load_files(
+            conn,
+            new_files,
+            FEEDS_DIR,
+        )
+
+
+def run_promos():
+    """
+    Experimental Promo collector.
+
+    promos.py intentionally keeps every Promo file released by the API
+    instead of replacing/deleting older files. This allows us to observe
+    Promo feed behavior throughout an entire day.
+
+    No DB loading is performed here yet.
+    """
+    success = run("promos.py")
+
+    if not success:
+        logger.error(
+            "Promo download failed"
+        )
+
 
 def main():
     print("SCHEDULER STARTED", sys.argv)
@@ -73,14 +124,21 @@ def main():
 
         if command == "prices":
             run_prices_and_load()
+
         elif command == "pricesfull":
             run("pricesfull.py")
+
+        elif command == "promos":
+            run_promos()
+
         elif command == "promosfull":
             run("promosfull.py")
+
         elif command == "all":
             run("pricesfull.py")
             run("promosfull.py")
             run_prices_and_load()
+
         else:
             logger.error("Unknown command: %s", command)
 
@@ -94,6 +152,8 @@ def main():
         run("pricesfull.py")
         run("promosfull.py")
 
+    # Normal 10-minute cron run
+    run_promos()
     run_prices_and_load()
 
 

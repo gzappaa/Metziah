@@ -1,8 +1,12 @@
 # tests/test_update_prices.py
 from decimal import Decimal
-
+import gzip
 from utils.update_prices import _log_changes
 from database.records import PriceRecord
+from utils.update_prices import load_files, load_one_file
+from parsers.xml import MachseneiXmlParser
+from pathlib import Path
+
 
 
 def test_price_added_logs(real_store, caplog):
@@ -222,3 +226,156 @@ def test_manufacturer_fill_only_does_not_overwrite(real_store, caplog):
 
     # Fill-only means old value wins -- nothing should be reported as changed
     assert "ITEM METADATA CHANGED" not in caplog.text
+
+
+
+
+
+def test_load_one_file(conn):
+    feeds_dir = Path("data/test_feeds")
+    filepath = next(feeds_dir.glob("*/*/*/prices/*.gz"))
+
+    parser = MachseneiXmlParser()
+
+    load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+    )
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM prices")
+        price_count = cur.fetchone()[0]
+
+    assert price_count > 0
+
+
+def test_load_one_file_updates_store_subchain(conn):
+    feeds_dir = Path("data/test_feeds")
+    filepath = next(feeds_dir.glob("*/*/*/prices/*.gz"))
+
+    parser = MachseneiXmlParser()
+
+    load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+    )
+
+    chain_id, sub_chain_id, store_id = (
+        filepath.relative_to(feeds_dir).parts[:3]
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sub_chain_id
+            FROM stores
+            WHERE chain_id = %s
+              AND store_id = %s
+            """,
+            (chain_id, store_id),
+        )
+
+        row = cur.fetchone()
+
+    assert row is not None
+    assert row[0] == sub_chain_id
+
+
+def test_load_one_file_empty_xml_does_nothing(conn, tmp_path):
+    feeds_dir = tmp_path
+
+    filepath = (
+        feeds_dir
+        / "TEST_CHAIN"
+        / "001"
+        / "001"
+        / "prices"
+        / "empty.gz"
+    )
+
+    filepath.parent.mkdir(parents=True)
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    parser = MachseneiXmlParser()
+
+    load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+    )
+
+
+def test_load_files_continues_after_file_failure(monkeypatch):
+    files = [
+        Path("file1.gz"),
+        Path("file2.gz"),
+    ]
+
+    processed_files = []
+
+    def fake_load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+        log_changes=True,
+    ):
+        processed_files.append(filepath)
+
+        if filepath == files[0]:
+            raise RuntimeError("test failure")
+
+    monkeypatch.setattr(
+        "utils.update_prices.load_one_file",
+        fake_load_one_file,
+    )
+
+    class FakeConnection:
+        def rollback(self):
+            pass
+
+    conn = FakeConnection()
+
+    load_files(
+        conn,
+        files,
+        Path("data/test_feeds"),
+    )
+
+    assert processed_files == files
+
+
+def test_load_files_rolls_back_on_failure(monkeypatch):
+    filepath = Path("file.gz")
+
+    class FakeConnection:
+        def __init__(self):
+            self.rolled_back = False
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = FakeConnection()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("test failure")
+
+    monkeypatch.setattr(
+        "utils.update_prices.load_one_file",
+        fail,
+    )
+
+    load_files(
+        conn,
+        [filepath],
+        Path("data/test_feeds"),
+    )
+
+    assert conn.rolled_back is True

@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
-
+import argparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -51,27 +51,26 @@ def get_storage_path(meta):
 
 
 
-async def download_promofull():
+async def download_promofull(test=False):
+
+    data_dir = (
+        BASE_DIR / "data" / "test_feeds"
+        if test
+        else DATA_DIR
+    )
 
     client = LaibcatalogClient(CHAIN_ID)
 
     logger.info("Getting files from API...")
 
-
     try:
-
         files = await client.get_files()
 
-
     except Exception:
-
         logger.exception(
             "Failed getting file list from Laibcatalog"
         )
-
         return
-
-
 
     promofull_files = [
         f["fileName"]
@@ -79,32 +78,48 @@ async def download_promofull():
         if f["fileName"].startswith("PromoFull")
     ]
 
-
     logger.info(
         "Found %d PromoFull files",
         len(promofull_files)
     )
 
+    if test:
+        # Use exactly the stores already present in test_feeds.
+        test_feeds_dir = BASE_DIR / "data" / "test_feeds"
+
+        test_stores = {
+            path.name
+            for path in test_feeds_dir.glob("*/*/*")
+            if path.is_dir()
+        }
+
+        promofull_files = [
+            filename
+            for filename in promofull_files
+            if (
+                (meta := parse_filename(filename))
+                and meta["store"] in test_stores
+            )
+        ]
+
+        logger.info(
+            "TEST MODE: keeping PromoFull files for %d existing test store(s)",
+            len(test_stores),
+        )
 
     latest_files = {}
-
 
     # Find newest file per store + day
     for filename in promofull_files:
 
         meta = parse_filename(filename)
 
-
         if not meta:
-
             logger.warning(
                 "Skipping invalid filename: %s",
                 filename
             )
-
             continue
-
-
 
         key = (
             meta["chain"],
@@ -113,54 +128,47 @@ async def download_promofull():
             meta["date"],
         )
 
-
         file_datetime = datetime.strptime(
             meta["date"] + meta["time"],
             "%Y%m%d%H%M%S"
         )
 
-
         if (
             key not in latest_files
             or file_datetime > latest_files[key][0]
         ):
-
             latest_files[key] = (
                 file_datetime,
                 filename,
                 meta
             )
 
-
-
     logger.info(
         "Keeping %d latest PromoFull files",
         len(latest_files)
     )
 
-
-
     downloaded = 0
     skipped = 0
     failed = 0
 
-
-
     for _, filename, meta in latest_files.values():
 
-        folder = get_storage_path(meta)
+        folder = (
+            data_dir
+            / meta["chain"]
+            / meta["subchain"]
+            / meta["store"]
+            / "promosfull"
+        )
 
         folder.mkdir(
             parents=True,
             exist_ok=True
         )
 
-
         destination = folder / filename
 
-
-
-        # Already downloaded newest version
         if destination.exists():
 
             logger.info(
@@ -171,13 +179,10 @@ async def download_promofull():
             skipped += 1
             continue
 
-
-
         logger.info(
             "DOWNLOAD: %s",
             filename
         )
-
 
         try:
 
@@ -189,7 +194,6 @@ async def download_promofull():
 
             downloaded += 1
 
-
         except Exception:
 
             logger.exception(
@@ -198,20 +202,14 @@ async def download_promofull():
             )
 
             failed += 1
-
             continue
 
-
-
-        # Only clean old same-day files after successful download
         for old_file in folder.glob("PromoFull*.gz"):
 
             if old_file.name == filename:
                 continue
 
-
             old_meta = parse_filename(old_file.name)
-
 
             if (
                 old_meta
@@ -225,35 +223,30 @@ async def download_promofull():
 
                 old_file.unlink()
 
-
-
     logger.info("Finished")
 
-    logger.info(
-        "Downloaded: %d",
-        downloaded
-    )
-
-    logger.info(
-        "Skipped: %d",
-        skipped
-    )
-
-    logger.info(
-        "Failed: %d",
-        failed
-    )
+    logger.info("Downloaded: %d", downloaded)
+    logger.info("Skipped: %d", skipped)
+    logger.info("Failed: %d", failed)
 
 
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Download PromoFull files for stores already present in data/test_feeds",
+    )
+
+    args = parser.parse_args()
+
     try:
-
         asyncio.run(
-            download_promofull()
+            download_promofull(test=args.test)
         )
-
 
     except Exception:
 

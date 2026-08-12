@@ -34,7 +34,7 @@ store_id is part of identity here, not just metadata.
 
 import logging
 from collections import defaultdict
-
+from models.promo import Promotion, PromotionGroup, PromotionItem
 from database.records import PriceRecord, ProductRecord, StoreProductRecord
 
 logger = logging.getLogger(__name__)
@@ -495,6 +495,216 @@ def reconcile_removed_items(
             deleted,
             chain_id,
             store_id_text,
+        )
+
+    return deleted
+
+
+def upsert_promotions(conn, records: list[Promotion]) -> None:
+    """
+    Batch upsert into `promotions`. Straightforward overwrite (not
+    vote-based like products.name) -- investigation confirmed
+    descriptions are consistent chain-wide, so there's no real
+    ambiguity to resolve between conflicting reports.
+    """
+    if not records:
+        return
+
+    rows = [
+        (
+            r.chain_id, r.promotion_id, r.description,
+            r.start_datetime, r.end_datetime,
+            r.start_hour, r.end_hour, r.promotion_days,
+            r.update_time, r.club_id, r.is_gift_item,
+            r.additional_is_coupon, r.allow_multiple_discounts,
+            r.redemption_limit, r.min_no_of_items_offered,
+            r.additional_restrictions, r.remarks,
+        )
+        for r in records
+    ]
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO promotions (
+                chain_id, promotion_id, description,
+                start_datetime, end_datetime,
+                start_hour, end_hour, promotion_days,
+                update_time, club_id, is_gift_item,
+                additional_is_coupon, allow_multiple_discounts,
+                redemption_limit, min_no_of_items_offered,
+                additional_restrictions, remarks
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chain_id, promotion_id) DO UPDATE SET
+                description = EXCLUDED.description,
+                start_datetime = EXCLUDED.start_datetime,
+                end_datetime = EXCLUDED.end_datetime,
+                start_hour = EXCLUDED.start_hour,
+                end_hour = EXCLUDED.end_hour,
+                promotion_days = EXCLUDED.promotion_days,
+                update_time = EXCLUDED.update_time,
+                club_id = EXCLUDED.club_id,
+                is_gift_item = EXCLUDED.is_gift_item,
+                additional_is_coupon = EXCLUDED.additional_is_coupon,
+                allow_multiple_discounts = EXCLUDED.allow_multiple_discounts,
+                redemption_limit = EXCLUDED.redemption_limit,
+                min_no_of_items_offered = EXCLUDED.min_no_of_items_offered,
+                additional_restrictions = EXCLUDED.additional_restrictions,
+                remarks = EXCLUDED.remarks,
+                updated_at = now()
+            WHERE
+                promotions.description IS DISTINCT FROM EXCLUDED.description
+                OR promotions.end_datetime IS DISTINCT FROM EXCLUDED.end_datetime
+                OR promotions.start_datetime IS DISTINCT FROM EXCLUDED.start_datetime
+                OR promotions.club_id IS DISTINCT FROM EXCLUDED.club_id
+                OR promotions.is_gift_item IS DISTINCT FROM EXCLUDED.is_gift_item
+            """,
+            rows,
+        )
+
+
+def upsert_promotion_groups(conn, records: list[PromotionGroup]) -> None:
+    """
+    Batch upsert into `promotion_groups`. Resolves store_id (text) ->
+    stores.id (int) per record, same as upsert_prices.
+    """
+    if not records:
+        return
+
+    rows = []
+    for r in records:
+        store_id_int = get_store_id(conn, r.chain_id, r.store_id)
+        rows.append((
+            r.chain_id, r.promotion_id, store_id_int, r.group_id,
+            r.min_purchase_amount, r.discount_type,
+        ))
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO promotion_groups (
+                chain_id, promotion_id, store_id, group_id,
+                min_purchase_amount, discount_type
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chain_id, promotion_id, store_id, group_id) DO UPDATE SET
+                min_purchase_amount = EXCLUDED.min_purchase_amount,
+                discount_type = EXCLUDED.discount_type,
+                updated_at = now()
+            WHERE
+                promotion_groups.min_purchase_amount IS DISTINCT FROM EXCLUDED.min_purchase_amount
+                OR promotion_groups.discount_type IS DISTINCT FROM EXCLUDED.discount_type
+            """,
+            rows,
+        )
+
+
+def upsert_promotion_items(conn, records: list[PromotionItem]) -> None:
+    """
+    Batch upsert into `promotion_items`. Same store_id resolution +
+    IS DISTINCT FROM no-op guard as upsert_prices.
+    """
+    if not records:
+        return
+
+    rows = []
+    for r in records:
+        store_id_int = get_store_id(conn, r.chain_id, r.store_id)
+        rows.append((
+            r.chain_id, r.promotion_id, store_id_int, r.group_id, r.item_code,
+            r.item_type, r.reward_type, r.min_qty, r.max_qty,
+            r.discount_rate, r.discounted_price, r.discounted_price_per_mida,
+            r.is_weighted,
+        ))
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO promotion_items (
+                chain_id, promotion_id, store_id, group_id, item_code,
+                item_type, reward_type, min_qty, max_qty,
+                discount_rate, discounted_price, discounted_price_per_mida,
+                is_weighted
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chain_id, promotion_id, store_id, group_id, item_code) DO UPDATE SET
+                item_type = EXCLUDED.item_type,
+                reward_type = EXCLUDED.reward_type,
+                min_qty = EXCLUDED.min_qty,
+                max_qty = EXCLUDED.max_qty,
+                discount_rate = EXCLUDED.discount_rate,
+                discounted_price = EXCLUDED.discounted_price,
+                discounted_price_per_mida = EXCLUDED.discounted_price_per_mida,
+                is_weighted = EXCLUDED.is_weighted,
+                updated_at = now()
+            WHERE
+                promotion_items.discounted_price IS DISTINCT FROM EXCLUDED.discounted_price
+                OR promotion_items.discount_rate IS DISTINCT FROM EXCLUDED.discount_rate
+                OR promotion_items.min_qty IS DISTINCT FROM EXCLUDED.min_qty
+                OR promotion_items.max_qty IS DISTINCT FROM EXCLUDED.max_qty
+            """,
+            rows,
+        )
+
+
+def reconcile_removed_promotion_items(
+    conn, chain_id: str, store_id_text: str, current_keys: set[tuple[str, str, str]]
+) -> int:
+    """
+    Hard-deletes promotion_items rows for this store that aren't present
+    in the current file, keyed by (promotion_id, group_id, item_code).
+    Only call this for PromoFull loads -- promo.xml is an additive delta,
+    not a full current-state snapshot, so running this against a delta
+    file would wrongly delete every promo the delta didn't happen to
+    mention.
+
+    Composite-key comparison via string concatenation, since psycopg
+    doesn't cleanly support parameterized tuple-array membership without
+    a custom composite type -- ':' is safe as a separator since none of
+    promotion_id/group_id/item_code contain it in observed data.
+    """
+    store_id_int = get_store_id(conn, chain_id, store_id_text)
+
+    current_key_strings = [
+        f"{promotion_id}:{group_id}:{item_code}"
+        for promotion_id, group_id, item_code in current_keys
+    ]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM promotion_items
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND (promotion_id || ':' || group_id || ':' || item_code) <> ALL(%s)
+            """,
+            (chain_id, store_id_int, current_key_strings),
+        )
+        deleted = cur.rowcount
+
+        # Clean up groups left with zero items after the delete above --
+        # a group with no items is just dead weight, same store scope.
+        cur.execute(
+            """
+            DELETE FROM promotion_groups g
+            WHERE g.chain_id = %s
+              AND g.store_id = %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM promotion_items i
+                  WHERE i.chain_id = g.chain_id
+                    AND i.promotion_id = g.promotion_id
+                    AND i.store_id = g.store_id
+                    AND i.group_id = g.group_id
+              )
+            """,
+            (chain_id, store_id_int),
+        )
+
+    if deleted:
+        logger.info(
+            "Removed %d promo item(s) no longer active at chain_id=%s store_id=%s",
+            deleted, chain_id, store_id_text,
         )
 
     return deleted

@@ -15,3 +15,5 @@ data/feeds
 logs
 .pytest_cache
 check_log.py
+results
+test.py

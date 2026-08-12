@@ -144,3 +144,23 @@ def split_product(
     )
 
     return product_record, store_product_record, price_record
+
+
+def split_promotion(promotion):
+    """
+    Walks one nested Promotion (with its groups/items) into three flat
+    lists for the three promo tables. Unlike split_product, this isn't
+    a routing decision -- every PromotionGroup always becomes exactly
+    one promotion_groups row, every PromotionItem always becomes
+    exactly one promotion_items row. So no new record types needed,
+    just tree-flattening -- the .groups/.items attributes are simply
+    ignored when building insert tuples in repository.py.
+    """
+    groups = []
+    items = []
+
+    for group in promotion.groups:
+        groups.append(group)
+        items.extend(group.items)
+
+    return promotion, groups, items

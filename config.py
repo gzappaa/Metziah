@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     model_config = SettingsConfigDict(
-        env_file=BASE_DIR / ".env.test",
+        env_file=BASE_DIR / ".env.dev",
         extra="ignore",
     )
 
