@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS promotion_groups CASCADE;
 DROP TABLE IF EXISTS promotions CASCADE;
 DROP TABLE IF EXISTS prices CASCADE;
 DROP TABLE IF EXISTS store_products CASCADE;
+DROP TABLE IF EXISTS file_tracking CASCADE;
 DROP TABLE IF EXISTS products CASCADE;
 DROP TABLE IF EXISTS stores CASCADE;
 DROP TABLE IF EXISTS sub_chains CASCADE;
@@ -76,6 +77,74 @@ CREATE TABLE stores (
 CREATE INDEX idx_stores_location
 ON stores
 USING GIST (location);
+
+
+
+
+-- ============================================================
+-- FILE_TRACKING
+-- Tracks every feed file per (chain, store, file_type) -- both
+-- download and load state, so failures at either stage are visible
+-- and queryable instead of silently drifting.
+--
+-- Snapshot types (PriceFull, Price, PromoFull, Stores) always
+-- REPLACE -- one row per (chain_id, store_id, file_type), enforced
+-- by the partial unique index below. A new file just updates the
+-- existing row.
+--
+-- Promo (delta) is the odd one out -- multiple files/day are normal
+-- (sometimes zero, sometimes several), so no replace semantics --
+-- one row per file, pruned nightly since a new day always requires
+-- a fresh PromoFull anyway, making yesterday's deltas irrelevant.
+--
+-- Stores is chain-wide, not per-store -- store_id is NULL for this
+-- type. Nullable rather than a separate table since it shares every
+-- other column (downloaded/loaded/filename tracking) with the rest.
+-- ============================================================
+CREATE TABLE file_tracking (
+    id            SERIAL PRIMARY KEY,
+    chain_id      TEXT NOT NULL REFERENCES chains(chain_id),
+    sub_chain_id  TEXT,
+    store_id      TEXT,   -- NULL for file_type='Stores'
+    file_type     TEXT NOT NULL CHECK (file_type IN ('PriceFull', 'Price', 'PromoFull', 'Promo', 'Stores')),
+    filename      TEXT NOT NULL,
+    file_date     DATE NOT NULL,   -- parsed from filename timestamp
+    downloaded    BOOLEAN NOT NULL DEFAULT false,
+    loaded        BOOLEAN NOT NULL DEFAULT false,
+    updated_at    TIMESTAMPTZ DEFAULT now(),
+
+    CHECK (
+        (file_type = 'Stores' AND store_id IS NULL)
+        OR
+        (file_type != 'Stores' AND store_id IS NOT NULL)
+    ),
+
+    FOREIGN KEY (chain_id, store_id) REFERENCES stores(chain_id, store_id)
+);
+
+-- Snapshot + Stores types: at most ONE row per (chain, store, file_type).
+-- store_id being NULL for Stores rows means a plain UNIQUE index would
+-- allow multiple NULL store_id rows per chain (Postgres treats NULLs as
+-- distinct) -- so Stores needs chain_id alone as its uniqueness key,
+-- handled as a separate partial index below.
+CREATE UNIQUE INDEX idx_file_tracking_snapshot
+ON file_tracking (chain_id, store_id, file_type)
+WHERE file_type NOT IN ('Promo', 'Stores');
+
+CREATE UNIQUE INDEX idx_file_tracking_stores
+ON file_tracking (chain_id, file_type)
+WHERE file_type = 'Stores';
+
+-- Promo (delta): no uniqueness constraint -- multiple rows/day allowed,
+-- one per file. Pruned by a daily job, not by a constraint.
+CREATE INDEX idx_file_tracking_promo_date
+ON file_tracking (chain_id, store_id, file_date)
+WHERE file_type = 'Promo';
+
+
+
+
+
 
 
 -- ============================================================
@@ -226,23 +295,16 @@ CREATE TABLE prices_7290661400001 PARTITION OF prices
 
 -- ============================================================
 -- PROMOTIONS
--- Metadata is chain-wide, not per-store -- investigation across
--- 71 stores showed 93% of PromotionIDs are shared across multiple
--- stores with matching descriptions. Keyed on (chain_id,
--- promotion_id), no store_id here.
---
--- Which stores/items actually participate under this promotion_id
--- can still differ -- that's tracked at the promotion_groups /
--- promotion_items level, not here.
---
--- start_hour/end_hour/promotion_days kept as TEXT for now -- raw
--- format not yet confirmed (blank in every sample seen so far).
--- is_gift_item kept as TEXT -- values include unexplained decimals
--- (e.g. '3.4') pending raw XML investigation.
+-- Now store-scoped (chain_id, promotion_id, store_id) instead of
+-- chain-wide -- each store's PromoFull is treated as a fully
+-- independent, authoritative snapshot. Some duplication across
+-- stores for shared promo_ids, traded for simpler independent
+-- reconciliation per file.
 -- ============================================================
 CREATE TABLE promotions (
     chain_id                   TEXT NOT NULL REFERENCES chains(chain_id),
     promotion_id                TEXT NOT NULL,
+    store_id                    INTEGER NOT NULL REFERENCES stores(id),
     description                 TEXT,
     start_datetime               TIMESTAMPTZ,
     end_datetime                 TIMESTAMPTZ,
@@ -259,21 +321,16 @@ CREATE TABLE promotions (
     additional_restrictions       TEXT,
     remarks                      TEXT,
     updated_at                   TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (chain_id, promotion_id)
+    PRIMARY KEY (chain_id, promotion_id, store_id)
 );
 
 
 -- ============================================================
 -- PROMOTION_GROUPS
--- Mirrors <Group> from the XML, one level below <Promotion>.
--- Kept as its own table rather than flattened onto
--- promotion_items -- min_purchase_amount/discount_type were
--- confirmed to sit above the item level in the XML, and at
--- multi-chain/thousands-of-stores scale we're not betting on
--- these being consistent within a promotion across stores.
---
--- NOT partitioned -- one row per group, not per item, nowhere
--- near promotion_items' volume.
+-- FK to promotions now includes store_id (3-column) since
+-- promotions is store-scoped. ON DELETE CASCADE -- when a
+-- promotion is removed for a store, all its groups (and their
+-- items, via the next cascade) go with it automatically.
 -- ============================================================
 CREATE TABLE promotion_groups (
     chain_id              TEXT NOT NULL,
@@ -284,27 +341,16 @@ CREATE TABLE promotion_groups (
     discount_type           TEXT,
     updated_at              TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (chain_id, promotion_id, store_id, group_id),
-    FOREIGN KEY (chain_id, promotion_id) REFERENCES promotions(chain_id, promotion_id)
+    FOREIGN KEY (chain_id, promotion_id, store_id)
+        REFERENCES promotions(chain_id, promotion_id, store_id)
+        ON DELETE CASCADE
 );
 
 
 -- ============================================================
 -- PROMOTION_ITEMS
--- Mirrors <PromotionItem>. No FK on item_code -- same reasoning
--- as prices.item_code: may point at products (barcodes) or
--- store_products (internal codes), consistency enforced by the
--- loader, not Postgres.
---
--- RewardType=0 needs separate ingestion handling (basket/threshold
--- discounts) -- confirmed via investigation to correlate strongly
--- with discount_type being populated on the parent group, unlike
--- other reward types. RewardType 10/2 confirmed no special handling
--- needed, straightforward per-unit deals.
---
--- Partitioned by chain_id (LIST) -- same reasoning as prices, this
--- is the highest-volume promo table (635K rows/week for one chain's
--- 71 stores). chain_id already leads the natural PK, so no
--- surrogate-key trick needed here unlike prices.
+-- FK to promotion_groups unchanged in shape, now ON DELETE CASCADE
+-- -- when a group is removed, its items go with it automatically.
 -- ============================================================
 CREATE TABLE promotion_items (
     chain_id                     TEXT NOT NULL,
@@ -324,6 +370,7 @@ CREATE TABLE promotion_items (
     PRIMARY KEY (chain_id, promotion_id, store_id, group_id, item_code),
     FOREIGN KEY (chain_id, promotion_id, store_id, group_id)
         REFERENCES promotion_groups(chain_id, promotion_id, store_id, group_id)
+        ON DELETE CASCADE
 ) PARTITION BY LIST (chain_id);
 
 CREATE INDEX idx_promotion_items_store_item
@@ -333,13 +380,5 @@ CREATE INDEX idx_promotion_items_item_store
 ON promotion_items (item_code, store_id);
 
 
--- ============================================================
--- PARTITIONS (promotion_items)
--- One per chain. Add a new one whenever a new chain is onboarded.
--- ============================================================
 CREATE TABLE promotion_items_7290661400001 PARTITION OF promotion_items
     FOR VALUES IN ('7290661400001');
-
--- Repeat for each additional chain, e.g.:
--- CREATE TABLE promotion_items_<chain_id> PARTITION OF promotion_items
---     FOR VALUES IN ('<chain_id>');

@@ -708,3 +708,83 @@ def reconcile_removed_promotion_items(
         )
 
     return deleted
+
+
+def reconcile_removed_promotions(
+    conn, chain_id: str, store_id_text: str, promotion_ids_in_file: set[str]
+) -> int:
+    """
+    Hard-deletes `promotions` rows for this store that aren't present in
+    the current PromoFull file. ON DELETE CASCADE on promotion_groups
+    (and, transitively, promotion_items) means this alone clears out
+    every group/item under a removed promotion -- no manual child
+    cleanup needed. Must run BEFORE reconcile_removed_promotion_groups
+    and reconcile_removed_promotion_items (see module docstring in
+    update_promos.py for pass ordering).
+    """
+    store_id_int = get_store_id(conn, chain_id, store_id_text)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM promotions
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND promotion_id <> ALL(%s)
+            """,
+            (chain_id, store_id_int, list(promotion_ids_in_file)),
+        )
+        deleted = cur.rowcount
+
+    if deleted:
+        logger.info(
+            "Removed %d promotion(s) no longer active at chain_id=%s store_id=%s",
+            deleted, chain_id, store_id_text,
+        )
+
+    return deleted
+
+
+def reconcile_removed_promotion_groups(
+    conn, chain_id: str, store_id_text: str, current_keys: set[tuple[str, str]]
+) -> int:
+    """
+    Hard-deletes `promotion_groups` rows for this store that aren't
+    present in the current file, keyed by (promotion_id, group_id).
+    Only acts on groups left behind by reconcile_removed_promotions --
+    i.e. groups whose parent promotion is still active but the group
+    itself was dropped. ON DELETE CASCADE on promotion_items clears out
+    every item under a removed group.
+
+    Same composite-key-as-string approach as
+    reconcile_removed_promotion_items, for the same reason (psycopg
+    doesn't cleanly support parameterized tuple-array membership).
+    ':' is safe as a separator since neither promotion_id nor group_id
+    contain it in observed data.
+    """
+    store_id_int = get_store_id(conn, chain_id, store_id_text)
+
+    current_key_strings = [
+        f"{promotion_id}:{group_id}"
+        for promotion_id, group_id in current_keys
+    ]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM promotion_groups
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND (promotion_id || ':' || group_id) <> ALL(%s)
+            """,
+            (chain_id, store_id_int, current_key_strings),
+        )
+        deleted = cur.rowcount
+
+    if deleted:
+        logger.info(
+            "Removed %d promo group(s) no longer active at chain_id=%s store_id=%s",
+            deleted, chain_id, store_id_text,
+        )
+
+    return deleted

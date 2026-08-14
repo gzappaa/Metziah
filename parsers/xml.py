@@ -143,6 +143,7 @@ class MachseneiXmlParser:
                     promotions[promotion_id] = Promotion(
                         chain_id=chain_id,
                         promotion_id=promotion_id,
+                        store_id=store_id,
 
                         description=promo_el.findtext("PromotionDescription"),
 

@@ -9,11 +9,21 @@ PROJECT_DIR = BASE_DIR.parent
 
 sys.path.insert(0, str(PROJECT_DIR))
 
+from config import settings
 from logging_config import setup_logging
 from db import get_connection
 from utils.update_prices import load_files
 
-FEEDS_DIR = PROJECT_DIR / "data" / "feeds"
+
+# ============================================================
+# DIRECTORIES
+# ============================================================
+
+FEEDS_DIR = (
+    PROJECT_DIR / "data" / "test_feeds"
+    if settings.ENV == "test"
+    else PROJECT_DIR / "data" / "feeds"
+)
 
 PYTHON = sys.executable
 
@@ -111,13 +121,15 @@ def run_promos():
     success = run("promos.py")
 
     if not success:
-        logger.error(
-            "Promo download failed"
-        )
+        logger.error("Promo download failed")
 
 
 def main():
-    print("SCHEDULER STARTED", sys.argv)
+    logger.info(
+        "Scheduler started | ENV=%s | FEEDS_DIR=%s",
+        settings.ENV,
+        FEEDS_DIR,
+    )
 
     if len(sys.argv) > 1:
         command = sys.argv[1]

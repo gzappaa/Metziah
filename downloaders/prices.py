@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -112,6 +113,10 @@ async def download_prices(test=False):
         latest_files = dict(list(latest_files.items())[:5])
         logger.info("TEST MODE: keeping first 5 stores")
 
+        if len(latest_files) >= 5 and TEST_DATA_DIR.exists():
+            logger.warning("TEST MODE: deleting existing %s", TEST_DATA_DIR)
+            shutil.rmtree(TEST_DATA_DIR)
+
     logger.info(
         "Keeping %d newest Price files",
         len(latest_files),
@@ -177,14 +182,6 @@ if __name__ == "__main__":
         help="Download only the first 5 stores into data/test_feeds",
     )
     args = parser.parse_args()
-
-    if args.test and TEST_DATA_DIR.exists():
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            TEST_DATA_DIR,
-        )
-        import shutil
-        shutil.rmtree(TEST_DATA_DIR)
 
     try:
         asyncio.run(download_prices(test=args.test))

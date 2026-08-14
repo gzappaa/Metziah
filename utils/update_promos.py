@@ -5,7 +5,7 @@ Core promo-loading logic, shared by both entry points:
   - cron's run_promos_and_load()  (live runs, log_changes=True by default)
 
 Only for PromoFull files (full current-state snapshots) -- do NOT call
-reconcile_removed_promotion_items against promo.xml delta files, since
+the reconcile_removed_* functions against promo.xml delta files, since
 a delta only ever adds/confirms, it never represents "everything
 active right now."
 
@@ -14,13 +14,27 @@ pre-write snapshot queries are skipped entirely, not just the log
 calls, so backfill runs don't pay for SELECTs nobody reads, and
 promo_changes.log stays exclusively a record of live cron activity.
 
-chain_id/store_id are taken from the file PATH here, not from parsed
-content -- unlike Product (which carries chain_id/store_id on every
-record), Promotion intentionally has no store_id field (metadata is
-chain-wide), and a promo file with zero groups/items would leave
-nothing to read store_id off of. Path is already trusted as source of
-truth for sub_chain_id elsewhere in this codebase, so extending that
-trust to chain_id/store_id for this loader specifically is consistent.
+chain_id/store_id come from parsed XML content here (ChainID/StoreID
+tags), same as everywhere else in Promotion/PromotionGroup/
+PromotionItem -- not overridden from the file path. path_store_id is
+still used separately for stores.id resolution and directory-derived
+sub_chain_id, same as before.
+
+promotions is now store-scoped, same identity shape as
+promotion_groups/promotion_items -- PK is (chain_id, promotion_id,
+store_id). Each store's PromoFull is treated as a fully independent,
+authoritative snapshot: no cross-store awareness, no chain-wide
+reconciliation pass needed.
+
+Reconciliation runs top-down in three passes, in this exact order:
+  1. reconcile_removed_promotions       -- promotion_id not in file -> delete
+  2. reconcile_removed_promotion_groups -- group_id not in file -> delete
+  3. reconcile_removed_promotion_items  -- item not in file -> delete
+Both promotion_groups and promotion_items have ON DELETE CASCADE on
+their parent FK, so pass 1 alone clears out every group/item under a
+removed promotion, and pass 2 clears out every item under a removed
+group -- no manual child cleanup needed anywhere. Passes 2 and 3 only
+ever act on what pass 1 (and 2) left behind.
 """
 
 import gzip
@@ -31,6 +45,8 @@ from database.records import split_promotion
 from database.repository import (
     ensure_chain,
     get_store_id,
+    reconcile_removed_promotions,
+    reconcile_removed_promotion_groups,
     reconcile_removed_promotion_items,
     update_store_subchain,
     upsert_promotion_groups,
@@ -44,15 +60,15 @@ logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("promo_changes")
 
 
-def _fetch_existing_promotions(conn, promotion_ids):
+def _fetch_existing_promotions(conn, chain_id, store_id_int, promotion_ids):
     if not promotion_ids:
         return {}
 
     with conn.cursor() as cur:
         cur.execute(
             "SELECT promotion_id, description, end_datetime FROM promotions "
-            "WHERE promotion_id = ANY(%s)",
-            (promotion_ids,),
+            "WHERE chain_id = %s AND store_id = %s AND promotion_id = ANY(%s)",
+            (chain_id, store_id_int, promotion_ids),
         )
         return {row[0]: row[1:] for row in cur.fetchall()}
 
@@ -87,8 +103,8 @@ def _log_changes(
 
         if old is None:
             change_logger.info(
-                "PROMOTION ADDED promotion_id=%s description=%s chain_id=%s",
-                p.promotion_id, p.description, chain_id,
+                "PROMOTION ADDED promotion_id=%s description=%s chain_id=%s store_id=%s",
+                p.promotion_id, p.description, chain_id, store_id_text,
             )
             continue
 
@@ -145,8 +161,9 @@ def load_one_file(
         logger.warning("No promotions parsed from %s", filepath)
         return
 
-    # See module docstring -- path is trusted source of truth here,
-    # same as sub_chain_id is elsewhere.
+    # Path still used for stores.id resolution + sub_chain_id --
+    # chain_id/store_id on the promotions themselves come from parsed
+    # XML content (see module docstring).
     path_chain_id, path_sub_chain_id, path_store_id = (
         filepath.relative_to(feeds_dir).parts[:3]
     )
@@ -157,12 +174,18 @@ def load_one_file(
 
     all_groups = []
     all_items = []
+    promotion_ids_in_file = set()
+    group_keys_in_file = set()
     item_keys_in_file = set()
 
     for promotion in promotions:
         _, groups, items = split_promotion(promotion)
         all_groups.extend(groups)
         all_items.extend(items)
+
+        promotion_ids_in_file.add(promotion.promotion_id)
+        for group in groups:
+            group_keys_in_file.add((group.promotion_id, group.group_id))
         for item in items:
             item_keys_in_file.add(
                 (item.promotion_id, item.group_id, item.item_code)
@@ -173,7 +196,9 @@ def load_one_file(
 
     if log_changes:
         promotion_ids = [p.promotion_id for p in promotions]
-        existing_promotions = _fetch_existing_promotions(conn, promotion_ids)
+        existing_promotions = _fetch_existing_promotions(
+            conn, path_chain_id, store_id_int, promotion_ids
+        )
         existing_items = _fetch_existing_promotion_items(
             conn, path_chain_id, store_id_int
         )
@@ -191,7 +216,15 @@ def load_one_file(
     upsert_promotion_groups(conn, all_groups)
     upsert_promotion_items(conn, all_items)
 
-    deleted = reconcile_removed_promotion_items(
+    # Top-down: promotions -> groups -> items. CASCADE handles the
+    # children of anything deleted at each step -- see module docstring.
+    removed_promotions = reconcile_removed_promotions(
+        conn, path_chain_id, path_store_id, promotion_ids_in_file
+    )
+    removed_groups = reconcile_removed_promotion_groups(
+        conn, path_chain_id, path_store_id, group_keys_in_file
+    )
+    removed_items = reconcile_removed_promotion_items(
         conn, path_chain_id, path_store_id, item_keys_in_file
     )
 
@@ -200,13 +233,16 @@ def load_one_file(
     # Summary always logs, regardless of log_changes -- goes to the
     # general logger, never to promo_changes.log.
     logger.info(
-        "%s: chain_id=%s store_id=%s promotions=%d items=%d removed=%d",
+        "%s: chain_id=%s store_id=%s promotions=%d items=%d "
+        "removed_promotions=%d removed_groups=%d removed_items=%d",
         filepath.name,
         path_chain_id,
         path_store_id,
         len(promotions),
         len(all_items),
-        deleted,
+        removed_promotions,
+        removed_groups,
+        removed_items,
     )
 
 

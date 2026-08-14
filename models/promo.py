@@ -1,3 +1,4 @@
+# models.promo.py
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -7,6 +8,7 @@ from decimal import Decimal
 class Promotion:
     chain_id: str
     promotion_id: str
+    store_id: str
 
     description: str | None
 
