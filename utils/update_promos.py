@@ -16,9 +16,8 @@ promo_changes.log stays exclusively a record of live cron activity.
 
 chain_id/store_id come from parsed XML content here (ChainID/StoreID
 tags), same as everywhere else in Promotion/PromotionGroup/
-PromotionItem -- not overridden from the file path. path_store_id is
-still used separately for stores.id resolution and directory-derived
-sub_chain_id, same as before.
+PromotionItem -- not overridden from the file path. Path is used for directory-derived 
+sub_chain_id and store_id.
 
 promotions is now store-scoped, same identity shape as
 promotion_groups/promotion_items -- PK is (chain_id, promotion_id,
@@ -44,7 +43,6 @@ from pathlib import Path
 from database.records import split_promotion
 from database.repository import (
     ensure_chain,
-    get_store_id,
     reconcile_removed_promotions,
     reconcile_removed_promotion_groups,
     reconcile_removed_promotion_items,
@@ -60,29 +58,47 @@ logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("promo_changes")
 
 
-def _fetch_existing_promotions(conn, chain_id, store_id_int, promotion_ids):
+def _fetch_existing_promotions(
+    conn,
+    chain_id,
+    store_id_text,
+    promotion_ids,
+):
     if not promotion_ids:
         return {}
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT promotion_id, description, end_datetime FROM promotions "
-            "WHERE chain_id = %s AND store_id = %s AND promotion_id = ANY(%s)",
-            (chain_id, store_id_int, promotion_ids),
+            """
+            SELECT promotion_id, description, end_datetime
+            FROM promotions
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND promotion_id = ANY(%s)
+            """,
+            (chain_id, store_id_text, promotion_ids),
         )
-        return {row[0]: row[1:] for row in cur.fetchall()}
+        return {
+            row[0]: row[1:]
+            for row in cur.fetchall()
+        }
 
 
-def _fetch_existing_promotion_items(conn, chain_id, store_id_int):
+def _fetch_existing_promotion_items(
+    conn,
+    chain_id,
+    store_id_text,
+):
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT promotion_id, group_id, item_code,
                    discounted_price, discount_rate
             FROM promotion_items
-            WHERE chain_id = %s AND store_id = %s
+            WHERE chain_id = %s
+              AND store_id = %s
             """,
-            (chain_id, store_id_int),
+            (chain_id, store_id_text),
         )
         return {
             (row[0], row[1], row[2]): (row[3], row[4])
@@ -161,16 +177,20 @@ def load_one_file(
         logger.warning("No promotions parsed from %s", filepath)
         return
 
-    # Path still used for stores.id resolution + sub_chain_id --
-    # chain_id/store_id on the promotions themselves come from parsed
-    # XML content (see module docstring).
+    # Path is used for chain/sub-chain metadata.
+    # store_id is the actual retailer/feed store identifier.
     path_chain_id, path_sub_chain_id, path_store_id = (
         filepath.relative_to(feeds_dir).parts[:3]
     )
 
     ensure_chain(conn, path_chain_id)
-    update_store_subchain(conn, path_chain_id, path_store_id, path_sub_chain_id)
-    store_id_int = get_store_id(conn, path_chain_id, path_store_id)
+
+    update_store_subchain(
+        conn,
+        path_chain_id,
+        path_store_id,
+        path_sub_chain_id,
+    )
 
     all_groups = []
     all_items = []
@@ -195,12 +215,17 @@ def load_one_file(
     existing_items = {}
 
     if log_changes:
-        promotion_ids = [p.promotion_id for p in promotions]
         existing_promotions = _fetch_existing_promotions(
-            conn, path_chain_id, store_id_int, promotion_ids
+            conn,
+            path_chain_id,
+            path_store_id,
+            promotion_ids_in_file,
         )
+
         existing_items = _fetch_existing_promotion_items(
-            conn, path_chain_id, store_id_int
+            conn,
+            path_chain_id,
+            path_store_id,
         )
 
         _log_changes(

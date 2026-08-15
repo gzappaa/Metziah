@@ -21,7 +21,6 @@ from pathlib import Path
 from database.records import split_product
 from database.repository import (
     ensure_chain,
-    get_store_id,
     reconcile_removed_items,
     update_store_subchain,
     upsert_prices,
@@ -36,12 +35,12 @@ logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("price_changes")
 
 
-def _fetch_existing_prices(conn, chain_id, store_id_int):
+def _fetch_existing_prices(conn, chain_id, store_id_text):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT item_code, price, unit_price FROM prices "
             "WHERE chain_id = %s AND store_id = %s",
-            (chain_id, store_id_int),
+            (chain_id, store_id_text),
         )
         return {
             row[0]: (row[1], row[2])
@@ -291,11 +290,6 @@ def load_one_file(
         path_sub_chain_id,
     )
 
-    store_id_int = get_store_id(
-        conn,
-        chain_id,
-        store_id_text,
-    )
 
     product_records = []
     store_product_records = []
@@ -328,7 +322,7 @@ def load_one_file(
         existing_prices = _fetch_existing_prices(
             conn,
             chain_id,
-            store_id_int,
+            store_id_text,
         )
 
         all_relevant_codes = item_codes_in_file | set(existing_prices)
@@ -341,7 +335,7 @@ def load_one_file(
         existing_store_products = _fetch_existing_store_products(
             conn,
             chain_id,
-            store_id_int,
+            store_id_text,
             list(all_relevant_codes),
         )
 

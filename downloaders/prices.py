@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -9,9 +8,9 @@ from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
 from logging_config import setup_logging
 
-# Use --test to download the first 5 stores into data/test_feeds.
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
 DATA_DIR = BASE_DIR / "data" / "feeds"
 TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 
@@ -32,6 +31,7 @@ FILENAME_PATTERN = re.compile(
 
 
 def parse_filename(filename):
+
     match = FILENAME_PATTERN.fullmatch(filename)
 
     if not match:
@@ -40,28 +40,29 @@ def parse_filename(filename):
     return match.groupdict()
 
 
-def get_storage_path(meta, data_dir):
-    return (
-        data_dir
-        / meta["chain"]
-        / meta["subchain"]
-        / meta["store"]
-        / "prices"
+async def download_prices(test=False) -> list[Path]:
+
+    data_dir = (
+        TEST_DATA_DIR
+        if test
+        else DATA_DIR
     )
-
-
-async def download_prices(test=False):
-    data_dir = TEST_DATA_DIR if test else DATA_DIR
 
     client = LaibcatalogClient(CHAIN_ID)
 
     logger.info("Getting files from API...")
 
     try:
+
         files = await client.get_files()
+
     except Exception:
-        logger.exception("Failed getting file list from Laibcatalog")
-        return
+
+        logger.exception(
+            "Failed getting file list from Laibcatalog"
+        )
+
+        return []
 
     price_files = [
         f["fileName"]
@@ -72,120 +73,179 @@ async def download_prices(test=False):
         )
     ]
 
-    logger.info("Found %d Price files", len(price_files))
+    logger.info(
+        "Found %d Price files",
+        len(price_files)
+    )
 
-    # Keep only the newest Price file for each store.
+    if test:
+
+        # Use exactly the stores already present in test_feeds.
+        test_stores = {
+            path.name
+            for path in TEST_DATA_DIR.glob("*/*/*")
+            if path.is_dir()
+        }
+
+        price_files = [
+            filename
+            for filename in price_files
+            if (
+                (meta := parse_filename(filename))
+                and meta["store"] in test_stores
+            )
+        ]
+
+        logger.info(
+            "TEST MODE: keeping Price files for %d existing test store(s)",
+            len(test_stores),
+        )
+
     latest_files = {}
 
+    # Find newest Price file per store.
     for filename in price_files:
+
         meta = parse_filename(filename)
 
         if not meta:
-            logger.warning("Skipping invalid filename: %s", filename)
+
+            logger.warning(
+                "Skipping invalid filename: %s",
+                filename
+            )
+
             continue
 
-        store_key = (
+        key = (
             meta["chain"],
             meta["subchain"],
             meta["store"],
         )
 
-        try:
-            file_datetime = datetime.strptime(
-                meta["date"] + meta["time"],
-                "%Y%m%d%H%M%S",
-            )
-        except ValueError:
-            logger.warning("Invalid datetime: %s", filename)
-            continue
+        file_datetime = datetime.strptime(
+            meta["date"] + meta["time"],
+            "%Y%m%d%H%M%S"
+        )
 
         if (
-            store_key not in latest_files
-            or file_datetime > latest_files[store_key][0]
+            key not in latest_files
+            or file_datetime > latest_files[key][0]
         ):
-            latest_files[store_key] = (
+
+            latest_files[key] = (
                 file_datetime,
                 filename,
-                meta,
+                meta
             )
 
-    if test:
-        latest_files = dict(list(latest_files.items())[:5])
-        logger.info("TEST MODE: keeping first 5 stores")
-
-        if len(latest_files) >= 5 and TEST_DATA_DIR.exists():
-            logger.warning("TEST MODE: deleting existing %s", TEST_DATA_DIR)
-            shutil.rmtree(TEST_DATA_DIR)
-
     logger.info(
-        "Keeping %d newest Price files",
-        len(latest_files),
+        "Keeping %d latest Price files",
+        len(latest_files)
     )
 
     downloaded = 0
     skipped = 0
     failed = 0
+    downloaded_files = []
 
     for _, filename, meta in latest_files.values():
-        folder = get_storage_path(meta, data_dir)
-        folder.mkdir(parents=True, exist_ok=True)
+
+        folder = (
+            data_dir
+            / meta["chain"]
+            / meta["subchain"]
+            / meta["store"]
+            / "prices"
+        )
+
+        folder.mkdir(
+            parents=True,
+            exist_ok=True
+        )
 
         destination = folder / filename
 
         if destination.exists():
-            logger.debug("UP TO DATE: %s", filename)
+
+            logger.info(
+                "UP TO DATE: %s",
+                filename
+            )
+
             skipped += 1
+            continue
 
-        else:
-            logger.info("DOWNLOAD: %s", filename)
+        logger.info(
+            "DOWNLOAD: %s",
+            filename
+        )
 
-            try:
-                url = client.build_download_url(filename)
-                content = await client.download_file(url)
+        try:
 
-                destination.write_bytes(content)
-                downloaded += 1
+            url = client.build_download_url(filename)
 
-            except Exception:
-                logger.exception("FAILED downloading %s", filename)
-                failed += 1
-                continue
+            content = await client.download_file(url)
 
-        # Always remove old snapshots.
-        for old_file in folder.glob("Price*.gz"):
-            if old_file.name == filename:
-                continue
+            destination.write_bytes(content)
 
-            try:
-                logger.debug("REMOVE OLD: %s", old_file.name)
-                old_file.unlink()
+            downloaded += 1
+            downloaded_files.append(destination)
 
-            except Exception:
-                logger.exception(
-                    "FAILED removing %s",
-                    old_file.name,
-                )
+        except Exception:
+
+            logger.exception(
+                "FAILED downloading %s",
+                filename
+            )
+
+            failed += 1
+            continue
+
+    logger.info("Finished")
 
     logger.info(
-        "Finished: downloaded=%d skipped=%d failed=%d",
-        downloaded,
-        skipped,
-        failed,
+        "Downloaded: %d",
+        downloaded
     )
+
+    logger.info(
+        "Skipped: %d",
+        skipped
+    )
+
+    logger.info(
+        "Failed: %d",
+        failed
+    )
+
+    return downloaded_files
 
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Download only the first 5 stores into data/test_feeds",
+        help="Download Price files for stores already present in data/test_feeds",
     )
+
     args = parser.parse_args()
 
     try:
-        asyncio.run(download_prices(test=args.test))
+
+        asyncio.run(
+            download_prices(
+                test=args.test
+            )
+        )
 
     except Exception:
-        logger.exception("Prices downloader crashed")
+
+        logger.exception(
+            "Prices downloader crashed"
+        )
+
         raise

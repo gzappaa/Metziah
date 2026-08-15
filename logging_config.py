@@ -43,7 +43,7 @@ ENV = settings.ENV  # dev | test | prod -- now reads from config.py / .env.test
 
 _ENV_LEVELS = {
     "dev": logging.INFO,    ## CHANGE IT LATER
-    "test": logging.WARNING,
+    "test": logging.INFO, ## CHANGE IT LATER
     "prod": logging.INFO,
 }
 

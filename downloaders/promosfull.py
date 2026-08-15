@@ -51,7 +51,7 @@ def get_storage_path(meta):
 
 
 
-async def download_promofull(test=False):
+async def download_promofull(test=False) -> list[Path]:
 
     data_dir = (
         BASE_DIR / "data" / "test_feeds"
@@ -70,7 +70,7 @@ async def download_promofull(test=False):
         logger.exception(
             "Failed getting file list from Laibcatalog"
         )
-        return
+        return []
 
     promofull_files = [
         f["fileName"]
@@ -151,6 +151,7 @@ async def download_promofull(test=False):
     downloaded = 0
     skipped = 0
     failed = 0
+    downloaded_files = []
 
     for _, filename, meta in latest_files.values():
 
@@ -193,6 +194,7 @@ async def download_promofull(test=False):
             destination.write_bytes(content)
 
             downloaded += 1
+            downloaded_files.append(destination)
 
         except Exception:
 
@@ -228,6 +230,8 @@ async def download_promofull(test=False):
     logger.info("Downloaded: %d", downloaded)
     logger.info("Skipped: %d", skipped)
     logger.info("Failed: %d", failed)
+
+    return downloaded_files
 
 
 

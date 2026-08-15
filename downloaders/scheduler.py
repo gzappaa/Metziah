@@ -1,8 +1,8 @@
-from datetime import datetime
-import subprocess
-from pathlib import Path
+# scheduler.py
+
+import asyncio
 import sys
-import time
+from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
@@ -12,12 +12,15 @@ sys.path.insert(0, str(PROJECT_DIR))
 from config import settings
 from logging_config import setup_logging
 from db import get_connection
+from database.repository import mark_files_downloaded
 from utils.update_prices import load_files
 
+from downloaders.prices import download_prices
+from downloaders.pricesfull import download_pricefull
+from downloaders.promos import download_promos
+from downloaders.promosfull import download_promofull
+from utils.load_file_tracking import update_file_tracking
 
-# ============================================================
-# DIRECTORIES
-# ============================================================
 
 FEEDS_DIR = (
     PROJECT_DIR / "data" / "test_feeds"
@@ -25,106 +28,228 @@ FEEDS_DIR = (
     else PROJECT_DIR / "data" / "feeds"
 )
 
-PYTHON = sys.executable
-
-
 logger = setup_logging("scheduler")
 
 
-def run(script) -> bool:
-    logger.info("Starting %s", script)
+def mark_downloaded(downloaded_files):
+
+    if not downloaded_files:
+        return
+
+    filenames = [
+        path.name
+        for path in downloaded_files
+    ]
+
+    with get_connection() as conn:
+
+        updated = mark_files_downloaded(
+            conn,
+            filenames,
+        )
+
+        conn.commit()
+
+    logger.info(
+        "Marked %d file(s) as downloaded",
+        updated,
+    )
+
+
+def run_file_tracking():
+
+    logger.info(
+        "Updating file tracking"
+    )
 
     try:
-        module = f"downloaders.{script.removesuffix('.py')}"
 
-        subprocess.run(
-            [PYTHON, "-m", module],
-            cwd=PROJECT_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
+        inserted = asyncio.run(
+            update_file_tracking()
         )
 
-        logger.info("Finished %s", script)
-        return True
+    except Exception:
 
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            "Failed %s (exit code %s)",
-            script,
-            e.returncode,
+        logger.exception(
+            "File tracking update failed"
         )
-
-        if e.stdout:
-            logger.error(
-                "stdout for %s:\n%s",
-                script,
-                e.stdout.strip(),
-            )
-
-        if e.stderr:
-            logger.error(
-                "stderr for %s:\n%s",
-                script,
-                e.stderr.strip(),
-            )
 
         return False
 
+    logger.info(
+        "File tracking updated: %d new file(s)",
+        inserted,
+    )
+
+    return True
+
 
 def run_prices_and_load():
-    start_time = time.time()
-
-    success = run("prices.py")
-
-    if not success:
-        logger.error(
-            "Skipping DB load -- prices.py download failed"
-        )
-        return
-
-    new_files = [
-        f
-        for f in FEEDS_DIR.glob("*/*/*/prices/*.gz")
-        if f.stat().st_mtime >= start_time
-    ]
-
-    if not new_files:
-        logger.warning(
-            "prices.py succeeded but no new .gz files found"
-        )
-        return
 
     logger.info(
-        "Loading %d new price file(s) into DB",
-        len(new_files),
+        "Starting prices download"
+    )
+
+    try:
+
+        downloaded_files = asyncio.run(
+            download_prices(
+                test=settings.ENV == "test"
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Prices download failed"
+        )
+
+        return
+
+    if not downloaded_files:
+
+        logger.info(
+            "No new price files downloaded"
+        )
+
+        return
+
+    mark_downloaded(
+        downloaded_files
+    )
+
+    logger.info(
+        "Loading %d downloaded price file(s) into DB",
+        len(downloaded_files),
     )
 
     with get_connection() as conn:
+
         load_files(
             conn,
-            new_files,
+            downloaded_files,
             FEEDS_DIR,
         )
 
 
 def run_promos():
-    """
-    Experimental Promo collector.
 
-    promos.py intentionally keeps every Promo file released by the API
-    instead of replacing/deleting older files. This allows us to observe
-    Promo feed behavior throughout an entire day.
+    logger.info(
+        "Starting promos download"
+    )
 
-    No DB loading is performed here yet.
-    """
-    success = run("promos.py")
+    try:
 
-    if not success:
-        logger.error("Promo download failed")
+        downloaded_files = asyncio.run(
+            download_promos(
+                test=settings.ENV == "test"
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Promo download failed"
+        )
+
+        return
+
+    mark_downloaded(
+        downloaded_files
+    )
+
+    logger.info(
+        "Promo download finished: %d new file(s)",
+        len(downloaded_files),
+    )
+
+
+def run_pricesfull():
+
+    logger.info(
+        "Starting pricesfull download"
+    )
+
+    try:
+
+        downloaded_files = asyncio.run(
+            download_pricefull(
+                test=settings.ENV == "test"
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "PriceFull download failed"
+        )
+
+        return
+
+    mark_downloaded(
+        downloaded_files
+    )
+
+    logger.info(
+        "PriceFull download finished: %d new file(s)",
+        len(downloaded_files),
+    )
+
+
+def run_promosfull():
+
+    logger.info(
+        "Starting promosfull download"
+    )
+
+    try:
+
+        downloaded_files = asyncio.run(
+            download_promofull(
+                test=settings.ENV == "test"
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "PromoFull download failed"
+        )
+
+        return
+
+    mark_downloaded(
+        downloaded_files
+    )
+
+    logger.info(
+        "PromoFull download finished: %d new file(s)",
+        len(downloaded_files),
+    )
+
+
+def run_all():
+
+    if settings.ENV == "test":
+
+        logger.info(
+            "TEST ENV: skipping PriceFull"
+        )
+
+        run_promosfull()
+        run_promos()
+        run_prices_and_load()
+
+    else:
+
+        run_pricesfull()
+        run_promosfull()
+        run_promos()
+        run_prices_and_load()
 
 
 def main():
+
     logger.info(
         "Scheduler started | ENV=%s | FEEDS_DIR=%s",
         settings.ENV,
@@ -132,41 +257,46 @@ def main():
     )
 
     if len(sys.argv) > 1:
+
         command = sys.argv[1]
 
         if command == "prices":
-            run_prices_and_load()
+
+            if run_file_tracking():
+                run_prices_and_load()
 
         elif command == "pricesfull":
-            run("pricesfull.py")
+
+            if run_file_tracking():
+                run_pricesfull()
 
         elif command == "promos":
-            run_promos()
+
+            if run_file_tracking():
+                run_promos()
 
         elif command == "promosfull":
-            run("promosfull.py")
+
+            if run_file_tracking():
+                run_promosfull()
 
         elif command == "all":
-            run("pricesfull.py")
-            run("promosfull.py")
-            run_prices_and_load()
+
+            if run_file_tracking():
+                run_all()
 
         else:
-            logger.error("Unknown command: %s", command)
+
+            logger.error(
+                "Unknown command: %s",
+                command,
+            )
 
         return
 
-    now = datetime.now()
-    hour = now.hour
-    minute = now.minute
-
-    if minute == 30 and hour in [4, 16]:
-        run("pricesfull.py")
-        run("promosfull.py")
-
-    # Normal 10-minute cron run
-    run_promos()
-    run_prices_and_load()
+    # Normal scheduler execution.
+    if run_file_tracking():
+        run_all()
 
 
 if __name__ == "__main__":

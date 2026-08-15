@@ -10,7 +10,7 @@ from clients.laibcatalog import LaibcatalogClient
 from logging_config import setup_logging
 
 
-# Use --test to download the first 5 stores into data/test_feeds.
+# In test mode, use the stores already present in data/test_feeds.
 #
 # Unlike Price files, Promo files are intentionally NOT overwritten
 # or deleted. Every Promo file released by the API is kept so we can
@@ -55,7 +55,7 @@ def get_storage_path(meta, data_dir):
     )
 
 
-async def download_promos(test=False):
+async def download_promos(test=False) -> list[Path]:
     data_dir = TEST_DATA_DIR if test else DATA_DIR
 
     client = LaibcatalogClient(CHAIN_ID)
@@ -64,9 +64,12 @@ async def download_promos(test=False):
 
     try:
         files = await client.get_files()
+
     except Exception:
-        logger.exception("Failed getting file list from Laibcatalog")
-        return
+        logger.exception(
+            "Failed getting file list from Laibcatalog"
+        )
+        return []
 
     promo_files = [
         f["fileName"]
@@ -77,83 +80,96 @@ async def download_promos(test=False):
         )
     ]
 
-    logger.info("Found %d Promo files", len(promo_files))
+    logger.info(
+        "Found %d Promo files",
+        len(promo_files),
+    )
 
     if test:
-        # Keep the first 5 stores, but download ALL Promo files
-        # belonging to those stores.
-        selected_stores = []
+        # Use exactly the stores already present in test_feeds.
+        test_feeds_dir = BASE_DIR / "data" / "test_feeds"
 
-        for filename in promo_files:
-            meta = parse_filename(filename)
-
-            if not meta:
-                continue
-
-            store_key = (
-                meta["chain"],
-                meta["subchain"],
-                meta["store"],
-            )
-
-            if store_key not in selected_stores:
-                selected_stores.append(store_key)
-
-            if len(selected_stores) >= 5:
-                break
+        test_stores = {
+            path.name
+            for path in test_feeds_dir.glob("*/*/*")
+            if path.is_dir()
+        }
 
         promo_files = [
             filename
             for filename in promo_files
             if (
                 (meta := parse_filename(filename))
-                and (
-                    meta["chain"],
-                    meta["subchain"],
-                    meta["store"],
-                ) in selected_stores
+                and meta["store"] in test_stores
             )
         ]
 
         logger.info(
-            "TEST MODE: keeping all Promo files for first 5 stores"
+            "TEST MODE: keeping all Promo files for %d existing test store(s)",
+            len(test_stores),
         )
 
     downloaded = 0
     skipped = 0
     failed = 0
+    downloaded_files = []
 
     for filename in promo_files:
+
         meta = parse_filename(filename)
 
         if not meta:
-            logger.warning("Skipping invalid filename: %s", filename)
+            logger.warning(
+                "Skipping invalid filename: %s",
+                filename,
+            )
             continue
 
-        folder = get_storage_path(meta, data_dir)
-        folder.mkdir(parents=True, exist_ok=True)
+        folder = get_storage_path(
+            meta,
+            data_dir,
+        )
+
+        folder.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         destination = folder / filename
 
         if destination.exists():
-            logger.debug("ALREADY EXISTS: %s", filename)
+
+            logger.debug(
+                "ALREADY EXISTS: %s",
+                filename,
+            )
+
             skipped += 1
             continue
 
-        logger.info("DOWNLOAD: %s", filename)
+        logger.info(
+            "DOWNLOAD: %s",
+            filename,
+        )
 
         try:
+
             url = client.build_download_url(filename)
+
             content = await client.download_file(url)
 
             destination.write_bytes(content)
+
             downloaded += 1
+            downloaded_files.append(destination)
 
         except Exception:
+
             logger.exception(
                 "FAILED downloading %s",
                 filename,
             )
+
             failed += 1
             continue
 
@@ -164,31 +180,33 @@ async def download_promos(test=False):
         failed,
     )
 
+    return downloaded_files
+
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Download all Promo files for the first 5 stores into data/test_feeds",
+        help="Download all Promo files for stores already present in data/test_feeds",
     )
 
     args = parser.parse_args()
 
-    if args.test and TEST_DATA_DIR.exists():
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            TEST_DATA_DIR,
+    try:
+
+        asyncio.run(
+            download_promos(
+                test=args.test
+            )
         )
 
-        import shutil
-
-        shutil.rmtree(TEST_DATA_DIR)
-
-    try:
-        asyncio.run(download_promos(test=args.test))
-
     except Exception:
-        logger.exception("Promos downloader crashed")
+
+        logger.exception(
+            "Promos downloader crashed"
+        )
+
         raise
