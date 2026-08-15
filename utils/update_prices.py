@@ -21,6 +21,7 @@ from pathlib import Path
 from database.records import split_product
 from database.repository import (
     ensure_chain,
+    mark_files_loaded,
     reconcile_removed_items,
     update_store_subchain,
     upsert_prices,
@@ -400,14 +401,15 @@ def load_files(
     filepaths: list[Path],
     feeds_dir: Path,
     log_changes: bool = True,
-) -> None:
+) -> list[Path]:
     """
-    Call right after download finishes (cron), passing exactly the files
-    it just wrote -- or call from scripts/load_prices.py with a full glob
-    for manual/backfill runs, passing log_changes=False to keep
-    price_changes.log exclusive to live cron activity.
+    Load all supplied price files.
+
+    Successfully loaded files are marked as loaded in file_tracking.
+    Failed files remain loaded = false.
     """
     parser = MachseneiXmlParser()
+    loaded_files = []
 
     for filepath in filepaths:
         try:
@@ -419,6 +421,16 @@ def load_files(
                 log_changes=log_changes,
             )
 
+            # Only reached if the entire file loaded successfully.
+            mark_files_loaded(
+                conn,
+                [filepath.name],
+            )
+
+            conn.commit()
+
+            loaded_files.append(filepath)
+
         except KeyError as e:
             logger.error("Skipping %s: %s", filepath, e)
             conn.rollback()
@@ -426,3 +438,5 @@ def load_files(
         except Exception:
             logger.exception("Failed to load %s", filepath)
             conn.rollback()
+
+    return loaded_files

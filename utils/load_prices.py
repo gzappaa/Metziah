@@ -1,6 +1,7 @@
 """
-Standalone loader: walks data/feeds/{chain_id}/{sub_chain_id}/{store_id}/prices/,
-gzip-decompresses each *.gz price file, parses it, and upserts into Postgres.
+Standalone loader: walks data/feeds/{chain_id}/{sub_chain_id}/{store_id}/
+prices/ and pricesfull/, gzip-decompresses each *.gz price file, parses it,
+and upserts into Postgres.
 
 Decoupled from the live download step on purpose -- run this manually or
 via its own cron entry, pointed at whatever's already on disk.
@@ -11,9 +12,13 @@ run_prices_and_load(). Runs with log_changes=False so backfill/manual
 runs never write to price_changes.log -- that log stays exclusively a
 record of live cron activity.
 
+File tracking is handled by load_files(). Successfully loaded files are
+marked loaded=true there; failed files remain loaded=false.
+
 Usage:
     python scripts/load_prices.py
     python scripts/load_prices.py --dev
+    python scripts/load_prices.py --test
     python scripts/load_prices.py --feeds-dir data/feeds
 """
 
@@ -35,12 +40,16 @@ DEFAULT_FEEDS_DIR = Path("data/feeds")
 
 def find_price_files(feeds_dir: Path):
     """
-    Yields every *.gz file under data/feeds/{chain}/{subchain}/{store}/prices/.
+    Yields every *.gz Price and PriceFull file under:
+
+        data/feeds/{chain}/{subchain}/{store}/prices/
+        data/feeds/{chain}/{subchain}/{store}/pricesfull/
+
     Doesn't assume anything about filenames -- chain/subchain/store come
-    from parsing the XML content itself, not the path, since that's the
-    authoritative source.
+    from parsing the XML content itself, not the filename.
     """
     yield from feeds_dir.glob("*/*/*/prices/*.gz")
+    yield from feeds_dir.glob("*/*/*/pricesfull/*.gz")
 
 
 def main():
@@ -86,13 +95,23 @@ def main():
         args.feeds_dir = Path("data/test_feeds")
 
     files = list(find_price_files(args.feeds_dir))
-    logger.info("Found %d price file(s) under %s", len(files), args.feeds_dir)
+
+    logger.info(
+        "Found %d price/pricefull file(s) under %s",
+        len(files),
+        args.feeds_dir,
+    )
 
     if not files:
         return
 
     with get_connection() as conn:
-        load_files(conn, files, args.feeds_dir, log_changes=False)
+        load_files(
+            conn,
+            files,
+            args.feeds_dir,
+            log_changes=False,
+        )
 
     logger.info("Done.")
 

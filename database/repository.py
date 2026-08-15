@@ -1114,3 +1114,20 @@ def get_latest_downloaded_price_files(conn):
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
+
+def mark_files_loaded(conn, filenames):
+    if not filenames:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE file_tracking
+            SET loaded = TRUE
+            WHERE filename = ANY(%s)
+              AND loaded = FALSE
+            """,
+            (filenames,),
+        )
+
+        return cur.rowcount

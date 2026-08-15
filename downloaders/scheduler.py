@@ -125,11 +125,16 @@ def run_prices_and_load():
 
     with get_connection() as conn:
 
-        load_files(
+        loaded_files = load_files(
             conn,
             downloaded_files,
             FEEDS_DIR,
         )
+
+    logger.info(
+        "Successfully loaded %d price file(s)",
+        len(loaded_files),
+    )
 
 
 def run_promos():
