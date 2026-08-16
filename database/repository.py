@@ -1131,3 +1131,69 @@ def mark_files_loaded(conn, filenames):
         )
 
         return cur.rowcount
+
+
+def get_downloaded_promofull_files(conn):
+    """
+    Return downloaded but not yet loaded PromoFull files.
+
+    Column order matches scheduler.py:
+        chain_id,
+        sub_chain_id,
+        store_id,
+        file_type,
+        filename,
+        file_date
+    """
+
+    query = """
+        SELECT
+            chain_id,
+            sub_chain_id,
+            store_id,
+            file_type,
+            filename,
+            file_date
+        FROM file_tracking
+        WHERE file_type = 'PromoFull'
+          AND downloaded = true
+          AND loaded = false
+        ORDER BY file_date, filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+
+def get_downloaded_unloaded_promo_files(conn):
+    """
+    Return downloaded but not yet loaded Promo delta files.
+
+    Column order matches scheduler.py:
+        chain_id,
+        sub_chain_id,
+        store_id,
+        file_type,
+        filename,
+        file_date
+    """
+
+    query = """
+        SELECT
+            chain_id,
+            sub_chain_id,
+            store_id,
+            file_type,
+            filename,
+            file_date
+        FROM file_tracking
+        WHERE file_type = 'Promo'
+          AND downloaded = true
+          AND loaded = false
+        ORDER BY file_date, filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()

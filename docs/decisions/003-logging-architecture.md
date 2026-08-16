@@ -1,5 +1,31 @@
 # Decision 003: Logging architecture -- entry-point logs vs. isolated audit logs
 
+# Update — 2026-08-16
+
+The logging architecture has changed since this decision was written.
+
+The pipeline download/load components are no longer launched by `scheduler.py` as separate subprocesses. The scheduler now calls their functions directly, in-process.
+
+Because of this, `scheduler.py` is now the single root logging owner for the entire pipeline. All pipeline execution logs — including price, PriceFull, promo, PromoFull, file tracking, API/client, parser, loader, and scheduler logs — go to:
+
+- Normal runs: `logs/scheduler.log`
+- Test runs: `logs/scheduler.test.log`
+
+Pipeline components such as `prices.py`, `pricesfull.py`, `promos.py`, and `promosfull.py` should no longer call `setup_logging()` themselves. They should only use:
+
+logger = logging.getLogger(__name__)
+
+and rely on the root logger configured by `scheduler.py`.
+
+The isolated audit/change logs remain independent:
+
+- `logs/price_changes.log`
+- `logs/promo_changes.log`
+
+The original decision below is retained as historical context. Its subprocess-based assumptions and consequences are no longer current.
+
+
+
 Date: 2026-08-09
 
 ## Context

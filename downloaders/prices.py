@@ -6,7 +6,7 @@ from pathlib import Path
 
 from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
-from logging_config import setup_logging
+import logging
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,7 +17,7 @@ TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 CHAIN = CHAINS["machsenei_hashuk"]
 CHAIN_ID = CHAIN.chain_id
 
-logger = setup_logging("prices")
+logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(

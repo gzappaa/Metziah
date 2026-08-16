@@ -36,6 +36,36 @@ logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("price_changes")
 
 
+def _dedupe_price_records(records):
+    """
+    A single feed file can contain more than one <Item> block for the
+    same item_code (confirmed empirically -- not a parser bug, the
+    source XML itself repeats the code, e.g. two different unit/pack
+    representations of the same barcode).
+
+    Without this, both _log_changes and upsert_prices operate on the
+    raw list: the log compares each entry independently against one
+    static pre-write snapshot (so a stale duplicate can silently log
+    nothing), and upsert_prices applies both in list order, so
+    whichever is LAST in the file wins in the DB -- independent of
+    which one is actually current. That mismatch (log says one price,
+    DB ends up at another) is the bug this fixes.
+
+    Policy: keep the record with the LATEST price_update_time. A
+    duplicate line in a feed is treated as a correction, and the most
+    recently timestamped entry is assumed to be the current one.
+    """
+    best = {}
+
+    for r in records:
+        current = best.get(r.item_code)
+
+        if current is None or r.price_update_time > current.price_update_time:
+            best[r.item_code] = r
+
+    return list(best.values())
+
+
 def _fetch_existing_prices(conn, chain_id, store_id_text):
     with conn.cursor() as cur:
         cur.execute(
@@ -312,6 +342,12 @@ def load_one_file(
 
         price_records.append(price_record)
         item_codes_in_file.add(product.item_code)
+
+    # A single file can contain more than one price entry for the same
+    # item_code (seen empirically on real feed data). Resolve to one
+    # record per item_code BEFORE both diff-logging and the upsert, so
+    # the log and the DB write are always describing the same thing.
+    price_records = _dedupe_price_records(price_records)
 
     existing_prices = {}
     removed_item_names = {}

@@ -6,6 +6,7 @@ from datetime import datetime
 from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
 import argparse
+import logging
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,7 +16,7 @@ CHAIN = CHAINS["machsenei_hashuk"]
 CHAIN_ID = CHAIN.chain_id
 
 
-logger = setup_logging("promosfull")
+logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(

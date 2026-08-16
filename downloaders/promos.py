@@ -7,7 +7,7 @@ from pathlib import Path
 
 from chains.registry import CHAINS
 from clients.laibcatalog import LaibcatalogClient
-from logging_config import setup_logging
+import logging
 
 
 # In test mode, use the stores already present in data/test_feeds.
@@ -23,7 +23,7 @@ TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 CHAIN = CHAINS["machsenei_hashuk"]
 CHAIN_ID = CHAIN.chain_id
 
-logger = setup_logging("promos")
+logger = logging.getLogger(__name__)
 
 
 FILENAME_PATTERN = re.compile(

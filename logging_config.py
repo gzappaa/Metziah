@@ -65,23 +65,38 @@ def _make_file_handler(filename: str) -> RotatingFileHandler:
 
 def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logger:
     """
-    For pipeline entry points: scheduler.py, prices.py, pricesfull.py,
-    promosfull.py. Configures the ROOT logger for this process, writing
-    to logs/<name>.log. Because it's root, everything that runs in this
-    process -- including modules that just do
-    logging.getLogger(__name__), like laibcatalog.py -- propagates in
-    too, labeled with its own logger name.
+    Configure the ROOT logger for a pipeline entry point.
+
+    The scheduler is the root logging owner for the entire pipeline, so
+    everything executed through it propagates into scheduler.log or
+    scheduler.test.log.
+
+    Normal environment:
+        logs/<name>.log
+
+    Test environment:
+        logs/<name>.test.log
     """
     if log_to_console is None:
         log_to_console = ENV == "dev"
 
     root_logger = logging.getLogger()
 
-    if root_logger.handlers:
-        return root_logger
+    # setup_logging() owns the root logger.
+    # Remove handlers installed by previous configuration so the current
+    # entry point explicitly controls the logging destination.
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
 
     root_logger.setLevel(_ENV_LEVELS.get(ENV, logging.INFO))
-    root_logger.addHandler(_make_file_handler(f"{name}.log"))
+
+    if ENV == "test":
+        filename = f"{name}.test.log"
+    else:
+        filename = f"{name}.log"
+
+    root_logger.addHandler(_make_file_handler(filename))
 
     if log_to_console:
         console_handler = logging.StreamHandler()
