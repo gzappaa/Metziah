@@ -206,47 +206,61 @@ class MachseneiXmlParser:
                         group = groups[group_id]
 
                     for item_el in group_el.findall("./PromotionItems/PromotionItem"):
+                        try:
+                            item_type_text = item_el.findtext("ItemType")
+                            reward_type_text = item_el.findtext("RewardType")
 
-                        item_type_text = item_el.findtext("ItemType")
-                        reward_type_text = item_el.findtext("RewardType")
+                            group.items.append(
+                                PromotionItem(
+                                    chain_id=chain_id,
+                                    promotion_id=promotion_id,
+                                    store_id=store_id,
+                                    group_id=group_id,
 
-                        group.items.append(
-                            PromotionItem(
-                                chain_id=chain_id,
-                                promotion_id=promotion_id,
-                                store_id=store_id,
-                                group_id=group_id,
+                                    item_code=item_el.findtext("ItemCode"),
 
-                                item_code=item_el.findtext("ItemCode"),
+                                    item_type=(
+                                        int(item_type_text)
+                                        if item_type_text is not None else None
+                                    ),
+                                    reward_type=(
+                                        int(reward_type_text)
+                                        if reward_type_text is not None else None
+                                    ),
 
-                                item_type=(
-                                    int(item_type_text)
-                                    if item_type_text is not None else None
-                                ),
-                                reward_type=(
-                                    int(reward_type_text)
-                                    if reward_type_text is not None else None
-                                ),
+                                    min_qty=self.parse_optional_decimal(
+                                        item_el.findtext("MinQty")
+                                    ),
+                                    max_qty=self.parse_optional_decimal(
+                                        item_el.findtext("MaxQty")
+                                    ),
+                                    discount_rate=self.parse_optional_decimal(
+                                        item_el.findtext("DiscountRate")
+                                    ),
+                                    discounted_price=self.parse_optional_decimal(
+                                        item_el.findtext("DiscountedPrice")
+                                    ),
+                                    discounted_price_per_mida=self.parse_optional_decimal(
+                                        item_el.findtext("DiscountedPricePerMida")
+                                    ),
 
-                                min_qty=self.parse_optional_decimal(
-                                    item_el.findtext("MinQty")
-                                ),
-                                max_qty=self.parse_optional_decimal(
-                                    item_el.findtext("MaxQty")
-                                ),
-                                discount_rate=self.parse_optional_decimal(
-                                    item_el.findtext("DiscountRate")
-                                ),
-                                discounted_price=self.parse_optional_decimal(
-                                    item_el.findtext("DiscountedPrice")
-                                ),
-                                discounted_price_per_mida=self.parse_optional_decimal(
-                                    item_el.findtext("DiscountedPricePerMida")
-                                ),
-
-                                is_weighted=item_el.findtext("bIsWeighted") == "1",
+                                    is_weighted=item_el.findtext("bIsWeighted") == "1",
+                                )
                             )
-                        )
+
+                        except Exception as e:
+                            logger.warning(
+                                "Skipping malformed promotion item "
+                                "(chain_id=%s store_id=%s promotion_id=%s "
+                                "group_id=%s item_code=%s): %s",
+                                chain_id,
+                                store_id,
+                                promotion_id,
+                                group_id,
+                                item_el.findtext("ItemCode"),
+                                e,
+                            )
+                            continue
 
             except Exception as e:
                 # Same reasoning as parse_price_file -- one malformed

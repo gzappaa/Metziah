@@ -123,10 +123,17 @@ async def download_prices(test=False) -> list[Path]:
             meta["store"],
         )
 
-        file_datetime = datetime.strptime(
-            meta["date"] + meta["time"],
-            "%Y%m%d%H%M%S"
-        )
+        try:
+            file_datetime = datetime.strptime(
+                meta["date"] + meta["time"],
+                "%Y%m%d%H%M%S"
+            )
+        except ValueError:
+            logger.warning(
+                "Skipping invalid datetime in filename: %s",
+                filename,
+            )
+            continue
 
         if (
             key not in latest_files

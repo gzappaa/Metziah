@@ -28,6 +28,7 @@ from pathlib import Path
 from database.records import split_promotion
 from database.repository import (
     ensure_chain,
+    mark_files_loaded,
     reconcile_removed_promotions,
     reconcile_removed_promotion_groups,
     reconcile_removed_promotion_items,
@@ -133,12 +134,12 @@ def _log_changes(
         if old is None:
             change_logger.info(
                 "PROMOTION ADDED "
-                "promotion_id=%s description=%s "
-                "chain_id=%s store_id=%s",
-                promotion.promotion_id,
-                promotion.description,
+                "chain_id=%s store_id=%s "
+                "promotion_id=%s description=%s",
                 chain_id,
                 store_id_text,
+                promotion.promotion_id,
+                promotion.description,
             )
 
         else:
@@ -150,11 +151,14 @@ def _log_changes(
             ):
                 change_logger.info(
                     "PROMOTION CHANGED "
+                    "chain_id=%s store_id=%s "
                     "promotion_id=%s "
                     "old_description=%s "
                     "new_description=%s "
                     "old_end=%s "
                     "new_end=%s",
+                    chain_id,
+                    store_id_text,
                     promotion.promotion_id,
                     old_description,
                     promotion.description,
@@ -460,6 +464,13 @@ def load_files(
                 file_type,
                 log_changes=log_changes,
             )
+
+            mark_files_loaded(
+                conn,
+                [filepath.name],
+            )
+
+            conn.commit()
 
             loaded_files.append(
                 filepath

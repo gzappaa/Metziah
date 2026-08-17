@@ -29,7 +29,7 @@ def _get_price(conn, chain_id, store_id_int, item_code):
         return cur.fetchone()
 
 
-def test_name_switches_when_votes_flip(conn, real_store):
+def test_name_switches_when_votes_flip(conn, test_store):
     item_code = "9999999999995"
     upsert_products(conn, [ProductRecord(
         item_code=item_code, name="Original Name",
@@ -48,15 +48,15 @@ def test_name_switches_when_votes_flip(conn, real_store):
 
 
 
-def test_full_item_lifecycle(conn, real_store):
+def test_full_item_lifecycle(conn, test_store):
     """
     Add -> change price -> fill manufacturer -> try to overwrite it ->
     change name -> remove. Real repository functions, real DB writes,
     never committed -- conn's rollback-on-teardown wipes it clean.
     """
-    chain_id = real_store["chain_id"]
-    store_id_text = real_store["store_id_text"]
-    store_id_int = real_store["store_id_int"]
+    chain_id = test_store["chain_id"]
+    store_id_text = test_store["store_id_text"]
+    store_id_int = test_store["store_id_text"]
     item_code = "9999999999996"  # 13-digit -> routed to products, not store_products
 
     def make_price(price):
@@ -126,3 +126,5 @@ def test_full_item_lifecycle(conn, real_store):
     # confirms the module docstring's claim.
     name, name_count, _, _ = _get_product(conn, item_code)
     assert name == "Original Name"
+
+

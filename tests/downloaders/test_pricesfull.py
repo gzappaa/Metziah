@@ -44,7 +44,7 @@ def test_get_storage_path(monkeypatch, tmp_path):
     monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
 
     meta = {"chain": "7290661400001", "subchain": "001", "store": "020"}
-    path = pricesfull.get_storage_path(meta)
+    path = pricesfull.get_storage_path(meta, tmp_path)
 
     assert path == tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
 
@@ -272,3 +272,117 @@ async def test_previous_day_file_not_removed_by_same_day_cleanup(
     await pricesfull.download_pricefull()
 
     assert yesterday_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_test_mode_uses_test_data_dir_and_keeps_five_files(
+    monkeypatch, tmp_path, mock_client_class
+):
+    test_data_dir = tmp_path / "test_feeds"
+
+    monkeypatch.setattr(pricesfull, "TEST_DATA_DIR", test_data_dir)
+
+    mock_client_class.get_files.return_value = [
+        make_file_entry("020", "20260801", "040000"),
+        make_file_entry("021", "20260801", "040000"),
+        make_file_entry("022", "20260801", "040000"),
+        make_file_entry("023", "20260801", "040000"),
+        make_file_entry("024", "20260801", "040000"),
+        make_file_entry("025", "20260801", "040000"),
+    ]
+
+    downloaded = await pricesfull.download_pricefull(test=True)
+
+    assert len(downloaded) == 5
+    assert all(path.is_relative_to(test_data_dir) for path in downloaded)
+
+    stores = sorted(
+        path.parts[-3]
+        for path in test_data_dir.rglob("PriceFull*.gz")
+    )
+
+    assert stores == ["020", "021", "022", "023", "024"]
+
+@pytest.mark.asyncio
+async def test_test_mode_deletes_existing_test_data(
+    monkeypatch, tmp_path, mock_client_class
+):
+    test_data_dir = tmp_path / "test_feeds"
+    old_file = test_data_dir / "old" / "old.gz"
+
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"old data")
+
+    monkeypatch.setattr(pricesfull, "TEST_DATA_DIR", test_data_dir)
+
+    mock_client_class.get_files.return_value = [
+        make_file_entry("020", "20260801", "042307"),
+    ]
+
+    await pricesfull.download_pricefull(test=True)
+
+    assert not old_file.exists()
+
+    new_file = (
+        test_data_dir
+        / "7290661400001"
+        / "001"
+        / "020"
+        / "pricesfull"
+        / "PriceFull7290661400001-001-020-20260801-042307.gz"
+    )
+
+    assert new_file.exists()
+
+@pytest.mark.asyncio
+async def test_returns_downloaded_paths(
+    monkeypatch, tmp_path, mock_client_class
+):
+    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
+
+    filename = "PriceFull7290661400001-001-020-20260801-042307.gz"
+
+    mock_client_class.get_files.return_value = [
+        {"fileName": filename},
+    ]
+
+    result = await pricesfull.download_pricefull()
+
+    expected = (
+        tmp_path
+        / "7290661400001"
+        / "001"
+        / "020"
+        / "pricesfull"
+        / filename
+    )
+
+    assert result == [expected]
+
+
+@pytest.mark.asyncio
+async def test_skipped_file_is_not_returned(
+    monkeypatch, tmp_path, mock_client_class
+):
+    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
+
+    filename = "PriceFull7290661400001-001-020-20260801-042307.gz"
+
+    mock_client_class.get_files.return_value = [
+        {"fileName": filename},
+    ]
+
+    folder = (
+        tmp_path
+        / "7290661400001"
+        / "001"
+        / "020"
+        / "pricesfull"
+    )
+    folder.mkdir(parents=True)
+
+    (folder / filename).write_bytes(b"existing")
+
+    result = await pricesfull.download_pricefull()
+
+    assert result == []

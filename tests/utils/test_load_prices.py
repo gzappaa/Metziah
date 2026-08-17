@@ -13,7 +13,10 @@ def test_find_price_files():
 
     assert files
     assert all(file.suffix == ".gz" for file in files)
-    assert all(file.parent.name == "prices" for file in files)
+    assert all(
+        file.parent.name in {"prices", "pricesfull"}
+        for file in files
+    )
 
 
 def test_main_test_flag_requires_test_environment(monkeypatch):
@@ -94,8 +97,20 @@ def test_main_loads_all_found_files(monkeypatch):
 
     calls = []
 
-    def fake_load_files(conn, filepaths, feeds_dir, log_changes):
-        calls.append((conn, filepaths, feeds_dir, log_changes))
+    def fake_load_files(
+        conn,
+        filepaths,
+        feeds_dir,
+        log_changes,
+    ):
+        calls.append(
+            (
+                conn,
+                filepaths,
+                feeds_dir,
+                log_changes,
+            )
+        )
 
     monkeypatch.setattr(
         load_prices,

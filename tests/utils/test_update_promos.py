@@ -1,326 +1,863 @@
+# tests/utils/test_update_promos.py
+
 import gzip
-from pathlib import Path
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
-from utils.update_promos import load_files
+import pytest
+
+from utils.update_promos import (
+    _fetch_existing_promotion_items,
+    _fetch_existing_promotions,
+    _log_changes,
+    load_files,
+    load_one_file,
+)
 
 
-CHAIN_ID = "7290661400001"
-STORE_ID = "097"
-PROMOTION_ID = "1462415"
-ITEM_CODE = "7290008464598"
+CHAIN_ID = "TEST_CHAIN"
+STORE_ID = "TEST_STORE"
 
 
-def create_promo_xml(
-    path: Path,
-    update_time: str = "2026-08-16T12:00:00.000",
-    discounted_price: str = "5.01",
-    discount_rate: str = "40.00",
-    discounted_price_per_mida: str = "1.52",
+def make_item(
+    item_code="ITEM_001",
+    discounted_price="5.00",
+    discount_rate="40.00",
 ):
-    xml = f"""<?xml version="1.0" encoding="utf-8"?>
-<Root>
-    <ChainID>{CHAIN_ID}</ChainID>
-    <SubChainID>003</SubChainID>
-    <StoreID>{STORE_ID}</StoreID>
-    <BikoretNo>0</BikoretNo>
-
-    <Promotions>
-        <Promotion>
-            <PromotionUpdateTime>{update_time}</PromotionUpdateTime>
-            <AllowMultipleDiscounts>0</AllowMultipleDiscounts>
-            <PromotionID>{PROMOTION_ID}</PromotionID>
-            <PromotionDescription>*TEST PROMOTION</PromotionDescription>
-            <PromotionStartDateTime>2026-08-16T00:00:00.000</PromotionStartDateTime>
-            <PromotionEndDateTime>2026-08-21T00:00:00.000</PromotionEndDateTime>
-            <PromotionStartHour/>
-            <PromotionEndHour/>
-            <PromotionDays/>
-            <RedemptionLimit>4</RedemptionLimit>
-            <MinNoOfItemOffered>10</MinNoOfItemOffered>
-            <ClubID>0</ClubID>
-            <IsGiftItem>4</IsGiftItem>
-            <AdditionalIsCoupon>0</AdditionalIsCoupon>
-            <AdditionalRestrictions/>
-            <Remarks/>
-
-            <Groups>
-                <Group>
-                    <GroupID>1</GroupID>
-                    <MinPurchaseAmount>0</MinPurchaseAmount>
-                    <DiscountType/>
-
-                    <PromotionItems>
-                        <PromotionItem>
-                            <ItemCode>{ITEM_CODE}</ItemCode>
-                            <ItemType>1</ItemType>
-                            <RewardType>3</RewardType>
-                            <MinQty>1</MinQty>
-                            <MaxQty/>
-                            <DiscountRate>{discount_rate}</DiscountRate>
-                            <DiscountedPrice>{discounted_price}</DiscountedPrice>
-                            <DiscountedPricePerMida>{discounted_price_per_mida}</DiscountedPricePerMida>
-                            <bIsWeighted>0</bIsWeighted>
-                        </PromotionItem>
-                    </PromotionItems>
-                </Group>
-            </Groups>
-        </Promotion>
-    </Promotions>
-</Root>
-"""
-
-    with gzip.open(path, "wb") as f:
-        f.write(xml.encode("utf-8"))
-
-
-def test_promo_updates_existing_promotion_item(conn, tmp_path):
-    feeds_dir = tmp_path / "feeds"
-
-    promo_dir = (
-        feeds_dir
-        / CHAIN_ID
-        / "003"
-        / STORE_ID
-        / "promos"
+    return SimpleNamespace(
+        item_code=item_code,
+        discounted_price=Decimal(discounted_price),
+        discount_rate=Decimal(discount_rate),
     )
 
-    promo_dir.mkdir(parents=True)
 
-    filepath = (
-        promo_dir
-        / "Promo7290661400001-003-097-20260816-120000.gz"
+def make_group(
+    group_id="1",
+    items=None,
+):
+    return SimpleNamespace(
+        group_id=group_id,
+        promotion_id="PROMO_001",
+        items=items or [],
     )
 
-    create_promo_xml(filepath)
 
-    # Prepare deterministic initial promotion state.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE promotion_items
-            SET
-                discounted_price = %s,
-                discount_rate = %s
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND promotion_id = %s
-              AND group_id = %s
-              AND item_code = %s
-            """,
-            (
-                Decimal("4.20"),
-                Decimal("52.44"),
-                CHAIN_ID,
-                STORE_ID,
-                PROMOTION_ID,
-                "1",
-                ITEM_CODE,
-            ),
-        )
-
-    conn.commit()
-
-    # Verify initial promotion state.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT discounted_price
-            FROM promotion_items
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND promotion_id = %s
-              AND group_id = %s
-              AND item_code = %s
-            """,
-            (
-                CHAIN_ID,
-                STORE_ID,
-                PROMOTION_ID,
-                "1",
-                ITEM_CODE,
-            ),
-        )
-
-        row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == Decimal("4.20")
-
-    # Verify regular price before Promo loading.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT price
-            FROM prices
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                CHAIN_ID,
-                STORE_ID,
-                ITEM_CODE,
-            ),
-        )
-
-        row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == Decimal("8.50")
-
-    # Run the real Promo loader.
-    loaded_files = load_files(
-        conn,
-        [(filepath, "Promo")],
-        feeds_dir,
-        log_changes=False,
+def make_promotion(
+    promotion_id="PROMO_001",
+    description="Test Promotion",
+    end_datetime=None,
+    groups=None,
+):
+    return SimpleNamespace(
+        promotion_id=promotion_id,
+        description=description,
+        end_datetime=end_datetime,
+        groups=groups or [],
     )
 
-    assert loaded_files == [filepath]
 
-    # Verify promotion was updated.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT
-                discounted_price,
-                discount_rate
-            FROM promotion_items
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND promotion_id = %s
-              AND group_id = %s
-              AND item_code = %s
-            """,
-            (
-                CHAIN_ID,
-                STORE_ID,
-                PROMOTION_ID,
-                "1",
-                ITEM_CODE,
-            ),
-        )
-
-        row = cur.fetchone()
-
-    assert row is not None
-
-    discounted_price, discount_rate = row
-
-    assert discounted_price == Decimal("5.01")
-    assert discount_rate == Decimal("40.00")
-
-    # Promo loading must NOT modify the regular product price.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT price
-            FROM prices
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                CHAIN_ID,
-                STORE_ID,
-                ITEM_CODE,
-            ),
-        )
-
-        row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == Decimal("8.50")
+# ---------------------------------------------------------------------------
+# _log_changes
+# ---------------------------------------------------------------------------
 
 
-def test_promo_multiple_updates_keep_latest_values(conn, tmp_path):
-    feeds_dir = tmp_path / "feeds"
-
-    promo_dir = (
-        feeds_dir
-        / CHAIN_ID
-        / "003"
-        / STORE_ID
-        / "promos"
+def test_promotion_added_logs(caplog):
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        description="2 for 20",
     )
 
-    promo_dir.mkdir(parents=True)
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            {},
+            {},
+        )
 
-    # First Promo: 10:00
-    filepath_1 = (
-        promo_dir
-        / "Promo7290661400001-003-097-20260816-100000.gz"
+    assert "PROMOTION ADDED" in caplog.text
+    assert "PROMO_001" in caplog.text
+
+
+def test_promotion_unchanged_does_not_log(caplog):
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        description="2 for 20",
+        end_datetime=datetime(2026, 8, 21),
     )
 
-    create_promo_xml(
-        filepath_1,
-        update_time="2026-08-16T10:00:00.000",
-        discounted_price="5.01",
+    existing_promotions = {
+        "PROMO_001": (
+            "2 for 20",
+            datetime(2026, 8, 21),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            existing_promotions,
+            {},
+        )
+
+    assert "PROMOTION ADDED" not in caplog.text
+    assert "PROMOTION CHANGED" not in caplog.text
+
+
+def test_promotion_changed_logs(caplog):
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        description="3 for 20",
+        end_datetime=datetime(2026, 8, 22),
+    )
+
+    existing_promotions = {
+        "PROMO_001": (
+            "2 for 20",
+            datetime(2026, 8, 21),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            existing_promotions,
+            {},
+        )
+
+    assert "PROMOTION CHANGED" in caplog.text
+    assert "PROMO_001" in caplog.text
+
+
+def test_promo_item_added_logs(caplog):
+    item = make_item(
+        item_code="ITEM_001",
+        discounted_price="5.00",
         discount_rate="40.00",
-        discounted_price_per_mida="1.52",
     )
 
-    # Second Promo: 11:00
-    filepath_2 = (
-        promo_dir
-        / "Promo7290661400001-003-097-20260816-110000.gz"
+    group = make_group(
+        group_id="1",
+        items=[item],
     )
 
-    create_promo_xml(
-        filepath_2,
-        update_time="2026-08-16T11:00:00.000",
-        discounted_price="4.50",
-        discount_rate="50.00",
-        discounted_price_per_mida="1.36",
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        groups=[group],
     )
 
-    # Load both Promo files in chronological order.
-    loaded_files = load_files(
-        conn,
-        [
-            (filepath_1, "Promo"),
-            (filepath_2, "Promo"),
-        ],
-        feeds_dir,
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            {},
+            {},
+        )
+
+    assert "PROMO ITEM ADDED" in caplog.text
+    assert "ITEM_001" in caplog.text
+
+
+def test_promo_item_unchanged_does_not_log(caplog):
+    item = make_item(
+        item_code="ITEM_001",
+        discounted_price="5.00",
+        discount_rate="40.00",
+    )
+
+    group = make_group(
+        group_id="1",
+        items=[item],
+    )
+
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        groups=[group],
+    )
+
+    existing_items = {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            {
+                ("PROMO_001", "1", "ITEM_001"),
+            },
+            {},
+            existing_items,
+        )
+
+    assert "PROMO ITEM ADDED" not in caplog.text
+    assert "PROMO ITEM CHANGED" not in caplog.text
+
+
+def test_promo_item_changed_logs(caplog):
+    item = make_item(
+        item_code="ITEM_001",
+        discounted_price="6.00",
+        discount_rate="30.00",
+    )
+
+    group = make_group(
+        group_id="1",
+        items=[item],
+    )
+
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        groups=[group],
+    )
+
+    existing_items = {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            {
+                ("PROMO_001", "1", "ITEM_001"),
+            },
+            {},
+            existing_items,
+        )
+
+    assert "PROMO ITEM CHANGED" in caplog.text
+    assert "ITEM_001" in caplog.text
+
+
+def test_promofull_removed_item_logs(caplog):
+    existing_items = {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "PromoFull",
+            [],
+            set(),
+            {},
+            existing_items,
+        )
+
+    assert "PROMO ITEM REMOVED" in caplog.text
+    assert "ITEM_001" in caplog.text
+
+
+def test_promo_removed_item_does_not_log(caplog):
+    existing_items = {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [],
+            set(),
+            {},
+            existing_items,
+        )
+
+    assert "PROMO ITEM REMOVED" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _fetch_existing_promotions
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_existing_promotions_empty_ids_returns_empty_without_query():
+    class FakeConnection:
+        def cursor(self):
+            raise AssertionError("cursor should not be called")
+
+    result = _fetch_existing_promotions(
+        FakeConnection(),
+        CHAIN_ID,
+        STORE_ID,
+        set(),
+    )
+
+    assert result == {}
+
+
+def test_fetch_existing_promotions_returns_mapping():
+    class FakeCursor:
+        def execute(self, query, params):
+            self.params = params
+
+        def fetchall(self):
+            return [
+                (
+                    "PROMO_001",
+                    "2 for 20",
+                    datetime(2026, 8, 21),
+                ),
+                (
+                    "PROMO_002",
+                    "3 for 30",
+                    datetime(2026, 8, 22),
+                ),
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+    result = _fetch_existing_promotions(
+        FakeConnection(),
+        CHAIN_ID,
+        STORE_ID,
+        {"PROMO_001", "PROMO_002"},
+    )
+
+    assert result == {
+        "PROMO_001": (
+            "2 for 20",
+            datetime(2026, 8, 21),
+        ),
+        "PROMO_002": (
+            "3 for 30",
+            datetime(2026, 8, 22),
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# _fetch_existing_promotion_items
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_existing_promotion_items_returns_mapping():
+    class FakeCursor:
+        def execute(self, query, params):
+            self.params = params
+
+        def fetchall(self):
+            return [
+                (
+                    "PROMO_001",
+                    "1",
+                    "ITEM_001",
+                    Decimal("5.00"),
+                    Decimal("40.00"),
+                ),
+                (
+                    "PROMO_002",
+                    "2",
+                    "ITEM_002",
+                    Decimal("7.50"),
+                    Decimal("25.00"),
+                ),
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+    result = _fetch_existing_promotion_items(
+        FakeConnection(),
+        CHAIN_ID,
+        STORE_ID,
+    )
+
+    assert result == {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        ),
+        ("PROMO_002", "2", "ITEM_002"): (
+            Decimal("7.50"),
+            Decimal("25.00"),
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# load_one_file -- mocked dependencies
+# ---------------------------------------------------------------------------
+
+
+def test_load_one_file_invalid_type_raises():
+    with pytest.raises(ValueError, match="Unsupported promo file type"):
+        load_one_file(
+            None,
+            None,
+            Path("test.gz"),
+            Path("."),
+            "INVALID",
+        )
+
+
+def test_load_one_file_empty_xml_does_nothing(
+    monkeypatch,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "003"
+        / STORE_ID
+        / "promos"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    class FakeParser:
+        def parse_promo_file(self, xml_content):
+            return []
+
+    load_one_file(
+        None,
+        FakeParser(),
+        filepath,
+        tmp_path,
+        "Promo",
         log_changes=False,
     )
 
-    assert loaded_files == [
-        filepath_1,
-        filepath_2,
+
+def test_load_one_file_log_changes_false_skips_snapshots(
+    monkeypatch,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "003"
+        / STORE_ID
+        / "promos"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    promotion = make_promotion()
+
+    class FakeParser:
+        def parse_promo_file(self, xml_content):
+            return [promotion]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("snapshot query should not be called")
+
+    monkeypatch.setattr(
+        "utils.update_promos._fetch_existing_promotions",
+        fail,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos._fetch_existing_promotion_items",
+        fail,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.ensure_chain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.update_store_subchain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotions",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_groups",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_items",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotions",
+        lambda *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_groups",
+        lambda *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_items",
+        lambda *args, **kwargs: 0,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.split_promotion",
+        lambda promotion: (promotion, [], []),
+    )
+
+    class FakeConnection:
+        def commit(self):
+            pass
+
+    load_one_file(
+        FakeConnection(),
+        FakeParser(),
+        filepath,
+        tmp_path,
+        "Promo",
+        log_changes=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Promo vs PromoFull reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_promo_does_not_reconcile(
+    monkeypatch,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "003"
+        / STORE_ID
+        / "promos"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    promotion = make_promotion()
+
+    class FakeParser:
+        def parse_promo_file(self, xml_content):
+            return [promotion]
+
+    calls = []
+
+    monkeypatch.setattr(
+        "utils.update_promos.split_promotion",
+        lambda promotion: (promotion, [], []),
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.ensure_chain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.update_store_subchain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotions",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_groups",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_items",
+        lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotions",
+        lambda *args, **kwargs: calls.append("promotions"),
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_groups",
+        lambda *args, **kwargs: calls.append("groups"),
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_items",
+        lambda *args, **kwargs: calls.append("items"),
+    )
+
+    class FakeConnection:
+        def commit(self):
+            pass
+
+    load_one_file(
+        FakeConnection(),
+        FakeParser(),
+        filepath,
+        tmp_path,
+        "Promo",
+        log_changes=False,
+    )
+
+    assert calls == []
+
+
+def test_promofull_reconciles_promotions_groups_and_items(
+    monkeypatch,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "003"
+        / STORE_ID
+        / "promosfull"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    promotion = make_promotion()
+
+    class FakeParser:
+        def parse_promo_file(self, xml_content):
+            return [promotion]
+
+    calls = []
+
+    monkeypatch.setattr(
+        "utils.update_promos.split_promotion",
+        lambda promotion: (promotion, [], []),
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.ensure_chain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.update_store_subchain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotions",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_groups",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.upsert_promotion_items",
+        lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotions",
+        lambda *args, **kwargs: calls.append("promotions") or 1,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_groups",
+        lambda *args, **kwargs: calls.append("groups") or 2,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos.reconcile_removed_promotion_items",
+        lambda *args, **kwargs: calls.append("items") or 3,
+    )
+
+    class FakeConnection:
+        def commit(self):
+            pass
+
+    load_one_file(
+        FakeConnection(),
+        FakeParser(),
+        filepath,
+        tmp_path,
+        "PromoFull",
+        log_changes=False,
+    )
+
+    assert calls == [
+        "promotions",
+        "groups",
+        "items",
     ]
 
-    # The latest Promo must be the final database state.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT
-                discounted_price,
-                discount_rate,
-                discounted_price_per_mida
-            FROM promotion_items
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND promotion_id = %s
-              AND group_id = %s
-              AND item_code = %s
-            """,
-            (
-                CHAIN_ID,
-                STORE_ID,
-                PROMOTION_ID,
-                "1",
-                ITEM_CODE,
-            ),
-        )
 
-        row = cur.fetchone()
+# ---------------------------------------------------------------------------
+# load_files
+# ---------------------------------------------------------------------------
 
-    assert row is not None
 
-    discounted_price, discount_rate, discounted_price_per_mida = row
+def test_load_files_continues_after_failure(monkeypatch):
+    files = [
+        (Path("file1.gz"), "Promo"),
+        (Path("file2.gz"), "PromoFull"),
+    ]
 
-    assert discounted_price == Decimal("4.50")
-    assert discount_rate == Decimal("50.00")
-    assert discounted_price_per_mida == Decimal("1.36")
+    processed = []
+
+    def fake_load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+        file_type,
+        log_changes=True,
+    ):
+        processed.append((filepath, file_type))
+
+        if filepath == files[0][0]:
+            raise RuntimeError("test failure")
+
+    monkeypatch.setattr(
+        "utils.update_promos.load_one_file",
+        fake_load_one_file,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.mark_files_loaded",
+        lambda conn, filenames: None,
+    )
+
+    class FakeConnection:
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+    loaded = load_files(
+        FakeConnection(),
+        files,
+        Path("data/test_feeds"),
+    )
+
+    assert processed == files
+    assert loaded == [files[1][0]]
+
+
+def test_load_files_rolls_back_on_failure(monkeypatch):
+    filepath = Path("file.gz")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("test failure")
+
+    monkeypatch.setattr(
+        "utils.update_promos.load_one_file",
+        fail,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.mark_files_loaded",
+        lambda conn, filenames: None,
+    )
+
+    class FakeConnection:
+        def __init__(self):
+            self.rolled_back = False
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def commit(self):
+            pass
+
+    conn = FakeConnection()
+
+    loaded = load_files(
+        conn,
+        [(filepath, "Promo")],
+        Path("data/test_feeds"),
+    )
+
+    assert conn.rolled_back is True
+    assert loaded == []
+
+
+def test_load_files_marks_only_successful_files_loaded(monkeypatch):
+    files = [
+        (Path("good.gz"), "Promo"),
+        (Path("bad.gz"), "Promo"),
+    ]
+
+    marked = []
+
+    def fake_load_one_file(
+        conn,
+        parser,
+        filepath,
+        feeds_dir,
+        file_type,
+        log_changes=True,
+    ):
+        if filepath == files[1][0]:
+            raise RuntimeError("failure")
+
+    monkeypatch.setattr(
+        "utils.update_promos.load_one_file",
+        fake_load_one_file,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_promos.mark_files_loaded",
+        lambda conn, filenames: marked.extend(filenames),
+    )
+
+    class FakeConnection:
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+    loaded = load_files(
+        FakeConnection(),
+        files,
+        Path("data/test_feeds"),
+    )
+
+    assert loaded == [files[0][0]]
+    assert marked == ["good.gz"]

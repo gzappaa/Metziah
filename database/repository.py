@@ -1,25 +1,28 @@
 """
-DB write logic for the price-loading pipeline.
+DB read/write layer for the ingestion pipeline.
 
-Operations per store's price file:
-    1. upsert_products       -- add/update barcode item metadata
-    2. upsert_store_products -- add/update non-barcode (internal-code)
-                                 item metadata, scoped to
-                                 (chain_id, store_id, item_code)
-    3. upsert_prices         -- add changed prices only, no-op on unchanged rows
-    4. reconcile_removed_items -- hard-delete (store_id, item_code) rows
-                                 that exist in the DB but are no longer
-                                 present in the current file
+Sections:
+    Chains & stores    -- ensure_chain, upsert_stores, update_store_subchain
+    Products & prices  -- upsert_products (barcode), upsert_store_products
+                           (internal-code, scoped to chain_id+store_id+item_code),
+                           upsert_prices, reconcile_removed_items
+    Promotions         -- upsert_promotions/_groups/_items and their
+                           reconcile_removed_* counterparts (store-scoped,
+                           run in dependency order: promotions -> groups -> items)
+    File tracking       -- insert_file_tracking, mark_files_downloaded,
+                           mark_files_loaded, get_latest_downloaded_price_files,
+                           get_downloaded_promofull_files,
+                           get_downloaded_unloaded_promo_files
 
 NAME RESOLUTION (products.name / store_products.name):
-    A simple vote counter (`name_count`), not a full history table.
-    - Incoming name matches current name -> name_count += 1
-    - Incoming name differs -> name_count -= 1; if it hits 0, the name
-      SWITCHES to the incoming value and name_count resets to 1
-    - Blank/empty incoming name never participates (skipped entirely)
+    Vote counter (`name_count`), not a history table.
+    - Incoming name matches current -> name_count += 1
+    - Incoming name differs -> name_count -= 1; hits 0 -> name SWITCHES
+      to incoming, count resets to 1
+    - Blank/empty incoming name never participates
 
 MANUFACTURER / MANUFACTURER_COUNTRY:
-    Fill-only. Once a field is non-blank, it's never overwritten.
+    Fill-only. Once non-blank, never overwritten.
 """
 
 import logging
@@ -1108,6 +1111,7 @@ def get_latest_downloaded_price_files(conn):
         ORDER BY
             chain_id,
             store_id,
+            substring(filename FROM '(\\d{8}-\\d{6})\\.gz$') DESC,
             filename DESC
     """
 

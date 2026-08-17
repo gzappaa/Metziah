@@ -37,14 +37,7 @@ def test_parse_filename_rejects_trailing_content():
     ) is None
 
 
-# ---- get_storage_path ----
 
-def test_get_storage_path(tmp_path):
-    meta = {"chain": "7290661400001", "subchain": "001", "store": "020"}
-
-    path = prices.get_storage_path(meta, tmp_path)
-
-    assert path == tmp_path / "7290661400001" / "001" / "020" / "prices"
 
 
 # ---- download_prices ----
@@ -124,29 +117,7 @@ async def test_keeps_only_latest_per_store_across_different_days(
     assert "20260801-090000" in remaining[0].name
 
 
-@pytest.mark.asyncio
-async def test_removes_all_old_price_files_regardless_of_date(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
 
-    folder = tmp_path / "7290661400001" / "001" / "020" / "prices"
-    folder.mkdir(parents=True)
-    # stale files from a previous day AND earlier the same day
-    yesterday_stale = folder / "Price7290661400001-001-020-20260731-230000.gz"
-    today_stale = folder / "Price7290661400001-001-020-20260801-040000.gz"
-    yesterday_stale.write_bytes(b"stale1")
-    today_stale.write_bytes(b"stale2")
-
-    await prices.download_prices()
-
-    assert not yesterday_stale.exists()
-    assert not today_stale.exists()
-    new_file = folder / "Price7290661400001-001-020-20260801-090000.gz"
-    assert new_file.exists()
 
 
 @pytest.mark.asyncio

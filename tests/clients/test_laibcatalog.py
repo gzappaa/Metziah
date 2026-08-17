@@ -224,3 +224,81 @@ async def test_download_file_does_not_retry_on_http_status_error(client):
         await client.download_file(url)
 
     assert route.call_count == 1
+
+# ---- retry backoff ----
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_files_uses_configured_backoff(client, monkeypatch):
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(
+        "clients.laibcatalog.asyncio.sleep",
+        fake_sleep,
+    )
+
+    respx.get(GETFILES_URL).mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.ConnectError("boom"),
+            httpx.Response(200, json={"files": []}),
+        ]
+    )
+
+    await client.get_files()
+
+    assert sleep_calls == [2, 4]
+
+# ---- logging behavior ----
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_retry_logs_warning(client, caplog):
+    respx.get(GETFILES_URL).mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(200, json={"files": []}),
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="clients.laibcatalog"):
+        await client.get_files()
+
+    assert "Attempt 1/3 failed" in caplog.text
+    assert GETFILES_URL in caplog.text
+    assert "boom" in caplog.text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_all_retries_failed_logs_error(client, caplog):
+    respx.get(GETFILES_URL).mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+
+    with caplog.at_level("ERROR", logger="clients.laibcatalog"):
+        with pytest.raises(httpx.ConnectError):
+            await client.get_files()
+
+    assert "All 3 attempts failed" in caplog.text
+    assert GETFILES_URL in caplog.text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_error_logs_error(client, caplog):
+    respx.get(GETFILES_URL).mock(
+        return_value=httpx.Response(500)
+    )
+
+    with caplog.at_level("ERROR", logger="clients.laibcatalog"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_files()
+
+    assert "HTTP error for" in caplog.text
+    assert GETFILES_URL in caplog.text

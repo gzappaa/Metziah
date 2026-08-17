@@ -14,7 +14,6 @@ from logging_config import setup_logging
 from db import get_connection
 from database.repository import (
     mark_files_downloaded,
-    mark_files_loaded,
     get_latest_downloaded_price_files,
     get_downloaded_promofull_files,
     get_downloaded_unloaded_promo_files,
@@ -60,26 +59,43 @@ def mark_downloaded(downloaded_files):
     )
 
 
-def mark_loaded(loaded_files):
-    if not loaded_files:
-        return
+# Price files are temporary snapshots: keep only the successfully loaded
+# latest Price file per store. PriceFull snapshots are historical and are
+# never deleted. Cleanup happens only after loading succeeds, so a failed
+# load leaves the previous Price file available as a fallback.
 
-    filenames = [
-        path.name
-        for path in loaded_files
-    ]
+def cleanup_old_price_files(loaded_files):
+    """
+    Delete older Price snapshot files after the newest Price file
+    has been successfully loaded.
 
-    with get_connection() as conn:
-        updated = mark_files_loaded(
-            conn,
-            filenames,
-        )
-        conn.commit()
+    PriceFull files are never touched.
+    If loading fails, this function is never called, so the old
+    Price file remains available as a fallback.
+    """
+    for filepath in loaded_files:
+        filepath = Path(filepath)
 
-    logger.info(
-        "Marked %d file(s) as loaded",
-        updated,
-    )
+        if filepath.parent.name != "prices":
+            continue
+
+        for old_file in filepath.parent.glob("Price*.gz"):
+            if old_file == filepath:
+                continue
+
+            try:
+                old_file.unlink()
+
+                logger.info(
+                    "Deleted old Price file: %s",
+                    old_file.name,
+                )
+
+            except Exception:
+                logger.exception(
+                    "Failed deleting old Price file: %s",
+                    old_file.name,
+                )
 
 
 def run_file_tracking():
@@ -126,6 +142,16 @@ def run_prices_and_load():
     with get_connection() as conn:
         latest_files = get_latest_downloaded_price_files(conn)
 
+        logger.info("Latest price files selected:")
+        for row in latest_files:
+            logger.info(
+                "SELECTED: chain=%s store=%s type=%s filename=%s",
+                row[0],
+                row[2],
+                row[3],
+                row[4],
+            )
+
         if not latest_files:
             logger.info(
                 "No downloaded Price/PriceFull files to load"
@@ -157,12 +183,12 @@ def run_prices_and_load():
             FEEDS_DIR,
         )
 
-    mark_loaded(loaded_files)
-
     logger.info(
         "Successfully loaded %d price file(s)",
         len(loaded_files),
     )
+
+    cleanup_old_price_files(loaded_files)
 
 
 def run_promos_and_load():
@@ -279,7 +305,6 @@ def run_promos_and_load():
     #
     # A Promo delta is only eligible after its required
     # PromoFull baseline has loaded=True.
-    mark_loaded(loaded_promofull)
 
     logger.info(
         "Successfully loaded %d PromoFull file(s)",
@@ -327,8 +352,6 @@ def run_promos_and_load():
             filepaths,
             FEEDS_DIR,
         )
-
-    mark_loaded(loaded_promos)
 
     logger.info(
         "Successfully loaded %d Promo file(s)",

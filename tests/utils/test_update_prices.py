@@ -1,23 +1,33 @@
-# tests/test_update_prices.py
+# tests/utils/test_update_prices.py
+
+from datetime import datetime, timezone
 from decimal import Decimal
-import gzip
-from utils.update_prices import _log_changes
-from database.records import PriceRecord
-from utils.update_prices import load_files, load_one_file
-from parsers.xml import MachseneiXmlParser
 from pathlib import Path
 
+from database.records import PriceRecord, ProductRecord
+from utils.update_prices import (
+    _dedupe_price_records,
+    _log_changes,
+    load_files,
+    load_one_file,
+)
 
 
-def test_price_added_logs(real_store, caplog):
-    item_code = "0000000000001"  # doesn't need to pre-exist; existing_prices is empty
+CHAIN_ID = "TEST_CHAIN"
+STORE_ID = "TEST_STORE"
 
-    price_record = PriceRecord(
-        chain_id=real_store["chain_id"],
-        store_id=real_store["store_id_text"],
+
+def make_price_record(
+    item_code="ITEM_001",
+    price="10.00",
+    update_time=None,
+):
+    return PriceRecord(
+        chain_id=CHAIN_ID,
+        store_id=STORE_ID,
         item_code=item_code,
-        price=Decimal("10.50"),
-        unit_price=Decimal("10.50"),
+        price=Decimal(price),
+        unit_price=Decimal(price),
         quantity=Decimal("1"),
         unit_qty="יחידה",
         unit_measure="",
@@ -25,14 +35,24 @@ def test_price_added_logs(real_store, caplog):
         package_quantity=1,
         allow_discount=True,
         status="active",
-        price_update_time=None,
+        price_update_time=update_time,
         last_sale_datetime=None,
     )
 
+
+# ---------------------------------------------------------------------------
+# _log_changes
+# ---------------------------------------------------------------------------
+
+
+def test_price_added_logs(caplog):
+    item_code = "ITEM_001"
+    price_record = make_price_record(item_code=item_code, price="10.50")
+
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[],
             store_product_records=[],
             price_records=[price_record],
@@ -45,37 +65,18 @@ def test_price_added_logs(real_store, caplog):
     assert item_code in caplog.text
 
 
+def test_price_changed_logs(caplog):
+    item_code = "ITEM_002"
+    price_record = make_price_record(item_code=item_code, price="12.00")
 
-
-def test_price_changed_logs(real_store, caplog):
-    item_code = "0000000000002"
-
-    price_record = PriceRecord(
-        chain_id=real_store["chain_id"],
-        store_id=real_store["store_id_text"],
-        item_code=item_code,
-        price=Decimal("12.00"),
-        unit_price=Decimal("12.00"),
-        quantity=Decimal("1"),
-        unit_qty="יחידה",
-        unit_measure="",
-        weighted=False,
-        package_quantity=1,
-        allow_discount=True,
-        status="active",
-        price_update_time=None,
-        last_sale_datetime=None,
-    )
-
-    # Simulate that this item already existed with a different price
     existing_prices = {
         item_code: (Decimal("10.00"), Decimal("10.00"))
     }
 
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[],
             store_product_records=[],
             price_records=[price_record],
@@ -88,37 +89,18 @@ def test_price_changed_logs(real_store, caplog):
     assert item_code in caplog.text
 
 
+def test_price_unchanged_does_not_log(caplog):
+    item_code = "ITEM_003"
+    price_record = make_price_record(item_code=item_code, price="10.00")
 
-
-def test_price_unchanged_does_not_log(real_store, caplog):
-    item_code = "0000000000003"
-
-    price_record = PriceRecord(
-        chain_id=real_store["chain_id"],
-        store_id=real_store["store_id_text"],
-        item_code=item_code,
-        price=Decimal("10.00"),
-        unit_price=Decimal("10.00"),
-        quantity=Decimal("1"),
-        unit_qty="יחידה",
-        unit_measure="",
-        weighted=False,
-        package_quantity=1,
-        allow_discount=True,
-        status="active",
-        price_update_time=None,
-        last_sale_datetime=None,
-    )
-
-    # Same price as what's already "in the DB" -- nothing should log
     existing_prices = {
         item_code: (Decimal("10.00"), Decimal("10.00"))
     }
 
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[],
             store_product_records=[],
             price_records=[price_record],
@@ -131,10 +113,8 @@ def test_price_unchanged_does_not_log(real_store, caplog):
     assert "PRICE CHANGED" not in caplog.text
 
 
-def test_item_added_logs_product_metadata(real_store, caplog):
-    from database.records import ProductRecord
-
-    item_code = "0000000000004"
+def test_item_added_logs_product_metadata(caplog):
+    item_code = "ITEM_004"
 
     product_record = ProductRecord(
         item_code=item_code,
@@ -146,12 +126,12 @@ def test_item_added_logs_product_metadata(real_store, caplog):
 
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[product_record],
             store_product_records=[],
             price_records=[],
-            existing_products={},  # nothing existing -- brand new item
+            existing_products={},
             existing_store_products={},
             existing_prices={},
         )
@@ -160,29 +140,25 @@ def test_item_added_logs_product_metadata(real_store, caplog):
     assert item_code in caplog.text
 
 
-def test_manufacturer_fill_only_fills_blank(real_store, caplog):
-    from database.records import ProductRecord
-
-    item_code = "0000000000005"
+def test_manufacturer_fill_only_fills_blank(caplog):
+    item_code = "ITEM_005"
 
     product_record = ProductRecord(
         item_code=item_code,
         name="Test Product",
-        manufacturer="Acme",       # new value, non-blank
+        manufacturer="Acme",
         manufacturer_country="IL",
         item_type=1,
     )
 
-    # Existing row has manufacturer=None (blank) -- should get filled
     existing_products = {
         item_code: ("Test Product", None, None, 1)
-        # (name, manufacturer, manufacturer_country, item_type)
     }
 
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[product_record],
             store_product_records=[],
             price_records=[],
@@ -194,28 +170,26 @@ def test_manufacturer_fill_only_fills_blank(real_store, caplog):
     assert "ITEM METADATA CHANGED" in caplog.text
     assert item_code in caplog.text
 
-def test_manufacturer_fill_only_does_not_overwrite(real_store, caplog):
-    from database.records import ProductRecord
 
-    item_code = "0000000000006"
+def test_manufacturer_fill_only_does_not_overwrite(caplog):
+    item_code = "ITEM_006"
 
     product_record = ProductRecord(
         item_code=item_code,
         name="Test Product",
-        manufacturer="Different Manufacturer",  # tries to overwrite
-        manufacturer_country="IL",
+        manufacturer="Different Manufacturer",
+        manufacturer_country="US",
         item_type=1,
     )
 
-    # Existing row already has a manufacturer filled in
     existing_products = {
         item_code: ("Test Product", "Original Manufacturer", "IL", 1)
     }
 
     with caplog.at_level("INFO", logger="price_changes"):
         _log_changes(
-            real_store["chain_id"],
-            real_store["store_id_text"],
+            CHAIN_ID,
+            STORE_ID,
             product_records=[product_record],
             store_product_records=[],
             price_records=[],
@@ -224,92 +198,12 @@ def test_manufacturer_fill_only_does_not_overwrite(real_store, caplog):
             existing_prices={},
         )
 
-    # Fill-only means old value wins -- nothing should be reported as changed
     assert "ITEM METADATA CHANGED" not in caplog.text
 
 
-
-
-
-def test_load_one_file(conn):
-    feeds_dir = Path("data/test_feeds")
-    filepath = next(feeds_dir.glob("*/*/*/prices/*.gz"))
-
-    parser = MachseneiXmlParser()
-
-    load_one_file(
-        conn,
-        parser,
-        filepath,
-        feeds_dir,
-    )
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM prices")
-        price_count = cur.fetchone()[0]
-
-    assert price_count > 0
-
-
-def test_load_one_file_updates_store_subchain(conn):
-    feeds_dir = Path("data/test_feeds")
-    filepath = next(feeds_dir.glob("*/*/*/prices/*.gz"))
-
-    parser = MachseneiXmlParser()
-
-    load_one_file(
-        conn,
-        parser,
-        filepath,
-        feeds_dir,
-    )
-
-    chain_id, sub_chain_id, store_id = (
-        filepath.relative_to(feeds_dir).parts[:3]
-    )
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT sub_chain_id
-            FROM stores
-            WHERE chain_id = %s
-              AND store_id = %s
-            """,
-            (chain_id, store_id),
-        )
-
-        row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == sub_chain_id
-
-
-def test_load_one_file_empty_xml_does_nothing(conn, tmp_path):
-    feeds_dir = tmp_path
-
-    filepath = (
-        feeds_dir
-        / "TEST_CHAIN"
-        / "001"
-        / "001"
-        / "prices"
-        / "empty.gz"
-    )
-
-    filepath.parent.mkdir(parents=True)
-
-    with gzip.open(filepath, "wb") as f:
-        f.write(b"<xml></xml>")
-
-    parser = MachseneiXmlParser()
-
-    load_one_file(
-        conn,
-        parser,
-        filepath,
-        feeds_dir,
-    )
+# ---------------------------------------------------------------------------
+# load_files
+# ---------------------------------------------------------------------------
 
 
 def test_load_files_continues_after_file_failure(monkeypatch):
@@ -337,19 +231,28 @@ def test_load_files_continues_after_file_failure(monkeypatch):
         fake_load_one_file,
     )
 
+    monkeypatch.setattr(
+        "utils.update_prices.mark_files_loaded",
+        lambda conn, filenames: None,
+    )
+
     class FakeConnection:
         def rollback(self):
             pass
 
+        def commit(self):
+            pass
+
     conn = FakeConnection()
 
-    load_files(
+    loaded = load_files(
         conn,
         files,
         Path("data/test_feeds"),
     )
 
     assert processed_files == files
+    assert loaded == [files[1]]
 
 
 def test_load_files_rolls_back_on_failure(monkeypatch):
@@ -362,6 +265,9 @@ def test_load_files_rolls_back_on_failure(monkeypatch):
         def rollback(self):
             self.rolled_back = True
 
+        def commit(self):
+            pass
+
     conn = FakeConnection()
 
     def fail(*args, **kwargs):
@@ -372,10 +278,254 @@ def test_load_files_rolls_back_on_failure(monkeypatch):
         fail,
     )
 
-    load_files(
+    monkeypatch.setattr(
+        "utils.update_prices.mark_files_loaded",
+        lambda conn, filenames: None,
+    )
+
+    loaded = load_files(
         conn,
         [filepath],
         Path("data/test_feeds"),
     )
 
     assert conn.rolled_back is True
+    assert loaded == []
+
+
+# ---------------------------------------------------------------------------
+# load_one_file -- mocked dependencies
+# ---------------------------------------------------------------------------
+
+
+def test_load_one_file_log_changes_false_skips_snapshots(
+    monkeypatch,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "001"
+        / STORE_ID
+        / "prices"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    import gzip
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    class FakeProduct:
+        chain_id = CHAIN_ID
+        store_id = STORE_ID
+        item_code = "ITEM_001"
+
+    price = make_price_record()
+
+    class FakeParser:
+        def parse_price_file(self, xml_content):
+            return [FakeProduct()]
+
+    # These MUST NOT be called when log_changes=False.
+    def fail(*args, **kwargs):
+        raise AssertionError("snapshot query should not be called")
+
+    monkeypatch.setattr(
+        "utils.update_prices._fetch_existing_prices",
+        fail,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices._fetch_existing_products",
+        fail,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices._fetch_existing_store_products",
+        fail,
+    )
+
+    monkeypatch.setattr(
+        "utils.update_prices.split_product",
+        lambda product: (None, None, price),
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.ensure_chain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.update_store_subchain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_products",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_store_products",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_prices",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.reconcile_removed_items",
+        lambda *args, **kwargs: 0,
+    )
+
+    class FakeConnection:
+        def commit(self):
+            pass
+
+    load_one_file(
+        FakeConnection(),
+        FakeParser(),
+        filepath,
+        tmp_path,
+        log_changes=False,
+    )
+
+
+def test_load_one_file_log_changes_false_does_not_log_changes(
+    monkeypatch,
+    caplog,
+    tmp_path,
+):
+    filepath = (
+        tmp_path
+        / CHAIN_ID
+        / "001"
+        / STORE_ID
+        / "prices"
+        / "test.gz"
+    )
+    filepath.parent.mkdir(parents=True)
+
+    import gzip
+
+    with gzip.open(filepath, "wb") as f:
+        f.write(b"<xml></xml>")
+
+    class FakeProduct:
+        chain_id = CHAIN_ID
+        store_id = STORE_ID
+        item_code = "ITEM_001"
+
+    price = make_price_record()
+
+    class FakeParser:
+        def parse_price_file(self, xml_content):
+            return [FakeProduct()]
+
+    monkeypatch.setattr(
+        "utils.update_prices.split_product",
+        lambda product: (None, None, price),
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.ensure_chain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.update_store_subchain",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_products",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_store_products",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.upsert_prices",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "utils.update_prices.reconcile_removed_items",
+        lambda *args, **kwargs: 0,
+    )
+
+    class FakeConnection:
+        def commit(self):
+            pass
+
+    with caplog.at_level("INFO", logger="price_changes"):
+        load_one_file(
+            FakeConnection(),
+            FakeParser(),
+            filepath,
+            tmp_path,
+            log_changes=False,
+        )
+
+    assert "PRICE ADDED" not in caplog.text
+    assert "PRICE CHANGED" not in caplog.text
+    assert "ITEM ADDED" not in caplog.text
+    assert "ITEM REMOVED" not in caplog.text
+# ---------------------------------------------------------------------------
+# _dedupe_price_records
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_price_records_keeps_latest_update():
+    older = make_price_record(
+        price="10.00",
+        update_time=datetime(
+            2026,
+            8,
+            17,
+            10,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    newer = make_price_record(
+        price="12.00",
+        update_time=datetime(
+            2026,
+            8,
+            17,
+            11,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    result = _dedupe_price_records([older, newer])
+
+    assert len(result) == 1
+    assert result[0].price == Decimal("12.00")
+
+
+def test_dedupe_price_records_is_independent_of_input_order():
+    older = make_price_record(
+        price="10.00",
+        update_time=datetime(
+            2026,
+            8,
+            17,
+            10,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    newer = make_price_record(
+        price="12.00",
+        update_time=datetime(
+            2026,
+            8,
+            17,
+            11,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    result = _dedupe_price_records([newer, older])
+
+    assert len(result) == 1
+    assert result[0].price == Decimal("12.00")

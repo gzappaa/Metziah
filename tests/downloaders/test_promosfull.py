@@ -1,5 +1,4 @@
 # tests/downloaders/test_promosfull.py
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -276,3 +275,99 @@ async def test_previous_day_file_not_removed_by_same_day_cleanup(
     await promosfull.download_promofull()
 
     assert yesterday_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_test_mode_keeps_only_existing_test_stores(
+    monkeypatch, tmp_path, mock_client_class
+):
+    test_feeds_dir = tmp_path / "data" / "test_feeds"
+
+    # Existing test stores: 020 and 021
+    (test_feeds_dir / "7290661400001" / "001" / "020").mkdir(parents=True)
+    (test_feeds_dir / "7290661400001" / "001" / "021").mkdir(parents=True)
+
+    monkeypatch.setattr(promosfull, "BASE_DIR", tmp_path)
+
+    mock_client_class.get_files.return_value = [
+        make_file_entry("020", "20260801", "042307"),
+        make_file_entry("021", "20260801", "042307"),
+        make_file_entry("022", "20260801", "042307"),
+        make_file_entry("023", "20260801", "042307"),
+    ]
+
+    downloaded = await promosfull.download_promofull(test=True)
+
+    assert len(downloaded) == 2
+
+    files = list(test_feeds_dir.rglob("PromoFull*.gz"))
+
+    assert len(files) == 2
+    assert sorted(path.parts[-3] for path in files) == ["020", "021"]
+
+
+@pytest.mark.asyncio
+async def test_test_mode_uses_store_directories_regardless_of_feed_type(
+    monkeypatch, tmp_path, mock_client_class
+):
+    test_feeds_dir = tmp_path / "data" / "test_feeds"
+
+    # Store exists because it has a prices directory.
+    store_dir = (
+        test_feeds_dir
+        / "7290661400001"
+        / "001"
+        / "058"
+    )
+    (store_dir / "prices").mkdir(parents=True)
+
+    monkeypatch.setattr(promosfull, "BASE_DIR", tmp_path)
+
+    mock_client_class.get_files.return_value = [
+        make_file_entry("058", "20260801", "042307"),
+        make_file_entry("059", "20260801", "042307"),
+    ]
+
+    await promosfull.download_promofull(test=True)
+
+    assert (
+        test_feeds_dir
+        / "7290661400001"
+        / "001"
+        / "058"
+        / "promosfull"
+        / "PromoFull7290661400001-001-058-20260801-042307.gz"
+    ).exists()
+
+    assert not (
+        test_feeds_dir
+        / "7290661400001"
+        / "001"
+        / "059"
+        / "promosfull"
+    ).exists()
+
+@pytest.mark.asyncio
+async def test_returns_downloaded_paths(
+    monkeypatch, tmp_path, mock_client_class
+):
+    monkeypatch.setattr(promosfull, "DATA_DIR", tmp_path)
+
+    filename = "PromoFull7290661400001-001-020-20260801-042307.gz"
+
+    mock_client_class.get_files.return_value = [
+        {"fileName": filename},
+    ]
+
+    result = await promosfull.download_promofull()
+
+    expected = (
+        tmp_path
+        / "7290661400001"
+        / "001"
+        / "020"
+        / "promosfull"
+        / filename
+    )
+
+    assert result == [expected]
