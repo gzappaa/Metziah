@@ -1,7 +1,7 @@
 # tests/utils/test_update_promos.py
 
 import gzip
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +11,7 @@ import pytest
 from utils.update_promos import (
     _fetch_existing_promotion_items,
     _fetch_existing_promotions,
+    _fetch_item_names,
     _log_changes,
     load_files,
     load_one_file,
@@ -78,6 +79,7 @@ def test_promotion_added_logs(caplog):
             set(),
             {},
             {},
+            {},
         )
 
     assert "PROMOTION ADDED" in caplog.text
@@ -107,10 +109,47 @@ def test_promotion_unchanged_does_not_log(caplog):
             set(),
             existing_promotions,
             {},
+            {},
         )
 
     assert "PROMOTION ADDED" not in caplog.text
     assert "PROMOTION CHANGED" not in caplog.text
+
+
+def test_promotion_timezone_difference_does_not_log(caplog):
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        description="2 for 20",
+        end_datetime=datetime(2026, 8, 21),
+    )
+
+    existing_promotions = {
+        "PROMO_001": (
+            "2 for 20",
+            datetime(
+                2026,
+                8,
+                21,
+                tzinfo=timezone.utc,
+            ),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            existing_promotions,
+            {},
+            {},
+        )
+
+    assert "PROMOTION ADDED" not in caplog.text
+    assert "PROMOTION CHANGED" not in caplog.text
+
 
 
 def test_promotion_changed_logs(caplog):
@@ -135,6 +174,7 @@ def test_promotion_changed_logs(caplog):
             [promotion],
             set(),
             existing_promotions,
+            {},
             {},
         )
 
@@ -168,10 +208,45 @@ def test_promo_item_added_logs(caplog):
             set(),
             {},
             {},
+            {"ITEM_001": "Test Widget"},
         )
 
     assert "PROMO ITEM ADDED" in caplog.text
     assert "ITEM_001" in caplog.text
+    assert "name=Test Widget" in caplog.text
+
+
+def test_promo_item_added_name_none_when_unresolved(caplog):
+    item = make_item(
+        item_code="ITEM_002",
+        discounted_price="5.00",
+        discount_rate="40.00",
+    )
+
+    group = make_group(
+        group_id="1",
+        items=[item],
+    )
+
+    promotion = make_promotion(
+        promotion_id="PROMO_001",
+        groups=[group],
+    )
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "Promo",
+            [promotion],
+            set(),
+            {},
+            {},
+            {},  # no name resolved for ITEM_002
+        )
+
+    assert "PROMO ITEM ADDED" in caplog.text
+    assert "name=None" in caplog.text
 
 
 def test_promo_item_unchanged_does_not_log(caplog):
@@ -209,6 +284,7 @@ def test_promo_item_unchanged_does_not_log(caplog):
             },
             {},
             existing_items,
+            {"ITEM_001": "Test Widget"},
         )
 
     assert "PROMO ITEM ADDED" not in caplog.text
@@ -250,10 +326,12 @@ def test_promo_item_changed_logs(caplog):
             },
             {},
             existing_items,
+            {"ITEM_001": "Test Widget"},
         )
 
     assert "PROMO ITEM CHANGED" in caplog.text
     assert "ITEM_001" in caplog.text
+    assert "name=Test Widget" in caplog.text
 
 
 def test_promofull_removed_item_logs(caplog):
@@ -273,10 +351,39 @@ def test_promofull_removed_item_logs(caplog):
             set(),
             {},
             existing_items,
+            {"ITEM_001": "Test Widget"},
         )
 
     assert "PROMO ITEM REMOVED" in caplog.text
     assert "ITEM_001" in caplog.text
+    assert "name=Test Widget" in caplog.text
+
+
+def test_promofull_removed_item_name_none_when_unresolved(caplog):
+    # Guards the actual bug: if the caller only fetches names for the
+    # file's item codes and not existing_items' codes too, every
+    # REMOVED line silently loses its name.
+    existing_items = {
+        ("PROMO_001", "1", "ITEM_001"): (
+            Decimal("5.00"),
+            Decimal("40.00"),
+        )
+    }
+
+    with caplog.at_level("INFO", logger="promo_changes"):
+        _log_changes(
+            CHAIN_ID,
+            STORE_ID,
+            "PromoFull",
+            [],
+            set(),
+            {},
+            existing_items,
+            {},  # simulates the bug: name never fetched for existing item
+        )
+
+    assert "PROMO ITEM REMOVED" in caplog.text
+    assert "name=None" in caplog.text
 
 
 def test_promo_removed_item_does_not_log(caplog):
@@ -296,6 +403,7 @@ def test_promo_removed_item_does_not_log(caplog):
             set(),
             {},
             existing_items,
+            {"ITEM_001": "Test Widget"},
         )
 
     assert "PROMO ITEM REMOVED" not in caplog.text
@@ -426,6 +534,112 @@ def test_fetch_existing_promotion_items_returns_mapping():
 
 
 # ---------------------------------------------------------------------------
+# _fetch_item_names
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_item_names_empty_codes_returns_empty_without_query():
+    class FakeConnection:
+        def cursor(self):
+            raise AssertionError("cursor should not be called")
+
+    result = _fetch_item_names(
+        FakeConnection(),
+        CHAIN_ID,
+        STORE_ID,
+        [],
+    )
+
+    assert result == {}
+
+
+def test_fetch_item_names_prefers_store_product_falls_back_to_product():
+    # First query (store_products) resolves ITEM_001 only.
+    # Second query (products) is only called with the leftover missing
+    # code, and resolves ITEM_002.
+    calls = []
+
+    class FakeCursor:
+        def __init__(self, call_index):
+            self.call_index = call_index
+
+        def execute(self, query, params):
+            calls.append(params)
+
+        def fetchall(self):
+            if self.call_index == 0:
+                return [("ITEM_001", "Store Name")]
+            return [("ITEM_002", "Global Name")]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeConnection:
+        def __init__(self):
+            self.call_count = 0
+
+        def cursor(self):
+            cur = FakeCursor(self.call_count)
+            self.call_count += 1
+            return cur
+
+    conn = FakeConnection()
+
+    result = _fetch_item_names(
+        conn,
+        CHAIN_ID,
+        STORE_ID,
+        ["ITEM_001", "ITEM_002"],
+    )
+
+    assert result == {
+        "ITEM_001": "Store Name",
+        "ITEM_002": "Global Name",
+    }
+    # second query should only ask about the code missing from the first
+    assert calls[1][0] == ["ITEM_002"]
+
+
+def test_fetch_item_names_skips_second_query_when_nothing_missing():
+    class FakeCursor:
+        def execute(self, query, params):
+            pass
+
+        def fetchall(self):
+            return [("ITEM_001", "Store Name")]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeConnection:
+        def __init__(self):
+            self.call_count = 0
+
+        def cursor(self):
+            self.call_count += 1
+            if self.call_count > 1:
+                raise AssertionError(
+                    "products query should not be called when nothing is missing"
+                )
+            return FakeCursor()
+
+    result = _fetch_item_names(
+        FakeConnection(),
+        CHAIN_ID,
+        STORE_ID,
+        ["ITEM_001"],
+    )
+
+    assert result == {"ITEM_001": "Store Name"}
+
+
+# ---------------------------------------------------------------------------
 # load_one_file -- mocked dependencies
 # ---------------------------------------------------------------------------
 
@@ -504,6 +718,10 @@ def test_load_one_file_log_changes_false_skips_snapshots(
     )
     monkeypatch.setattr(
         "utils.update_promos._fetch_existing_promotion_items",
+        fail,
+    )
+    monkeypatch.setattr(
+        "utils.update_promos._fetch_item_names",
         fail,
     )
 

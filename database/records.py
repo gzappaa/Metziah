@@ -1,27 +1,32 @@
 """
-DB-shaped records, derived from the parser's Product model.
+DB-shaped records derived from the parser's Product and Promotion models.
 
-models.product.Product is a merged view (item metadata + per-store price
-in one object), matching what a single <Item> in the XML naturally gives
-you. The database splits that into three tables:
+Products are split into separate database records because the database
+stores product identity, store-specific product data, and price state
+separately:
 
-  - products        -- real barcodes only (EAN-8/12/13-style item_code).
-                        Global identity, shared across chains.
-  - store_products   -- internal/non-barcode item_codes (e.g. loose
-                        produce, deli). Scoped to (chain_id, store_id,
-                        item_code) -- different branches of the same
-                        chain can report different name/manufacturer
-                        text for the same internal code, so store_id is
-                        part of the identity, not just metadata.
-  - prices           -- per-store price state, for BOTH kinds of item.
-                        item_code here is intentionally unconstrained
-                        (no FK) since it may point at either products
-                        or store_products depending on which kind it is.
+    products
+        Real barcodes. Global product identity.
 
-unit_qty/weighted/package_quantity live on prices, not products or
-store_products -- these can legitimately differ per store for the same
-item_code (e.g. sold prepackaged at one branch, loose by weight at
-another), so they're "how it's sold here" not "what it is".
+    store_products
+        Non-barcode item codes, scoped to chain + store + item_code.
+
+    prices
+        Per-store price state for both barcode and non-barcode items.
+
+Promotion objects are also transformed to match the database structure.
+The parser represents a promotion as a nested tree:
+
+    Promotion
+        └── PromotionGroup
+                └── PromotionItem
+
+split_promotion() flattens this into the three database record levels:
+the promotion itself, its groups, and its items.
+
+Store-specific selling details such as unit_qty, weighted, and
+package_quantity belong to prices because they describe how an item is
+sold at a particular store, not what the item is.
 """
 
 import re

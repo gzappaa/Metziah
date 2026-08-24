@@ -481,7 +481,13 @@ def test_upsert_products_blank_name_is_true_noop(conn):
 
 # ---- file_tracking ----
 
-def _file_record(chain_id, filename, store_id, downloaded=False, file_type="Price"):
+def _file_record(
+    chain_id,
+    filename,
+    store_id,
+    downloaded=False,
+    file_type="Price",
+):
     return {
         "chain_id": chain_id,
         "sub_chain_id": "001",
@@ -594,21 +600,121 @@ def test_mark_files_loaded_only_flips_unloaded(conn, test_store):
     assert mark_files_loaded(conn, [filename]) == 0
 
 
-def test_get_latest_downloaded_price_files_picks_newest_per_store(conn, test_store):
+def test_get_latest_downloaded_price_files_picks_newest_when_nothing_loaded(
+    conn,
+    test_store,
+):
     chain_id = test_store["chain_id"]
     store_id = test_store["store_id_text"]
 
-    insert_file_tracking(conn, [
-        _file_record(chain_id, "Price7290661400001-001-097-20260801-040000.gz", store_id, downloaded=True),
-        _file_record(chain_id, "Price7290661400001-001-097-20260801-090000.gz", store_id, downloaded=True),
-        _file_record(chain_id, "Price7290661400001-001-097-20260731-230000.gz", store_id, downloaded=False),
-    ])
+    filenames = [
+        "Price7290661400001-001-097-20000101-040000.gz",
+        "Price7290661400001-001-097-20000101-090000.gz",
+        "Price7290661400001-001-097-19991231-230000.gz",
+    ]
 
-    rows = get_latest_downloaded_price_files(conn)
-    matching = [r for r in rows if r[2] == store_id]
+    try:
+        insert_file_tracking(conn, [
+            _file_record(chain_id, filenames[0], store_id, downloaded=True),
+            _file_record(chain_id, filenames[1], store_id, downloaded=True),
+            _file_record(chain_id, filenames[2], store_id, downloaded=False),
+        ])
 
-    assert len(matching) == 1
-    assert matching[0][4] == "Price7290661400001-001-097-20260801-090000.gz"
+        rows = get_latest_downloaded_price_files(conn)
+        matching = [r for r in rows if r[2] == store_id]
+
+        assert len(matching) == 1
+        assert matching[0][4] == filenames[1]
+
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM file_tracking
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND filename = ANY(%s)
+                """,
+                (chain_id, store_id, filenames),
+            )
+
+
+def test_get_latest_downloaded_price_files_picks_newest_after_latest_loaded(
+    conn,
+    test_store,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    filenames = [
+        "Price7290661400001-001-097-20000101-040000.gz",
+        "Price7290661400001-001-097-20000101-050000.gz",
+        "Price7290661400001-001-097-20000101-090000.gz",
+    ]
+
+    try:
+        insert_file_tracking(conn, [
+            _file_record(chain_id, filenames[0], store_id, downloaded=True),
+            _file_record(chain_id, filenames[1], store_id, downloaded=True),
+            _file_record(chain_id, filenames[2], store_id, downloaded=True),
+        ])
+        mark_files_loaded(conn, [filenames[0]])
+
+        rows = get_latest_downloaded_price_files(conn)
+        matching = [r for r in rows if r[2] == store_id]
+
+        assert len(matching) == 1
+        assert matching[0][4] == filenames[2]
+
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM file_tracking
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND filename = ANY(%s)
+                """,
+                (chain_id, store_id, filenames),
+            )
+
+def test_get_latest_downloaded_price_files_never_loads_older_than_latest_loaded(
+    conn,
+    test_store,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    filenames = [
+        "Price7290661400001-001-097-20000102-040000.gz",
+        "Price7290661400001-001-097-20000102-060000.gz",
+        "Price7290661400001-001-097-20000102-090000.gz",
+    ]
+
+    try:
+        insert_file_tracking(conn, [
+            _file_record(chain_id, filenames[0], store_id, downloaded=True),
+            _file_record(chain_id, filenames[1], store_id, downloaded=True),
+            _file_record(chain_id, filenames[2], store_id, downloaded=True),
+        ])
+        mark_files_loaded(conn, [filenames[2]])
+
+        rows = get_latest_downloaded_price_files(conn)
+        matching = [r for r in rows if r[2] == store_id]
+
+        assert matching == []
+
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM file_tracking
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND filename = ANY(%s)
+                """,
+                (chain_id, store_id, filenames),
+            )
 
 
 def test_get_downloaded_promofull_files_filters_type_downloaded_loaded(conn, test_store):
@@ -627,21 +733,78 @@ def test_get_downloaded_promofull_files_filters_type_downloaded_loaded(conn, tes
     assert filenames == {"PromoFull_PF_001.gz"}
 
 
-def test_get_downloaded_unloaded_promo_files_excludes_loaded(conn, test_store):
+def test_get_downloaded_unloaded_promo_files_requires_loaded_promofull(
+    conn,
+    test_store,
+):
     chain_id = test_store["chain_id"]
     store_id = test_store["store_id_text"]
 
-    insert_file_tracking(conn, [
-        _file_record(chain_id, "Promo_UNLOADED_001.gz", store_id, downloaded=True, file_type="Promo"),
-        _file_record(chain_id, "Promo_LOADED_001.gz", store_id, downloaded=True, file_type="Promo"),
-    ])
-    mark_files_loaded(conn, ["Promo_LOADED_001.gz"])
+    insert_file_tracking(
+        conn,
+        [
+            _file_record(
+                chain_id,
+                "PromoFull_001.gz",
+                store_id,
+                downloaded=True,
+                file_type="PromoFull",
+            ),
+            _file_record(
+                chain_id,
+                "Promo_001.gz",
+                store_id,
+                downloaded=True,
+                file_type="Promo",
+            ),
+        ],
+    )
+
+    # PromoFull exists and was downloaded, but was NOT loaded.
+    rows = get_downloaded_unloaded_promo_files(conn)
+
+    assert rows == []
+
+
+def test_get_downloaded_unloaded_promo_files_allows_promo_after_promofull_loaded(
+    conn,
+    test_store,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    insert_file_tracking(
+        conn,
+        [
+            _file_record(
+                chain_id,
+                "PromoFull_001.gz",
+                store_id,
+                downloaded=True,
+                file_type="PromoFull",
+            ),
+            _file_record(
+                chain_id,
+                "Promo_001.gz",
+                store_id,
+                downloaded=True,
+                file_type="Promo",
+            ),
+        ],
+    )
+
+    mark_files_loaded(
+        conn,
+        ["PromoFull_001.gz"],
+    )
 
     rows = get_downloaded_unloaded_promo_files(conn)
-    filenames = {r[4] for r in rows if r[2] == store_id}
 
-    assert filenames == {"Promo_UNLOADED_001.gz"}
+    filenames = {r[4] for r in rows}
 
+    assert filenames == {"Promo_001.gz"}
+
+    
 
 # ---- promotions / groups / items ----
 # NOTE: models/promo.py wasn't in what I've seen, so these use SimpleNamespace

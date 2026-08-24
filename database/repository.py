@@ -13,6 +13,9 @@ Sections:
                            mark_files_loaded, get_latest_downloaded_price_files,
                            get_downloaded_promofull_files,
                            get_downloaded_unloaded_promo_files
+    Notifications      -- get_nearby_store_ids (PostGIS ST_DWithin lookup),
+                           get_promotion_details (client-facing promo/item
+                           read, used by utils/promo_notifications.py)
 
 NAME RESOLUTION (products.name / store_products.name):
     Vote counter (`name_count`), not a history table.
@@ -1098,26 +1101,59 @@ def mark_files_downloaded(conn, filenames):
 
 def get_latest_downloaded_price_files(conn):
     query = """
-        SELECT DISTINCT ON (chain_id, store_id)
-            chain_id,
-            sub_chain_id,
-            store_id,
-            file_type,
-            filename,
-            file_date
-        FROM file_tracking
-        WHERE file_type IN ('Price', 'PriceFull')
-          AND downloaded = true
+        WITH latest_loaded AS (
+            SELECT DISTINCT ON (chain_id, store_id)
+                chain_id,
+                store_id,
+                substring(
+                    filename FROM '(\\d{8}-\\d{6})\\.gz$'
+                ) AS loaded_timestamp
+            FROM file_tracking
+            WHERE file_type IN ('Price', 'PriceFull')
+              AND downloaded = true
+              AND loaded = true
+            ORDER BY
+                chain_id,
+                store_id,
+                substring(
+                    filename FROM '(\\d{8}-\\d{6})\\.gz$'
+                ) DESC,
+                filename DESC
+        )
+
+        SELECT DISTINCT ON (f.chain_id, f.store_id)
+            f.chain_id,
+            f.sub_chain_id,
+            f.store_id,
+            f.file_type,
+            f.filename,
+            f.file_date
+        FROM file_tracking f
+        LEFT JOIN latest_loaded l
+            ON l.chain_id = f.chain_id
+           AND l.store_id = f.store_id
+        WHERE f.file_type IN ('Price', 'PriceFull')
+          AND f.downloaded = true
+          AND f.loaded = false
+          AND (
+              l.loaded_timestamp IS NULL
+              OR substring(
+                  f.filename FROM '(\\d{8}-\\d{6})\\.gz$'
+              ) > l.loaded_timestamp
+          )
         ORDER BY
-            chain_id,
-            store_id,
-            substring(filename FROM '(\\d{8}-\\d{6})\\.gz$') DESC,
-            filename DESC
+            f.chain_id,
+            f.store_id,
+            substring(
+                f.filename FROM '(\\d{8}-\\d{6})\\.gz$'
+            ) DESC,
+            f.filename DESC
     """
 
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
+
 
 def mark_files_loaded(conn, filenames):
     if not filenames:
@@ -1171,33 +1207,178 @@ def get_downloaded_promofull_files(conn):
 
 
 def get_downloaded_unloaded_promo_files(conn):
-    """
-    Return downloaded but not yet loaded Promo delta files.
-
-    Column order matches scheduler.py:
-        chain_id,
-        sub_chain_id,
-        store_id,
-        file_type,
-        filename,
-        file_date
-    """
-
     query = """
         SELECT
-            chain_id,
-            sub_chain_id,
-            store_id,
-            file_type,
-            filename,
-            file_date
-        FROM file_tracking
-        WHERE file_type = 'Promo'
-          AND downloaded = true
-          AND loaded = false
-        ORDER BY file_date, filename
+            p.chain_id,
+            p.sub_chain_id,
+            p.store_id,
+            p.file_type,
+            p.filename,
+            p.file_date
+        FROM file_tracking p
+        WHERE p.file_type = 'Promo'
+          AND p.downloaded = true
+          AND p.loaded = false
+
+          AND EXISTS (
+              SELECT 1
+              FROM file_tracking pf
+              WHERE pf.chain_id = p.chain_id
+                AND pf.store_id = p.store_id
+                AND pf.file_date = p.file_date
+                AND pf.file_type = 'PromoFull'
+                AND pf.loaded = true
+          )
+
+        ORDER BY p.file_date, p.filename
     """
 
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
+
+
+# --- email ---
+
+def get_nearby_store_ids(
+    conn,
+    chain_id: str,
+    lat: float,
+    lon: float,
+    max_distance_km: float,
+) -> list[str]:
+    """
+    Returns store_id values for the given chain within max_distance_km
+    of (lat, lon), using the existing PostGIS `location` column.
+    """
+
+    query = """
+        SELECT store_id
+        FROM stores
+        WHERE chain_id = %s
+          AND location IS NOT NULL
+          AND ST_DWithin(
+              location,
+              ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
+              %s
+          )
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            query,
+            (
+                chain_id,
+                lon,
+                lat,
+                max_distance_km * 1000,
+            ),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_promotion_details(
+    conn,
+    chain_id: str,
+    store_id: str,
+    promotion_id: str,
+    group_id: str,
+    item_code: str,
+) -> dict | None:
+    """
+    Client-facing promotion info for a single promotion item, joining
+    promotions -> promotion_groups -> promotion_items. Item name is
+    resolved from store_products first, falling back to products
+    (same lookup order as promo change logging).
+
+    Returns None if the promotion item no longer exists (e.g. removed
+    by a later PromoFull reconciliation before the notification ran).
+    """
+
+    query = """
+        SELECT
+            s.store_name,
+            p.description,
+            p.start_datetime,
+            p.end_datetime,
+            i.discounted_price,
+            i.discounted_price_per_mida,
+            i.discount_rate,
+            i.min_qty,
+            i.max_qty
+        FROM promotion_items i
+        JOIN promotion_groups g
+            ON g.chain_id = i.chain_id
+           AND g.promotion_id = i.promotion_id
+           AND g.store_id = i.store_id
+           AND g.group_id = i.group_id
+        JOIN promotions p
+            ON p.chain_id = i.chain_id
+           AND p.promotion_id = i.promotion_id
+           AND p.store_id = i.store_id
+        JOIN stores s
+            ON s.chain_id = i.chain_id
+           AND s.store_id = i.store_id
+        WHERE i.chain_id = %s
+          AND i.store_id = %s
+          AND i.promotion_id = %s
+          AND i.group_id = %s
+          AND i.item_code = %s
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            query,
+            (chain_id, store_id, promotion_id, group_id, item_code),
+        )
+        row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        (
+            store_name,
+            description,
+            start_datetime,
+            end_datetime,
+            discounted_price,
+            discounted_price_per_mida,
+            discount_rate,
+            min_qty,
+            max_qty,
+        ) = row
+
+        cur.execute(
+            """
+            SELECT name FROM store_products
+            WHERE chain_id = %s AND store_id = %s AND item_code = %s
+            """,
+            (chain_id, store_id, item_code),
+        )
+        name_row = cur.fetchone()
+
+        if name_row is None:
+            cur.execute(
+                "SELECT name FROM products WHERE item_code = %s",
+                (item_code,),
+            )
+            name_row = cur.fetchone()
+
+        item_name = name_row[0] if name_row else None
+
+    return {
+        "store_name": store_name,
+        "store_id": store_id,
+        "item_name": item_name,
+        "item_code": item_code,
+        "promotion_id": promotion_id,
+        "group_id": group_id,
+        "description": description,
+        "discounted_price": discounted_price,
+        "discounted_price_per_mida": discounted_price_per_mida,
+        "discount_rate": discount_rate,
+        "min_qty": min_qty,
+        "max_qty": max_qty,
+        "start_datetime": start_datetime,
+        "end_datetime": end_datetime,
+    }

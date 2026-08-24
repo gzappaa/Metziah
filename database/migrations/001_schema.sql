@@ -258,7 +258,6 @@ CREATE TABLE prices (
     package_quantity    INTEGER,
     allow_discount      BOOLEAN,
     status              TEXT,
-    has_promo           BOOLEAN NOT NULL DEFAULT false,
     price_update_time   TIMESTAMPTZ,
     last_sale_datetime  TIMESTAMPTZ,
     updated_at          TIMESTAMPTZ DEFAULT now(),

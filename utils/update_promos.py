@@ -24,6 +24,7 @@ Each store's PromoFull is an independent authoritative snapshot.
 import gzip
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from database.records import split_promotion
 from database.repository import (
@@ -43,6 +44,43 @@ from logging_config import setup_isolated_logging
 
 logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("promo_changes")
+
+
+def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
+    """
+    Resolve item_code -> name for logging, preferring the store-specific
+    name and falling back to the global product name. Mirrors the
+    store_products / products precedence used in update_prices.py.
+    """
+    if not item_codes:
+        return {}
+
+    item_codes = list(item_codes)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT item_code, name
+            FROM store_products
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND item_code = ANY(%s)
+            """,
+            (chain_id, store_id_text, item_codes),
+        )
+        names = dict(cur.fetchall())
+
+    missing = [code for code in item_codes if code not in names]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT item_code, name FROM products WHERE item_code = ANY(%s)",
+                (missing,),
+            )
+            names.update(dict(cur.fetchall()))
+
+    return names
 
 
 def _fetch_existing_promotions(
@@ -109,6 +147,15 @@ def _fetch_existing_promotion_items(
         }
 
 
+
+
+def _normalize_datetime_for_diff(dt: datetime | None):
+    if dt is None:
+        return None
+
+    return dt.replace(tzinfo=None)
+
+
 def _log_changes(
     chain_id,
     store_id_text,
@@ -117,6 +164,7 @@ def _log_changes(
     item_keys_in_file,
     existing_promotions,
     existing_items,
+    item_names,
 ):
     """
     Log additions/changes.
@@ -145,9 +193,14 @@ def _log_changes(
         else:
             old_description, old_end = old
 
+            old_end_normalized = _normalize_datetime_for_diff(old_end)
+            new_end_normalized = _normalize_datetime_for_diff(
+                promotion.end_datetime
+            )
+
             if (
                 old_description != promotion.description
-                or old_end != promotion.end_datetime
+                or old_end_normalized != new_end_normalized
             ):
                 change_logger.info(
                     "PROMOTION CHANGED "
@@ -178,6 +231,7 @@ def _log_changes(
                 )
 
                 old_item = existing_items.get(key)
+                name = item_names.get(item.item_code)
 
                 if old_item is None:
 
@@ -185,12 +239,13 @@ def _log_changes(
                         "PROMO ITEM ADDED "
                         "chain_id=%s store_id=%s "
                         "promotion_id=%s group_id=%s "
-                        "item_code=%s discounted_price=%s",
+                        "item_code=%s name=%s discounted_price=%s",
                         chain_id,
                         store_id_text,
                         promotion.promotion_id,
                         group.group_id,
                         item.item_code,
+                        name,
                         item.discounted_price,
                     )
 
@@ -203,12 +258,13 @@ def _log_changes(
                         "PROMO ITEM CHANGED "
                         "chain_id=%s store_id=%s "
                         "promotion_id=%s group_id=%s "
-                        "item_code=%s old=%s new=%s",
+                        "item_code=%s name=%s old=%s new=%s",
                         chain_id,
                         store_id_text,
                         promotion.promotion_id,
                         group.group_id,
                         item.item_code,
+                        name,
                         old_item,
                         (
                             item.discounted_price,
@@ -216,7 +272,6 @@ def _log_changes(
                         ),
                     )
 
-    # A Promo delta cannot tell us what disappeared.
     if file_type == "PromoFull":
 
         removed_keys = (
@@ -233,12 +288,13 @@ def _log_changes(
             change_logger.info(
                 "PROMO ITEM REMOVED "
                 "chain_id=%s store_id=%s "
-                "promotion_id=%s group_id=%s item_code=%s",
+                "promotion_id=%s group_id=%s item_code=%s name=%s",
                 chain_id,
                 store_id_text,
                 promotion_id,
                 group_id,
                 item_code,
+                item_names.get(item_code),
             )
 
 
@@ -326,6 +382,10 @@ def load_one_file(
     existing_promotions = {}
     existing_items = {}
 
+    existing_promotions = {}
+    existing_items = {}
+    item_names = {}
+
     if log_changes:
 
         existing_promotions = (
@@ -345,6 +405,18 @@ def load_one_file(
             )
         )
 
+        all_relevant_codes = (
+            {key[2] for key in item_keys_in_file}
+            | {key[2] for key in existing_items}
+        )
+
+        item_names = _fetch_item_names(
+            conn,
+            path_chain_id,
+            path_store_id,
+            all_relevant_codes,
+        )
+
         _log_changes(
             path_chain_id,
             path_store_id,
@@ -353,6 +425,7 @@ def load_one_file(
             item_keys_in_file,
             existing_promotions,
             existing_items,
+            item_names,
         )
 
     # Both feed types modify the current state.

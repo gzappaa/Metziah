@@ -46,22 +46,44 @@ logger = logging.getLogger(__name__)
 DEFAULT_FEEDS_DIR = Path("data/feeds")
 
 
+import re
+
+
+PROMOFULL_FILENAME_RE = re.compile(
+    r"PromoFull(?P<chain_id>\d+)-(?P<sub_chain_id>\d+)-"
+    r"(?P<store_id>\d+)-(?P<timestamp>\d{8}-\d{6})\.gz$"
+)
+
+
 def find_promo_files(feeds_dir: Path):
     """
-    Yields every PromoFull file as:
-
-        (filepath, "PromoFull")
-
-    under:
-
-        {chain_id}/{sub_chain_id}/{store_id}/promosfull/
-
-    The path structure is preserved because update_promos.py uses it
-    to determine the store/sub-chain context.
+    Find the most recent PromoFull file for each chain/sub-chain/store.
     """
-    for filepath in feeds_dir.glob(
-        "*/*/*/promosfull/*.gz"
-    ):
+    latest = {}
+
+    for filepath in feeds_dir.glob("*/*/*/promosfull/*.gz"):
+        match = PROMOFULL_FILENAME_RE.match(filepath.name)
+
+        if not match:
+            logger.warning("Skipping unrecognized PromoFull filename: %s", filepath.name)
+            continue
+
+        data = match.groupdict()
+
+        key = (
+            data["chain_id"],
+            data["sub_chain_id"],
+            data["store_id"],
+        )
+
+        timestamp = data["timestamp"]
+
+        current = latest.get(key)
+
+        if current is None or timestamp > current[0]:
+            latest[key] = (timestamp, filepath)
+
+    for _, filepath in latest.values():
         yield filepath, "PromoFull"
 
 

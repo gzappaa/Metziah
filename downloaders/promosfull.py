@@ -1,6 +1,5 @@
 import asyncio
 import re
-from logging_config import setup_logging
 from pathlib import Path
 from datetime import datetime
 from chains.registry import CHAINS

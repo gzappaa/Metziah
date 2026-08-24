@@ -18,6 +18,33 @@ def test_find_price_files():
         for file in files
     )
 
+def test_find_price_files_keeps_only_latest_pricefull_per_store(tmp_path):
+    pricesfull_dir = (
+        tmp_path
+        / "7290661400001"
+        / "002"
+        / "030"
+        / "pricesfull"
+    )
+
+    pricesfull_dir.mkdir(parents=True)
+
+    old_full = (
+        pricesfull_dir
+        / "PriceFull7290661400001-002-030-20260816-040114.gz"
+    )
+    new_full = (
+        pricesfull_dir
+        / "PriceFull7290661400001-002-030-20260820-040114.gz"
+    )
+
+    old_full.touch()
+    new_full.touch()
+
+    files = list(find_price_files(tmp_path))
+
+    assert files == [new_full]
+
 
 def test_main_test_flag_requires_test_environment(monkeypatch):
     monkeypatch.setattr(load_prices.settings, "ENV", "dev")

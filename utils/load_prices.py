@@ -30,6 +30,8 @@ from config import settings
 from db import get_connection
 from utils.update_prices import load_files
 
+import re
+
 from logging_config import setup_general_logging
 
 setup_general_logging()
@@ -39,17 +41,29 @@ DEFAULT_FEEDS_DIR = Path("data/feeds")
 
 
 def find_price_files(feeds_dir: Path):
-    """
-    Yields every *.gz Price and PriceFull file under:
+    latest = {}
 
-        data/feeds/{chain}/{subchain}/{store}/prices/
-        data/feeds/{chain}/{subchain}/{store}/pricesfull/
+    for filepath in feeds_dir.glob("*/*/*/pricesfull/*.gz"):
+        match = re.match(
+            r"PriceFull(\d+)-(\d+)-(\d+)-(\d{8}-\d{6})\.gz$",
+            filepath.name,
+        )
 
-    Doesn't assume anything about filenames -- chain/subchain/store come
-    from parsing the XML content itself, not the filename.
-    """
-    yield from feeds_dir.glob("*/*/*/prices/*.gz")
-    yield from feeds_dir.glob("*/*/*/pricesfull/*.gz")
+        if not match:
+            logger.warning(
+                "Skipping unrecognized PriceFull filename: %s",
+                filepath.name,
+            )
+            continue
+
+        chain_id, sub_chain_id, store_id, timestamp = match.groups()
+
+        key = (chain_id, sub_chain_id, store_id)
+
+        if key not in latest or timestamp > latest[key][0]:
+            latest[key] = (timestamp, filepath)
+
+    yield from (filepath for _, filepath in latest.values())
 
 
 def main():

@@ -25,6 +25,32 @@ def test_find_promo_files():
         for filepath, file_type in files
     )
 
+def test_find_promo_files_keeps_only_latest_per_store(tmp_path):
+    promosfull_dir = (
+        tmp_path
+        / "7290661400001"
+        / "002"
+        / "055"
+        / "promosfull"
+    )
+    promosfull_dir.mkdir(parents=True)
+
+    old_file = promosfull_dir / (
+        "PromoFull7290661400001-002-055-20260815-043144.gz"
+    )
+    new_file = promosfull_dir / (
+        "PromoFull7290661400001-002-055-20260816-043144.gz"
+    )
+
+    old_file.touch()
+    new_file.touch()
+
+    files = list(find_promo_files(tmp_path))
+
+    assert files == [
+        (new_file, "PromoFull"),
+    ]
+
 
 def test_main_test_flag_requires_test_environment(monkeypatch):
     monkeypatch.setattr(
