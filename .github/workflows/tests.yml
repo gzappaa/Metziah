@@ -14,6 +14,7 @@ jobs:
 
     env:
       ENV: test
+      PYTHONPATH: .
 
     services:
       postgres:
@@ -58,8 +59,8 @@ jobs:
 
           GEOCODE_API=
 
-          USER_LAT=
-          USER_LON=
+          USER_LAT=0
+          USER_LON=0
           MAX_STORE_DISTANCE_KM=5
 
           SMTP_HOST=smtp.gmail.com
@@ -86,22 +87,18 @@ jobs:
             -d metziah_test \
             -f database/migrations/001_schema.sql
 
-      - name: Test Laibcatalog connectivity
-        run: |
-          curl -v --connect-timeout 30 \
-            https://laibcatalog.co.il/webapi/api/getfiles
-
-      - name: Download test feeds
-        run: |
-          python -m downloaders.pricesfull --test
-          python -m downloaders.promosfull --test
-          python -m downloaders.prices --test
-
       - name: Seed store data
         run: |
           python -m utils.seed_stores \
             data/stores/machsenei_hashuk.json \
             --test
+
+      - name: Prepare test packages
+        run: |
+          touch tests/__init__.py
+          touch tests/database/__init__.py
+          touch tests/integration/__init__.py
+          touch tests/utils/__init__.py
 
       - name: Run tests
         run: pytest
