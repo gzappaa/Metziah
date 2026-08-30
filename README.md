@@ -100,7 +100,7 @@ laibcatalog.co.il API
    
    ```bash
    python downloaders/pricesfull.py --test
-   python downloaders/promossfull.py --test
+   python downloaders/promosfull.py --test
    ```
 
 

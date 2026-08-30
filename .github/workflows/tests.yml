@@ -1,4 +1,5 @@
 # .github/workflows/tests.yml
+
 name: Tests
 
 on:
@@ -30,9 +31,11 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -40,16 +43,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Enable PostGIS extension
-        run: |
-          PGPASSWORD=metziah psql -h localhost -U metziah -d metziah_test \
-            -c "CREATE EXTENSION IF NOT EXISTS postgis;"
-
-      - name: Apply schema
-        run: |
-          PGPASSWORD=metziah psql -h localhost -U metziah -d metziah_test \
-            -f database/migrations/001_schema.sql
 
       - name: Write .env.test
         run: |
@@ -77,14 +70,38 @@ jobs:
           EMAIL_TO=
           EOF
 
+      - name: Enable PostGIS extension
+        run: |
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+
+      - name: Apply schema
+        run: |
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -f database/migrations/001_schema.sql
+
+      - name: Test Laibcatalog connectivity
+        run: |
+          curl -v --connect-timeout 30 \
+            https://laibcatalog.co.il/webapi/api/getfiles
+
       - name: Download test feeds
         run: |
-          python downloaders/pricesfull.py --test
-          python downloaders/promosfull.py --test
-          python downloaders/prices.py --test
+          python -m downloaders.pricesfull --test
+          python -m downloaders.promosfull --test
+          python -m downloaders.prices --test
 
       - name: Seed store data
-        run: python -m utils.seed_stores data/stores/machsenei_hashuk.json --test
+        run: |
+          python -m utils.seed_stores \
+            data/stores/machsenei_hashuk.json \
+            --test
 
       - name: Run tests
         run: pytest
