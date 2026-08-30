@@ -20,3 +20,5 @@ test.py
 test_feeds
 metziah_source_code.pdf
 metziah_tests.pdf
+data/notified_promotions.log
+tests_all.txt

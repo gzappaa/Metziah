@@ -1,0 +1,46 @@
+Metziah Source-Available License v1.0
+
+Copyright (c) 2026 gzappaa
+
+This license governs use of the code, scripts, schemas, and documentation in this repository (the "Project"). It is not an OSI-approved open-source license. Read it before using the Project.
+
+1. What you're free to do
+
+You may view, download, run, modify, and share the Project for any non-commercial purpose — personal projects, learning, research, evaluation, or internal experimentation — at no cost, without asking permission, as long as you follow section 2.
+
+2. Attribution
+
+If you use, modify, or redistribute any part of the Project, you must:
+  a) Keep this license file attached to any copy or substantial portion of the Project you distribute;
+  b) Credit gzappaa as the original author, with a link back to the source repository;
+  c) Clearly mark any changes you made, so it's obvious your version isn't the original.
+
+3. Commercial use requires permission
+
+"Commercial use" means using the Project, or anything substantially derived from it, in connection with a product, service, or activity that generates or is intended to generate revenue — including but not limited to running it as a hosted service, selling access to it, bundling it into a paid product, or using it to materially support a commercial operation.
+
+You may not put the Project to commercial use without gzappaa's prior written consent. All commercial rights are reserved. If you want to use this commercially, email gzappaa (contact below) — reasonable requests are welcome.
+
+4. Contributions
+
+If you submit code, fixes, or other material back to this repository, you're granting gzappaa a perpetual, worldwide, royalty-free license to use, modify, relicense, and commercially exploit that contribution as part of the Project. You keep authorship credit, but you are not personally granted any commercial rights over the Project as a result of contributing, and section 3 still applies to you like anyone else.
+
+5. No warranty
+
+The Project is provided "as is," with no warranty of any kind — no guarantee of accuracy, fitness for a particular purpose, or that it will keep working as the underlying data feeds change. gzappaa is not liable for any damages arising from its use. Use at your own risk, especially anywhere legal/regulatory pricing accuracy matters.
+
+6. Termination
+
+Breaking these terms — in particular, unauthorized commercial use — automatically ends your rights under this license. On termination, you must stop using the Project and delete copies you control, though copies already properly distributed to others under this license before the breach are unaffected.
+
+7. Changes to this license
+
+gzappaa may release future versions of this license for new releases of the Project. Changes are not retroactive — whatever license version shipped with the copy you have is the one that governs your use of it.
+
+8. Governing law
+
+This license is governed by the laws of the State of Israel. Disputes fall under the exclusive jurisdiction of Israeli courts.
+
+9. Contact
+
+For commercial licensing requests or questions about this license, reach out via the contact info on the gzappaa GitHub profile or repository.

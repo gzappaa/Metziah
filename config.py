@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
     EMAIL_TO: str = ""
 
     model_config = SettingsConfigDict(
-        env_file=BASE_DIR / ".env.dev",
+        env_file=BASE_DIR / f".env.{os.getenv('ENV', 'test')}",
         extra="ignore",
     )
 

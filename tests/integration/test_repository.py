@@ -6,6 +6,8 @@ from database.records import StoreProductRecord, PriceRecord, ProductRecord
 #  maybe later i will change the naming algorithm
 from types import SimpleNamespace
 from datetime import date
+from models.promo import Promotion, PromotionGroup, PromotionItem
+
 
 from database.repository import (
     update_store_subchain,
@@ -806,31 +808,29 @@ def test_get_downloaded_unloaded_promo_files_allows_promo_after_promofull_loaded
 
     
 
+
 # ---- promotions / groups / items ----
-# NOTE: models/promo.py wasn't in what I've seen, so these use SimpleNamespace
-# matching the attributes repository.py actually reads. Swap in the real
-# Promotion/PromotionGroup/PromotionItem classes if their field names differ.
 
 def _promotion(chain_id, store_id, promotion_id="PROMO_001", description="Test Promo"):
-    return SimpleNamespace(
+    return Promotion(
         chain_id=chain_id, promotion_id=promotion_id, store_id=store_id,
         description=description, start_datetime=None, end_datetime=None,
         start_hour=None, end_hour=None, promotion_days=None, update_time=None,
-        club_id=None, is_gift_item=False, additional_is_coupon=False,
+        club_id=None, is_gift_item=None, additional_is_coupon=False,
         allow_multiple_discounts=False, redemption_limit=None,
         min_no_of_items_offered=None, additional_restrictions=None, remarks=None,
     )
 
 
 def _promotion_group(chain_id, store_id, promotion_id="PROMO_GRP", group_id="G1"):
-    return SimpleNamespace(
+    return PromotionGroup(
         chain_id=chain_id, promotion_id=promotion_id, store_id=store_id,
         group_id=group_id, min_purchase_amount=None, discount_type=None,
     )
 
 
 def _promotion_item(chain_id, store_id, promotion_id="PROMO_ITEM", group_id="G1", item_code="ITEM_001"):
-    return SimpleNamespace(
+    return PromotionItem(
         chain_id=chain_id, promotion_id=promotion_id, store_id=store_id,
         group_id=group_id, item_code=item_code, item_type=0, reward_type=0,
         min_qty=None, max_qty=None, discount_rate=None, discounted_price=None,

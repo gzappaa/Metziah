@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from models.store import Store
 from utils.get_stores import clean_address, load_existing, compare_stores
 

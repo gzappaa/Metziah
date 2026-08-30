@@ -40,13 +40,18 @@ def test_parse_filename_rejects_trailing_content():
 
 # ---- get_storage_path ----
 
-def test_get_storage_path(monkeypatch, tmp_path):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-
+def test_get_storage_path(tmp_path):
     meta = {"chain": "7290661400001", "subchain": "001", "store": "020"}
+
     path = pricesfull.get_storage_path(meta, tmp_path)
 
-    assert path == tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
+    assert path == (
+        tmp_path
+        / "7290661400001"
+        / "001"
+        / "020"
+        / "pricesfull"
+    )
 
 
 # ---- download_pricefull ----

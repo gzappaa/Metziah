@@ -1,0 +1,90 @@
+# .github/workflows/tests.yml
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      ENV: test
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: metziah
+          POSTGRES_PASSWORD: metziah
+          POSTGRES_DB: metziah_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Enable PostGIS extension
+        run: |
+          PGPASSWORD=metziah psql -h localhost -U metziah -d metziah_test \
+            -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+
+      - name: Apply schema
+        run: |
+          PGPASSWORD=metziah psql -h localhost -U metziah -d metziah_test \
+            -f database/migrations/001_schema.sql
+
+      - name: Write .env.test
+        run: |
+          cat > .env.test << 'EOF'
+          PGHOST=localhost
+          PGPORT=5432
+          PGUSER=metziah
+          PGPASSWORD=metziah
+          PGDATABASE=metziah_test
+
+          ENV=test
+          DEBUG=false
+
+          GEOCODE_API=
+
+          USER_LAT=
+          USER_LON=
+          MAX_STORE_DISTANCE_KM=5
+
+          SMTP_HOST=smtp.gmail.com
+          SMTP_PORT=587
+          SMTP_USER=
+          SMTP_PASSWORD=
+          EMAIL_FROM=
+          EMAIL_TO=
+          EOF
+
+      - name: Download test feeds
+        run: |
+          python downloaders/pricesfull.py --test
+          python downloaders/promosfull.py --test
+          python downloaders/prices.py --test
+
+      - name: Seed store data
+        run: python -m utils.seed_stores data/stores/machsenei_hashuk.json --test
+
+      - name: Run tests
+        run: pytest

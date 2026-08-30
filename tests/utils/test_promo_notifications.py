@@ -5,7 +5,7 @@ import pytest
 
 import utils.promo_notifications as promo_notifications
 from utils.promo_notifications import parse_added_line, build_digest_email
-
+from database.repository import get_nearby_store_ids, get_promotion_details
 
 CHAIN_ID = "7290661400001"
 OTHER_CHAIN_ID = "9999999999999"
@@ -195,7 +195,7 @@ def test_parse_added_line_ignores_unrelated_lines():
 # ---------------------------------------------------------------------
 
 def test_store_within_distance_is_found(conn):
-    from database.repository import get_nearby_store_ids
+    
 
     _insert_store(conn, NEARBY_STORE_ID, lat=NEAR_LAT, lon=NEAR_LON)
 
@@ -205,7 +205,7 @@ def test_store_within_distance_is_found(conn):
 
 
 def test_store_outside_distance_is_excluded(conn):
-    from database.repository import get_nearby_store_ids
+    
 
     _insert_store(conn, FAR_STORE_ID, lat=FAR_LAT, lon=FAR_LON)
 
@@ -219,7 +219,6 @@ def test_store_outside_distance_is_excluded(conn):
 # ---------------------------------------------------------------------
 
 def test_get_promotion_details_returns_expected_fields(conn):
-    from database.repository import get_promotion_details
 
     _insert_store(conn, NEARBY_STORE_ID, lat=NEAR_LAT, lon=NEAR_LON)
     _insert_promotion(conn, NEARBY_STORE_ID)
@@ -235,7 +234,6 @@ def test_get_promotion_details_returns_expected_fields(conn):
 
 
 def test_get_promotion_details_returns_none_when_missing(conn):
-    from database.repository import get_promotion_details
 
     _insert_store(conn, NEARBY_STORE_ID, lat=NEAR_LAT, lon=NEAR_LON)
 

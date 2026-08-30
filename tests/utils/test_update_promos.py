@@ -4,7 +4,7 @@ import gzip
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
+from models.promo import Promotion, PromotionGroup, PromotionItem
 
 import pytest
 
@@ -27,10 +27,24 @@ def make_item(
     discounted_price="5.00",
     discount_rate="40.00",
 ):
-    return SimpleNamespace(
+    return PromotionItem(
+        chain_id=CHAIN_ID,
+        promotion_id="PROMO_001",
+        store_id=STORE_ID,
+        group_id="1",
+
         item_code=item_code,
-        discounted_price=Decimal(discounted_price),
+        item_type=None,
+        reward_type=None,
+
+        min_qty=None,
+        max_qty=None,
+
         discount_rate=Decimal(discount_rate),
+        discounted_price=Decimal(discounted_price),
+        discounted_price_per_mida=None,
+
+        is_weighted=False,
     )
 
 
@@ -38,9 +52,15 @@ def make_group(
     group_id="1",
     items=None,
 ):
-    return SimpleNamespace(
-        group_id=group_id,
+    return PromotionGroup(
+        chain_id=CHAIN_ID,
         promotion_id="PROMO_001",
+        store_id=STORE_ID,
+        group_id=group_id,
+
+        min_purchase_amount=None,
+        discount_type=None,
+
         items=items or [],
     )
 
@@ -51,10 +71,32 @@ def make_promotion(
     end_datetime=None,
     groups=None,
 ):
-    return SimpleNamespace(
+    return Promotion(
+        chain_id=CHAIN_ID,
         promotion_id=promotion_id,
+        store_id=STORE_ID,
+
         description=description,
+
+        start_datetime=None,
         end_datetime=end_datetime,
+        start_hour=None,
+        end_hour=None,
+        promotion_days=None,
+        update_time=None,
+
+        club_id=None,
+        is_gift_item=None,
+
+        additional_is_coupon=None,
+        allow_multiple_discounts=None,
+
+        redemption_limit=None,
+        min_no_of_items_offered=None,
+
+        additional_restrictions=None,
+        remarks=None,
+
         groups=groups or [],
     )
 
