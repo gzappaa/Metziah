@@ -30,7 +30,8 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- ============================================================
 
 CREATE TABLE chains (
-    chain_id TEXT PRIMARY KEY
+    chain_id TEXT PRIMARY KEY,
+    name     TEXT NOT NULL
 );
 
 

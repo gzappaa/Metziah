@@ -16,6 +16,9 @@ Sections:
     Notifications      -- get_nearby_store_ids (PostGIS ST_DWithin lookup),
                            get_promotion_details (client-facing promo/item
                            read, used by utils/promo_notifications.py)
+    Source configuration -- get_publishing_sources (reads
+                           supermarket_sources.json and returns source
+                           configuration by publishing type)
 
 NAME RESOLUTION (products.name / store_products.name):
     Vote counter (`name_count`), not a history table.
@@ -34,7 +37,91 @@ from collections import defaultdict
 from models.promo import Promotion, PromotionGroup, PromotionItem
 from database.records import PriceRecord, ProductRecord, StoreProductRecord
 
+import json
+from pathlib import Path
+
+
+
 logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+SUPERMARKET_SOURCES_FILE = (
+    BASE_DIR
+    / "monitoring"
+    / "data"
+    / "supermarket_sources.json"
+)
+
+
+def get_publishing_sources(
+    publishing_type: str,
+) -> list[dict]:
+    """
+    Read supermarket_sources.json and return sources
+    matching the requested publishing type.
+
+    The returned fields depend on the publishing type:
+
+        publishedprices:
+            name
+            url
+            credentials
+
+        laibcatalog:
+            name
+            url
+            chain_id
+
+        binaprojects:
+            name
+            url
+    """
+
+    with SUPERMARKET_SOURCES_FILE.open(
+        encoding="utf-8"
+    ) as file:
+        supermarkets = json.load(file)
+
+    sources = []
+
+    for supermarket in supermarkets:
+
+        for source in supermarket.get(
+            "sources",
+            []
+        ):
+
+            if source.get("type") != publishing_type:
+                continue
+
+            result = {
+                "name": supermarket["name"],
+                "url": source["url"],
+            }
+
+            if publishing_type == "publishedprices":
+
+                result["credentials"] = source.get(
+                    "credentials",
+                    []
+                )
+
+            elif publishing_type == "laibcatalog":
+
+                result["chain_id"] = source["chain_id"]
+
+            sources.append(result)
+
+    logger.info(
+        "Found %d %s sources",
+        len(sources),
+        publishing_type,
+    )
+
+    return sources
+
+
 
 
 def _resolve_name(existing_name, existing_count, incoming_name):

@@ -1,0 +1,342 @@
+[
+  {
+    "name": "אלמשהדאוי קינג סטור בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "https://kingstore.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "ג.מ מעיין אלפיים (07) בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "http://maayan2000.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "גוד פארם בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "https://goodpharm.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "גלובל ריטייל ק.י בע\"מ (קרפור, קוויק, ביתן אונליין)",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://prices.carrefour.co.il/"
+      }
+    ]
+  },
+  {
+    "name": "דור אלון ניהול מתחמים קמעונאיים בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "doralon",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "וולט אופריישנס סרוויסס ישראל בע\"מ",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://wm-gateway.wolt.com/isr-prices/public/v1/index.html"
+      }
+    ]
+  },
+  {
+    "name": "ויקטורי רשת סופרמרקטים בע\"מ",
+    "sources": [
+      {
+        "type": "laibcatalog",
+        "url": "https://laibcatalog.co.il/victory/index.html",
+        "chain_id": "7290696200003"
+      }
+    ]
+  },
+  {
+    "name": "זול ובגדול בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "http://zolvebegadol.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "ח. כהן סוכנות מזון ומשקאות בע\"מ",
+    "sources": [
+      {
+        "type": "laibcatalog",
+        "url": "https://laibcatalog.co.il/hcohen/index.html",
+        "chain_id": "7290455000004"
+      }
+    ]
+  },
+  {
+    "name": "טיב טעם רשתות בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "TivTaam",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "כ.נ מחסני השוק בע\"מ",
+    "sources": [
+      {
+        "type": "laibcatalog",
+        "url": "https://laibcatalog.co.il/mshuk/index.html",
+        "chain_id": "7290661400001"
+      }
+    ]
+  },
+  {
+    "name": "כל בו חצי חינם בע\"מ",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://shop.hazi-hinam.co.il/Prices"
+      }
+    ]
+  },
+  {
+    "name": "מ. יוחננוף ובניו (1988) בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "yohananof",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "מרב-מזון כל בע\"מ (אושר עד)",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "osherad",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "נתיב החסד - סופר חסד בע\"מ (כולל ברכל)",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://app.netiv-hesed.com/"
+      }
+    ]
+  },
+  {
+    "name": "סאלח דבאח ובניו בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "SalachD",
+            "password": "12345"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "סופר ספיר בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "https://supersapir.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "סופר פארם (ישראל) בע\"מ",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "http://prices.super-pharm.co.il/"
+      }
+    ]
+  },
+  {
+    "name": "סיטי מרקט",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://www.citymarket-shops.co.il/"
+      },
+      {
+        "type": "binaprojects",
+        "url": "https://citymarketkiryatgat.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "סטופ מרקט בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.retail.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "Stop_Market",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "עוף והודו ברקת - חנות המפעל בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "http://superbareket.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "פוליצר חדרה (1982) בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "politzer",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "פז קמעונאות ואנרגיה בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/file",
+        "credentials": [
+          {
+            "username": "Paz_bo",
+            "password": "paz468"
+          },
+          {
+            "username": "yuda_ho",
+            "password": "Yud@147"
+          },
+          {
+            "username": "freshmarket",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "קיי.טי. יבוא ושיווק בע\"מ (משנת יוסף)",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "https://chp-kt.pages.dev"
+      },
+      {
+        "type": "binaprojects",
+        "url": "https://ktshivuk.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "קשת טעמים בע\"מ",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "Keshet",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "רשת חנויות רמי לוי שיווק השקמה 2006 בע\"מ (כולל רשת סופר קופיקס וקוויק)",
+    "sources": [
+      {
+        "type": "publishedprices",
+        "url": "https://url.publishedprices.co.il/login",
+        "credentials": [
+          {
+            "username": "RamiLevi",
+            "password": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "שופרסל בע\"מ (כולל רשת BE)",
+    "sources": [
+      {
+        "type": "unknown",
+        "url": "http://prices.shufersal.co.il/"
+      }
+    ]
+  },
+  {
+    "name": "שוק העיר (ט.ע.מ.ס) בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "http://shuk-hayir.binaprojects.com/Main.aspx"
+      }
+    ]
+  },
+  {
+    "name": "שפע ברכת השם בע\"מ",
+    "sources": [
+      {
+        "type": "binaprojects",
+        "url": "http://shefabirkathashem.binaprojects.com/Main.aspx"
+      }
+    ]
+  }
+]
