@@ -30,7 +30,7 @@
     "name": "גלובל ריטייל ק.י בע\"מ (קרפור, קוויק, ביתן אונליין)",
     "sources": [
       {
-        "type": "unknown",
+        "type": "unclassified",
         "url": "https://prices.carrefour.co.il/"
       }
     ]
@@ -54,7 +54,7 @@
     "name": "וולט אופריישנס סרוויסס ישראל בע\"מ",
     "sources": [
       {
-        "type": "unknown",
+        "type": "unclassified",
         "url": "https://wm-gateway.wolt.com/isr-prices/public/v1/index.html"
       }
     ]
@@ -117,7 +117,7 @@
     "name": "כל בו חצי חינם בע\"מ",
     "sources": [
       {
-        "type": "unknown",
+        "type": "html_filelink",
         "url": "https://shop.hazi-hinam.co.il/Prices"
       }
     ]
@@ -156,7 +156,7 @@
     "name": "נתיב החסד - סופר חסד בע\"מ (כולל ברכל)",
     "sources": [
       {
-        "type": "unknown",
+        "type": "html_filelink",
         "url": "https://app.netiv-hesed.com/"
       }
     ]
@@ -189,7 +189,7 @@
     "name": "סופר פארם (ישראל) בע\"מ",
     "sources": [
       {
-        "type": "unknown",
+        "type": "html_filelink",
         "url": "http://prices.super-pharm.co.il/"
       }
     ]
@@ -198,7 +198,7 @@
     "name": "סיטי מרקט",
     "sources": [
       {
-        "type": "unknown",
+        "type": "html_filelink",
         "url": "https://www.citymarket-shops.co.il/"
       },
       {
@@ -273,7 +273,7 @@
     "name": "קיי.טי. יבוא ושיווק בע\"מ (משנת יוסף)",
     "sources": [
       {
-        "type": "unknown",
+        "type": "unclassified",
         "url": "https://chp-kt.pages.dev"
       },
       {
@@ -316,7 +316,7 @@
     "name": "שופרסל בע\"מ (כולל רשת BE)",
     "sources": [
       {
-        "type": "unknown",
+        "type": "html_filelink",
         "url": "http://prices.shufersal.co.il/"
       }
     ]

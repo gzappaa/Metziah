@@ -3,7 +3,7 @@ import json
 import pytest
 
 from models.store import Store
-from utils.seed_stores import load_stores_from_json
+from utils.stores.seed_stores import load_stores_from_json
 
 
 def test_load_stores_from_json(tmp_path):

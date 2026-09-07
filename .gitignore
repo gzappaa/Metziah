@@ -8,7 +8,7 @@ machsenei_hashuk_stores.json
 __init__.py
 notes.md
 data/reports/
-reports
+data/stores
 data/failed_stores.json
 xml_samples
 data/feeds

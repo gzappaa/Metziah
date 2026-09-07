@@ -224,7 +224,7 @@ class PublishedPricesClient:
                 "iColumns": "5",
                 "sColumns": ",,,,",
                 "iDisplayStart": "0",
-                "iDisplayLength": "1000",
+                "iDisplayLength": "10000",
                 "mDataProp_0": "fname",
                 "sSearch_0": "",
                 "bRegex_0": "false",

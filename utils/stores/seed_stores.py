@@ -8,8 +8,8 @@ Safe to re-run any time (upsert on chain_id, store_id) -- including
 after a DROP DATABASE, or after re-geocoding a store.
 
 Usage:
-    python -m utils.seed_stores data/stores/machsenei_hashuk.json
-    python -m utils.seed_stores data/stores/machsenei_hashuk.json --test
+    python -m utils.stores.seed_stores data/stores/machsenei_hashuk.json
+    python -m utils.stores.seed_stores data/stores/machsenei_hashuk.json --test
 """
 
 import argparse
@@ -22,6 +22,7 @@ from db import get_connection
 from models.store import Store
 
 from logging_config import setup_general_logging
+
 
 setup_general_logging()
 logger = logging.getLogger(__name__)
@@ -59,14 +60,25 @@ def main():
     stores = load_stores_from_json(args.json_path)
 
     if args.test:
-        test_feeds_dir = Path(__file__).resolve().parent.parent / "data" / "test_feeds"
+        project_root = Path(__file__).resolve().parents[2]
+        test_feeds_dir = project_root / "data" / "test_feeds"
+
         store_ids = {
             path.name
             for path in test_feeds_dir.glob("*/*/*")
         }
-        stores = [store for store in stores if store.store_id in store_ids]
 
-    logger.info("Loaded %d store(s) from %s", len(stores), args.json_path)
+        stores = [
+            store
+            for store in stores
+            if store.store_id in store_ids
+        ]
+
+    logger.info(
+        "Loaded %d store(s) from %s",
+        len(stores),
+        args.json_path,
+    )
 
     if not stores:
         return
@@ -80,7 +92,11 @@ def main():
         upsert_stores(conn, stores)
         conn.commit()
 
-    logger.info("Seeded %d store(s) across %d chain(s)", len(stores), len(chain_ids))
+    logger.info(
+        "Seeded %d store(s) across %d chain(s)",
+        len(stores),
+        len(chain_ids),
+    )
 
 
 if __name__ == "__main__":

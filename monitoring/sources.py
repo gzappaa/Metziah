@@ -42,6 +42,15 @@ SOURCE_TYPES = {
 }
 
 
+HARDCODED_SOURCE_TYPES = {
+    "https://shop.hazi-hinam.co.il/Prices": "html_filelink",
+    "http://prices.super-pharm.co.il/": "html_filelink",
+    "http://prices.shufersal.co.il/": "html_filelink",
+    "https://www.citymarket-shops.co.il/": "html_filelink",
+    "https://app.netiv-hesed.com/": "html_filelink",
+}
+
+
 setup_general_logging()
 
 logger = logging.getLogger(__name__)
@@ -56,13 +65,17 @@ def get_domain(url: str) -> str:
 
 
 def get_source_type(url: str) -> str:
+
+    if url in HARDCODED_SOURCE_TYPES:
+        return HARDCODED_SOURCE_TYPES[url]
+
     hostname = get_domain(url)
 
     for domain, source_type in SOURCE_TYPES.items():
         if hostname == domain or hostname.endswith(f".{domain}"):
             return source_type
 
-    return "unknown"
+    return "unclassified"
 
 
 def get_laibcatalog_chain_id(url: str) -> str:
@@ -327,7 +340,9 @@ def scrape_supermarket_sources(
         for link in links:
             url = link["url"]
 
-            source_type = get_source_type(url)
+            source_type = get_source_type(
+                url
+            )
 
             identity = source_identity(
                 source_type,
@@ -555,17 +570,9 @@ def compare_sources(
             [],
         )
 
-        # Use the same source identity used during scraping.
-        # This prevents URL variations such as:
-        #
-        #   url.publishedprices.co.il/file
-        #   publishedprices.co.il/file
-        #
-        # from being treated as different sources.
-
         old_source_map = {
             source_identity(
-                source.get("type", "unknown"),
+                source.get("type", "unclassified"),
                 source.get("url", ""),
             ): source
             for source in old_sources
@@ -573,7 +580,7 @@ def compare_sources(
 
         new_source_map = {
             source_identity(
-                source.get("type", "unknown"),
+                source.get("type", "unclassified"),
                 source.get("url", ""),
             ): source
             for source in new_sources
@@ -666,7 +673,6 @@ def compare_sources(
                         f"{new_source['type']} | "
                         f"users: {new_users}"
                     )
-
 
     return changes
 

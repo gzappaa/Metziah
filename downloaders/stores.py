@@ -6,12 +6,18 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from typing import Callable
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from logging_config import setup_general_logging
 from clients.publishedprices import PublishedPricesClient
 from clients.binaprojects import BinaProjectsClient
 from clients.laibcatalog import LaibcatalogClient
+from clients.carrefour import CarrefourClient
+from clients.html_client import HtmlFileLinkClient
+from clients.html_config import SOURCES as HTML_SOURCES
+from clients.mishnatyosef import MishnatYosefClient
+from clients.wolt import WoltClient
 
 
 setup_general_logging()
@@ -36,13 +42,19 @@ SOURCES_FILE = (
 # concatenated (12-digit YYYYMMDDHHMM) timestamp formats, optional
 # subchain/store segments, optional "Full" suffix, and gz/xml/xml.gz
 # extensions.
+#
+# NOTE: not yet verified against real filenames from the HTML-based
+# sources (Hazi Hinam, Super-Pharm, Shufersal, City Market, Netiv
+# Hesed) or Carrefour/Mishnat Yosef/Wolt. Check real data before
+# relying on this in prod for those chains.
 GENERIC_STORES_FILE_RE = re.compile(
     r"^Stores(?:Full)?"
-    r"(?P<chain_id>\d+)"
-    r"(?:-\d+)*"
-    r"-(?P<date>\d{8})"
-    r"-?(?P<time>\d{4,6})"
-    r"\.(?:gz|xml(?:\.gz)?)$",
+    r"(?P<chain_id>\d{13})"
+    r"(?:-\d+)*-"
+    r"(?P<date>\d{8})"
+    r"-?(?P<time>\d{3,6})"
+    r"(?:-\d{3,6})?"
+    r"(?:\.(?:gz|xml(?:\.gz)?))?$",
     re.IGNORECASE,
 )
 
@@ -58,8 +70,10 @@ def find_latest_matching_file(
 
     date_key/date_format: for sources where the timestamp lives in a
     separate metadata field rather than being embedded in the filename
-    (e.g. BinaProjects' 'DateFile'). If omitted, the timestamp is parsed
-    from the filename's own date+time groups.
+    (e.g. BinaProjects' 'DateFile'). If omitted, the date is parsed from
+    the filename's own YYYYMMDD date group. The time portion of the
+    filename is intentionally ignored because Stores files are normally
+    published once per day.
     """
 
     latest = None
@@ -97,20 +111,12 @@ def find_latest_matching_file(
         else:
 
             date_part = match.group("date")
-            time_part = match.group("time")
-
-            # time is either 4 digits (HHMM) or 6 digits (HHMMSS)
-            fmt = (
-                "%Y%m%d%H%M%S"
-                if len(time_part) == 6
-                else "%Y%m%d%H%M"
-            )
 
             try:
 
                 timestamp = datetime.strptime(
-                    date_part + time_part,
-                    fmt,
+                    date_part,
+                    "%Y%m%d",
                 )
 
             except ValueError:
@@ -132,6 +138,21 @@ def find_latest_stores_file(
     response_json: dict,
     cd: str = "/",
 ) -> dict | None:
+
+    logger.info(
+        "PublishedPrices: received %d entries in %s",
+        len(response_json.get("aaData", [])),
+        cd,
+    )
+
+    for entry in response_json.get("aaData", []):
+        fname = entry.get("fname", "")
+
+        if "Stores" in fname:
+            logger.info(
+                "PublishedPrices Stores candidate: %s",
+                fname,
+            )
 
     latest = find_latest_matching_file(
         response_json.get("aaData", []),
@@ -351,6 +372,163 @@ def get_storage_path(
     )
 
 
+def save_stores_file(
+    chain_id: str,
+    filename: str,
+    data_dir: Path,
+    test: bool,
+    fetch_content: Callable[[], bytes],
+) -> Path | None:
+    """
+    Shared save path for sync downloaders: prepares the per-chain
+    folder (wiping it in test mode), skips the network call if the
+    file is already on disk, otherwise calls fetch_content() to get
+    the bytes, writes them, and removes stale Stores* files.
+
+    fetch_content is only invoked when a download is actually needed,
+    and any exception it raises is treated as a failed download.
+    """
+
+    folder = get_storage_path(
+        chain_id,
+        data_dir,
+    )
+
+    if test and folder.exists():
+
+        logger.warning(
+            "TEST MODE: deleting existing %s",
+            folder,
+        )
+
+        shutil.rmtree(folder)
+
+    folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    destination = folder / filename
+
+    if destination.exists():
+
+        logger.info(
+            "UP TO DATE: %s",
+            filename,
+        )
+
+        return destination
+
+    logger.info(
+        "DOWNLOAD: %s",
+        filename,
+    )
+
+    try:
+
+        content = fetch_content()
+
+        destination.write_bytes(content)
+
+    except Exception:
+
+        logger.exception(
+            "FAILED downloading %s",
+            filename,
+        )
+
+        return None
+
+    for old_file in folder.glob("Stores*"):
+
+        if old_file.name != filename:
+
+            logger.info(
+                "REMOVE OLD: %s",
+                old_file.name,
+            )
+
+            old_file.unlink()
+
+    return destination
+
+
+async def save_stores_file_async(
+    chain_id: str,
+    filename: str,
+    data_dir: Path,
+    test: bool,
+    fetch_content,
+) -> Path | None:
+    """
+    Async counterpart to save_stores_file — same behavior, but
+    awaits fetch_content() instead of calling it directly.
+    """
+
+    folder = get_storage_path(
+        chain_id,
+        data_dir,
+    )
+
+    if test and folder.exists():
+
+        logger.warning(
+            "TEST MODE: deleting existing %s",
+            folder,
+        )
+
+        shutil.rmtree(folder)
+
+    folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    destination = folder / filename
+
+    if destination.exists():
+
+        logger.info(
+            "UP TO DATE: %s",
+            filename,
+        )
+
+        return destination
+
+    logger.info(
+        "DOWNLOAD: %s",
+        filename,
+    )
+
+    try:
+
+        content = await fetch_content()
+
+        destination.write_bytes(content)
+
+    except Exception:
+
+        logger.exception(
+            "FAILED downloading %s",
+            filename,
+        )
+
+        return None
+
+    for old_file in folder.glob("Stores*"):
+
+        if old_file.name != filename:
+
+            logger.info(
+                "REMOVE OLD: %s",
+                old_file.name,
+            )
+
+            old_file.unlink()
+
+    return destination
+
+
 def download_stores_publishedprices(
     name: str,
     username: str,
@@ -403,79 +581,21 @@ def download_stores_publishedprices(
 
         return None
 
-    chain_id = latest["chain_id"]
-
-    folder = get_storage_path(
-        chain_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = (
-        folder
-        / latest["filename"]
-    )
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            latest["filename"],
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        latest["filename"],
-    )
-
-    try:
+    def fetch_content() -> bytes:
 
         response = client._get_with_retry(
             latest["url"]
         )
 
-        destination.write_bytes(
-            response.content
-        )
+        return response.content
 
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            latest["filename"],
-        )
-
-        return None
-
-    for old_file in folder.glob(
-        "Stores*"
-    ):
-
-        if old_file.name != latest["filename"]:
-
-            logger.info(
-                "REMOVE OLD: %s",
-                old_file.name,
-            )
-
-            old_file.unlink()
-
-    return destination
+    return save_stores_file(
+        chain_id=latest["chain_id"],
+        filename=latest["filename"],
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
 
 
 def download_stores_binaprojects(
@@ -544,47 +664,7 @@ def download_stores_binaprojects(
 
         return None
 
-    chain_id = latest["chain_id"]
-
-    folder = get_storage_path(
-        chain_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = (
-        folder
-        / latest["filename"]
-    )
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            latest["filename"],
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        latest["filename"],
-    )
-
-    try:
+    def fetch_content() -> bytes:
 
         download_response = client._get_with_retry(
             f"{client.base_url}/Download.aspx",
@@ -593,57 +673,30 @@ def download_stores_binaprojects(
             },
         )
 
-        download_json = (
-            download_response.json()
-        )
+        download_json = download_response.json()
 
         if (
             not download_json
-            or not download_json[0].get(
-                "SPath"
-            )
+            or not download_json[0].get("SPath")
         ):
 
-            logger.warning(
-                "No SPath returned for %s",
-                latest["filename"],
+            raise RuntimeError(
+                f"No SPath returned for {latest['filename']}"
             )
-
-            return None
 
         file_url = download_json[0]["SPath"]
 
-        response = client._get_with_retry(
-            file_url
-        )
+        response = client._get_with_retry(file_url)
 
-        destination.write_bytes(
-            response.content
-        )
+        return response.content
 
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            latest["filename"],
-        )
-
-        return None
-
-    for old_file in folder.glob(
-        "Stores*"
-    ):
-
-        if old_file.name != latest["filename"]:
-
-            logger.info(
-                "REMOVE OLD: %s",
-                old_file.name,
-            )
-
-            old_file.unlink()
-
-    return destination
+    return save_stores_file(
+        chain_id=latest["chain_id"],
+        filename=latest["filename"],
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
 
 
 async def download_stores_laibcatalog(
@@ -702,79 +755,409 @@ async def download_stores_laibcatalog(
         latest.get("chain_id") or chain_id
     )
 
-    folder = get_storage_path(
-        resolved_chain_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = (
-        folder
-        / latest["filename"]
-    )
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            latest["filename"],
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        latest["filename"],
-    )
-
-    try:
+    async def fetch_content() -> bytes:
 
         download_url = client.build_download_url(
             latest["filename"]
         )
 
-        content = await client.download_file(
-            download_url
-        )
+        return await client.download_file(download_url)
 
-        destination.write_bytes(content)
+    return await save_stores_file_async(
+        chain_id=resolved_chain_id,
+        filename=latest["filename"],
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
+
+
+async def download_stores_carrefour(
+    test: bool = False,
+) -> Path | None:
+
+
+    data_dir = (
+        TEST_DATA_DIR
+        if test
+        else DATA_DIR
+    )
+
+    client = CarrefourClient()
+
+    logger.info(
+        "Listing files for Carrefour..."
+    )
+
+    try:
+
+        listing = await client.get_files()
 
     except Exception:
 
         logger.exception(
-            "FAILED downloading %s",
-            latest["filename"],
+            "Failed getting file list for Carrefour"
         )
 
         return None
 
-    for old_file in folder.glob(
-        "Stores*"
-    ):
+    path = listing["path"]
+    files = listing["files"]
 
-        if old_file.name != latest["filename"]:
+    normalized = []
 
-            logger.info(
-                "REMOVE OLD: %s",
-                old_file.name,
+    for entry in files:
+
+        if isinstance(entry, str):
+
+            normalized.append(
+                {"filename": entry}
             )
 
-            old_file.unlink()
+        else:
 
-    return destination
+            filename = (
+                entry.get("name")
+                or entry.get("fileName")
+                or entry.get("Name")
+            )
+
+            if filename:
+
+                normalized.append(
+                    {"filename": filename}
+                )
+
+    latest = find_latest_matching_file(
+        normalized,
+        filename_key="filename",
+    )
+
+    if latest is None:
+
+        logger.warning(
+            "No Stores file found for Carrefour"
+        )
+
+        return None
+
+    filename = latest["filename"]
+
+    download_url = urljoin(
+        f"{client.base_url}/",
+        f"{path.strip('/')}/{filename}",
+    )
+
+    async def fetch_content() -> bytes:
+
+        return await client.download_file(
+            download_url
+        )
+
+    return await save_stores_file_async(
+        chain_id=latest["chain_id"],
+        filename=filename,
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
+
+
+async def download_stores_html(
+    source: dict,
+    test: bool = False,
+) -> Path | None:
+    """
+    Generic Stores downloader for every publisher configured in
+    clients/html_config.py (Hazi Hinam, Super-Pharm, Shufersal,
+    City Market, Netiv Hesed) — one function instead of five.
+
+    NOTE: only fetches the configured listing/category page as-is,
+    with the 'Stores' file_type params. Doesn't yet handle
+    pagination, sort params, or Shufersal's separate category
+    endpoint's own quirks — add if a Stores file turns out not to
+    be on page 1 for some chain. Also unverified: whether these
+    chains' Stores filenames match GENERIC_STORES_FILE_RE.
+    """
+
+    data_dir = (
+        TEST_DATA_DIR
+        if test
+        else DATA_DIR
+    )
+
+    name = source["name"]
+    listing = source["listing"]
+    categories = source["categories"]
+
+    stores_params = categories.get(
+        "file_types", {}
+    ).get("Stores")
+
+    if stores_params is None:
+
+        logger.warning(
+            "No 'Stores' file_type configured for %s",
+            name,
+        )
+
+        return None
+
+    base_url = categories.get(
+        "endpoint",
+        listing["base_url"],
+    )
+
+    client = HtmlFileLinkClient(
+        name=name,
+        base_url=base_url,
+        extraction_mode=source["extraction_mode"],
+        filename_column=source.get("filename_column"),
+        filename_source=source["filename_source"],
+        filename_param=source.get("filename_param"),
+    )
+
+    logger.info(
+        "Listing files for %s (HTML)...",
+        name,
+    )
+
+    try:
+
+        candidates = await client.get_candidates(
+            params=stores_params
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting file list for %s",
+            name,
+        )
+
+        return None
+
+    href_by_filename = {
+        candidate.filename: candidate.href
+        for candidate in candidates
+        if candidate.filename
+    }
+
+    latest = find_latest_matching_file(
+        [
+            {"filename": filename}
+            for filename in href_by_filename
+        ],
+        filename_key="filename",
+    )
+
+    if latest is None:
+
+        logger.warning(
+            "No Stores file found for %s",
+            name,
+        )
+
+        return None
+
+    filename = latest["filename"]
+    href = href_by_filename[filename]
+
+    async def fetch_content() -> bytes:
+
+        response = await client._get_with_retry(href)
+
+        return response.content
+
+    return await save_stores_file_async(
+        chain_id=latest["chain_id"],
+        filename=filename,
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
+
+
+async def download_stores_mishnatyosef(
+    test: bool = False,
+) -> Path | None:
+    """
+    NOTE: key names in Mishnat Yosef's listing JSON haven't been
+    verified — assuming common 'name'/'fileName' + 'url'/'href'
+    style keys. Adjust once we've inspected a real response.
+    """
+
+    data_dir = (
+        TEST_DATA_DIR
+        if test
+        else DATA_DIR
+    )
+
+    client = MishnatYosefClient()
+
+    logger.info(
+        "Listing files for Mishnat Yosef..."
+    )
+
+    try:
+
+        files = await client.get_files()
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting file list for Mishnat Yosef"
+        )
+
+        return None
+
+    normalized = []
+    href_by_filename = {}
+
+    for entry in files:
+
+        if entry.get("type") != "Stores":
+            continue
+
+        filename = entry.get("name")
+        url = entry.get("url")
+
+        if not filename or not url:
+            continue
+
+        normalized.append(
+            {"filename": filename}
+        )
+
+        href_by_filename[filename] = url
+
+    latest = find_latest_matching_file(
+        normalized,
+        filename_key="filename",
+    )
+
+    if latest is None:
+
+        logger.warning(
+            "No Stores file found for Mishnat Yosef"
+        )
+
+        return None
+
+    filename = latest["filename"]
+    href = href_by_filename[filename]
+
+    async def fetch_content() -> bytes:
+
+        return await client.download_file(href)
+
+    return await save_stores_file_async(
+        chain_id=latest["chain_id"],
+        filename=filename,
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
+
+
+async def download_stores_wolt(
+    test: bool = False,
+) -> Path | None:
+    """
+    Only checks the most recent date page (mirrors WoltClient.check()).
+    If Wolt doesn't republish Stores on every date page, this will
+    need to walk back through older pages until one is found.
+    """
+
+    data_dir = (
+        TEST_DATA_DIR
+        if test
+        else DATA_DIR
+    )
+
+    client = WoltClient()
+
+    logger.info(
+        "Listing date pages for Wolt..."
+    )
+
+    try:
+
+        date_pages = await client.get_date_pages()
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting date pages for Wolt"
+        )
+
+        return None
+
+    if not date_pages:
+
+        logger.warning(
+            "No date pages found for Wolt"
+        )
+
+        return None
+
+    try:
+
+        file_urls = await client.get_files(
+            date_pages[0]
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed getting file list for Wolt"
+        )
+
+        return None
+
+    normalized = []
+    href_by_filename = {}
+
+    for url in file_urls:
+
+        filename = urlparse(url).path.rsplit("/", 1)[-1]
+
+        if not filename:
+            continue
+
+        normalized.append(
+            {"filename": filename}
+        )
+
+        href_by_filename[filename] = url
+
+    latest = find_latest_matching_file(
+        normalized,
+        filename_key="filename",
+    )
+
+    if latest is None:
+
+        logger.warning(
+            "No Stores file found for Wolt"
+        )
+
+        return None
+
+    filename = latest["filename"]
+    href = href_by_filename[filename]
+
+    async def fetch_content() -> bytes:
+
+        return await client.download_file(href)
+
+    return await save_stores_file_async(
+        chain_id=latest["chain_id"],
+        filename=filename,
+        data_dir=data_dir,
+        test=test,
+        fetch_content=fetch_content,
+    )
 
 
 if __name__ == "__main__":
@@ -879,3 +1262,68 @@ if __name__ == "__main__":
                 "Failed processing %s",
                 source["name"],
             )
+
+    logger.info(
+        "Found %d HTML-based sources",
+        len(HTML_SOURCES),
+    )
+
+    for source in HTML_SOURCES:
+
+        try:
+
+            asyncio.run(
+                download_stores_html(
+                    source,
+                    test=args.test,
+                )
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Failed processing %s",
+                source["name"],
+            )
+
+    try:
+
+        asyncio.run(
+            download_stores_carrefour(
+                test=args.test
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed processing Carrefour"
+        )
+
+    try:
+
+        asyncio.run(
+            download_stores_mishnatyosef(
+                test=args.test
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed processing Mishnat Yosef"
+        )
+
+    try:
+
+        asyncio.run(
+            download_stores_wolt(
+                test=args.test
+            )
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed processing Wolt"
+        )

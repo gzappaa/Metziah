@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from lxml import html as lxml_html
@@ -12,82 +12,49 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Candidate:
+    """
+    One possible downloadable file.
+
+    The client only extracts HTML structure and the filename
+    according to the configured filename source.
+
+    It does NOT decide whether the candidate is a Stores file.
+    """
+
     text: str
     href: str
+    filename: str | None = None
 
 
 class HtmlFileLinkClient:
     """
-    Generic client for publishers whose file discovery works by
-    scanning a plain server-rendered HTML page for links to price
-    feed files (no JSON API, no JS-embedded data).
+    Generic client for publishers whose file discovery works through
+    server-rendered HTML pages.
 
-    This client does NOT know what a valid filename looks like — it
-    has no regex and applies no filtering. It just returns every
-    candidate (link text + resolved URL) found on the page. The
-    caller (e.g. stores.py's find_latest_stores_file_* functions,
-    or the equivalent for price.py/promo.py later) is responsible
-    for matching candidates against the filename pattern and
-    deciding which one is "latest". This keeps the client reusable
-    for Stores, Price, Promo, etc. without needing to change it.
+    Extraction modes:
 
-    --------------------------------------------------------------
-    Publishers using extraction_mode="anchor" (default):
-    The filename appears directly in the <a href> or its link text,
-    so scanning every <a> tag on the page is enough to find every
-    file reference.
+    anchor:
+        Extracts one Candidate per <a href>.
 
-      - Wolt
-          Two-level HTML: an index page lists date pages, each date
-          page lists file links directly. Caller is responsible for
-          first fetching the index, picking a date, then fetching
-          that date's page with this client.
-      - Hazi Hinam (שופ.חצי חינם)
-          Server-rendered table, paginated (?p=, ?s=, ?d=, ?t=, ?f=).
-          href is a direct Azure Blob Storage URL.
-      - Netiv Hesed / Barchal / ברכלטוב / שירה מרקט
-          Single filtered page (?BranchTypeNumber=, ?StoreNumber=,
-          ?FileType=, ?Date=, ?Search=). href is this publisher's
-          own /Prices/Download?fileName=... proxy endpoint.
-      - Super-Pharm
-          Server-rendered table, paginated (?page=). href is this
-          publisher's own /Download/<filename>?bucketName=... proxy.
-      - Shufersal
-          Server-rendered table (ASP.NET MVC WebGrid), paginated
-          (?page=). href is a complete Azure Blob SAS URL — must be
-          used exactly as extracted, never reconstructed, since it
-          contains an expiring auth token.
+    row:
+        Extracts one Candidate per table row containing a download
+        link. The filename is taken from the configured filename
+        column when available.
 
-    --------------------------------------------------------------
-    Publishers using extraction_mode="row":
-    The filename is NOT in the href or link text at all — it only
-    appears as plain text in a separate table cell. The download
-    link itself is an opaque ID with no filename info
-    (e.g. /downloadFile/<UUID>). So this mode scans each <tr>,
-    collects all non-empty cell text as separate candidates, and
-    pairs them with that row's single download href. The caller's
-    regex then figures out which cell text was actually the
-    filename.
+    Filename sources:
 
-      - City Market (סיטי מרקט)
-          Server-rendered table, paginated (?p=, ?s=, ?d=, ?t=, ?f=).
-          Filename is plain text in its own <td>; download href is
-          /downloadFile/<UUID> with the real filename only exposed
-          later via Content-Disposition on download, if needed.
-          NOTE: City Market's filenames come in two formats (see
-          stores.py regex notes) — one with a hyphenated date-time
-          and a .gz/.xml extension, one with no extension and a
-          concatenated 12-digit timestamp. Both must be matched.
+    path:
+        Filename comes from the URL path.
 
-    --------------------------------------------------------------
-    NOT covered by this client (different protocols entirely,
-    handled by their own clients):
-      - Carrefour: file list is embedded in a JS variable in the
-        HTML, not in anchors or table rows — needs its own parser.
-      - K.T.M / Mishnat Yosef: JSON API (Cloudflare Worker) returning
-        direct URLs — see clients/ktm.py (or similar).
-      - Laibcatalog, BinaProjects, PublishedPrices: existing clients,
-        unrelated protocols (JSON API / ASPX endpoints), unchanged.
+    query:
+        Filename comes from a URL query parameter.
+
+    row:
+        Filename comes from the table row/cell.
+
+    This client contains NO publisher-specific filename regex,
+    Stores matching, chain ID parsing, date parsing, latest-file
+    logic, or pagination.
     """
 
     MAX_RETRIES = 3
@@ -99,10 +66,16 @@ class HtmlFileLinkClient:
         name: str,
         base_url: str,
         extraction_mode: str = "anchor",
+        filename_column: str | None = None,
+        filename_source: str = "path",
+        filename_param: str | None = None,
     ):
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.extraction_mode = extraction_mode
+        self.filename_column = filename_column
+        self.filename_source = filename_source
+        self.filename_param = filename_param
 
     async def _get_with_retry(
         self,
@@ -113,9 +86,7 @@ class HtmlFileLinkClient:
         last_exc = None
 
         for attempt in range(self.MAX_RETRIES):
-
             try:
-
                 async with httpx.AsyncClient(
                     timeout=self.TIMEOUT
                 ) as client:
@@ -156,7 +127,6 @@ class HtmlFileLinkClient:
                     )
 
             except httpx.HTTPStatusError:
-
                 raise
 
         logger.error(
@@ -167,32 +137,92 @@ class HtmlFileLinkClient:
 
         raise last_exc
 
+    def _extract_filename(
+        self,
+        href: str,
+        text: str,
+    ) -> str | None:
+        """
+        Extract a filename from an anchor according to
+        filename_source.
+
+        Used for anchor-based publishers.
+        """
+
+        if self.filename_source == "path":
+
+            path = urlparse(href).path
+
+            filename = path.rsplit("/", 1)[-1]
+
+            return filename or None
+
+        if self.filename_source == "query":
+
+            if not self.filename_param:
+                raise ValueError(
+                    "filename_param is required when "
+                    "filename_source='query'"
+                )
+
+            query = parse_qs(
+                urlparse(href).query
+            )
+
+            values = query.get(
+                self.filename_param
+            )
+
+            if not values:
+                return None
+
+            return values[0].strip() or None
+
+        if self.filename_source == "row":
+            return text or None
+
+        raise ValueError(
+            f"Unsupported filename source: "
+            f"{self.filename_source!r}. "
+            f"Expected 'path', 'query', or 'row'."
+        )
+
     def _extract_anchor_mode(
         self,
         tree,
         page_url: str,
     ) -> list[Candidate]:
-        """
-        Scans every <a href> on the page. Used for publishers where
-        the filename is discoverable directly from the link itself
-        (href and/or visible link text) — see class docstring for
-        which publishers this covers.
-        """
 
         candidates = []
 
         for anchor in tree.xpath("//a[@href]"):
 
-            href = anchor.get("href", "").strip()
-            text = (anchor.text or "").strip()
+            href = (
+                anchor.get("href") or ""
+            ).strip()
 
             if not href:
                 continue
 
+            absolute_href = urljoin(
+                page_url,
+                href,
+            )
+
+            text = (
+                anchor.text_content() or ""
+            ).strip()
+
+            filename = self._extract_filename(
+                absolute_href,
+                text,
+            )
+
             candidates.append(
                 Candidate(
                     text=text,
-                    href=urljoin(page_url, href),
+                    href=absolute_href,
+                    filename=filename,
                 )
             )
 
@@ -203,43 +233,86 @@ class HtmlFileLinkClient:
         tree,
         page_url: str,
     ) -> list[Candidate]:
-        """
-        Scans every <tr>, pairing each non-empty cell's text with
-        that row's download href. Needed specifically for City
-        Market, where the filename lives in a plain-text table cell
-        separate from the (opaque) download link — see class
-        docstring.
-        """
 
         candidates = []
 
-        for row in tree.xpath("//tr"):
+        for table in tree.xpath("//table"):
 
-            cell_texts = [
-                (cell.text_content() or "").strip()
-                for cell in row.xpath(".//td")
+            headers = [
+                (
+                    header.text_content() or ""
+                ).strip()
+                for header in table.xpath(
+                    ".//thead//th"
+                )
             ]
 
-            anchors = row.xpath(".//a[@href]")
+            filename_index = None
 
-            if not anchors:
-                continue
+            if self.filename_column:
+                for index, header in enumerate(headers):
 
-            href = urljoin(
-                page_url,
-                anchors[0].get("href", "").strip(),
-            )
+                    if header == self.filename_column:
+                        filename_index = index
+                        break
 
-            for text in cell_texts:
+            for row in table.xpath(".//tr"):
 
-                if text:
+                cells = row.xpath("./td")
 
-                    candidates.append(
-                        Candidate(
-                            text=text,
-                            href=href,
-                        )
+                if not cells:
+                    continue
+
+                anchors = row.xpath(
+                    ".//a[@href]"
+                )
+
+                if not anchors:
+                    continue
+
+                href = (
+                    anchors[0].get("href") or ""
+                ).strip()
+
+                if not href:
+                    continue
+
+                absolute_href = urljoin(
+                    page_url,
+                    href,
+                )
+
+                if (
+                    filename_index is not None
+                    and filename_index < len(cells)
+                ):
+                    filename = (
+                        cells[filename_index]
+                        .text_content()
+                        .strip()
                     )
+                else:
+                    filename = None
+
+                    for cell in cells:
+                        cell_text = (
+                            cell.text_content()
+                            or ""
+                        ).strip()
+
+                        if cell_text.startswith(
+                            ("Price", "Promo", "Stores")
+                        ):
+                            filename = cell_text
+                            break
+
+                candidates.append(
+                    Candidate(
+                        text=filename,
+                        href=absolute_href,
+                        filename=filename or None,
+                    )
+                )
 
         return candidates
 
@@ -247,27 +320,37 @@ class HtmlFileLinkClient:
         self,
         params: dict | None = None,
     ) -> list[Candidate]:
-        """
-        Fetches self.base_url (with optional query params for
-        pagination/filtering — see class docstring for each
-        publisher's specific param names) and returns every raw
-        candidate found via the configured extraction_mode.
-
-        Returns NO filtering, NO regex matching — see class
-        docstring for why.
-        """
 
         response = await self._get_with_retry(
             self.base_url,
             params=params,
         )
 
-        tree = lxml_html.fromstring(response.text)
+        tree = lxml_html.fromstring(
+            response.text
+        )
 
-        if self.extraction_mode == "row":
-            candidates = self._extract_row_mode(tree, str(response.url))
+        if self.extraction_mode == "anchor":
+
+            candidates = self._extract_anchor_mode(
+                tree,
+                str(response.url),
+            )
+
+        elif self.extraction_mode == "row":
+
+            candidates = self._extract_row_mode(
+                tree,
+                str(response.url),
+            )
+
         else:
-            candidates = self._extract_anchor_mode(tree, str(response.url))
+
+            raise ValueError(
+                f"Unsupported extraction mode: "
+                f"{self.extraction_mode!r}. "
+                f"Expected 'anchor' or 'row'."
+            )
 
         logger.info(
             "%s: %d candidates on %s",

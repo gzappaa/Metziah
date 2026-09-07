@@ -1,7 +1,7 @@
 import json
 
 from models.store import Store
-from utils.get_stores import clean_address, load_existing, compare_stores
+from utils.stores.get_stores import clean_address, load_existing, compare_stores
 
 
 def test_clean_address():

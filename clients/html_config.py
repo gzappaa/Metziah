@@ -1,0 +1,116 @@
+SOURCES = [
+    {
+        "name": "Hazi Hinam",
+        "listing": {
+            "base_url": "https://shop.hazi-hinam.co.il/Prices",
+            "pagination": "numeric",
+            "page_param": "p",
+        },
+        "categories": {
+            "file_types": {
+                "Price": {"t": "1"},
+                "PriceFull": {"t": "1"},
+                "Promo": {"t": "2"},
+                "PromoFull": {"t": "2"},
+                "Stores": {"t": "3"},
+            },
+            "store_param": "s",
+            "date_param": "d",
+            "date_format": "%Y-%m-%d",
+            "full_param": "f",
+        },
+        "extraction_mode": "anchor",
+        "filename_source": "path",
+    },
+    {
+        "name": "Super-Pharm",
+        "listing": {
+            "base_url": "https://prices.super-pharm.co.il/",
+            "pagination": "numeric",
+            "page_param": "page",
+        },
+        "categories": {
+            "file_types": {
+                "Price": {"Category-equals": "Price"},
+                "PriceFull": {"Category-equals": "PriceFull"},
+                "Promo": {"Category-equals": "Promo"},
+                "PromoFull": {"Category-equals": "PromoFull"},
+                "Stores": {"Category-equals": "Stores"},
+            },
+            "date_param": "Date-equals",
+            "date_format": "%d/%m/%Y",
+        },
+        "extraction_mode": "anchor",
+        "filename_source": "path",
+    },
+    {
+        "name": "Shufersal",
+        "listing": {
+            "base_url": "https://prices.shufersal.co.il/",
+            "pagination": "numeric",
+            "page_param": "page",
+            "sort_param": "sort",
+            "sort_direction_param": "sortdir",
+        },
+        "categories": {
+            "endpoint": "https://prices.shufersal.co.il/FileObject/UpdateCategory",
+            "pagination": "numeric",
+            "page_param": "page",
+            "file_types": {
+                "Price": {"catID": "1"},
+                "PriceFull": {"catID": "2"},
+                "Promo": {"catID": "3"},
+                "PromoFull": {"catID": "4"},
+                "Stores": {"catID": "5"},
+            },
+            "store_param": "storeId",
+            "all_stores_value": "0",
+        },
+        "extraction_mode": "anchor",
+        "filename_source": "path",
+    },
+    {
+        "name": "City Market",
+        "listing": {
+            "base_url": "https://www.citymarket-shops.co.il/",
+            "pagination": "numeric",
+            "page_param": "p",
+        },
+        "categories": {
+            "file_types": {
+                "Price": {"t": "1"},
+                "PriceFull": {"t": "1"},
+                "Promo": {"t": "2"},
+                "PromoFull": {"t": "2"},
+                "Stores": {"t": "3"},
+            },
+            "store_param": "s",
+            "date_param": "d",
+            "date_format": "%Y-%m-%d",
+            "full_param": "f",
+        },
+        "extraction_mode": "row",
+        "filename_source": "row",
+    },
+    {
+        "name": "Netiv Hesed",
+        "listing": {
+            "base_url": "https://app.netiv-hesed.com/",
+            "pagination": None,
+        },
+        "categories": {
+            "file_types": {
+                "Price": {"FileType": "Price"},
+                "PriceFull": {"FileType": "PriceFull"},
+                "Promo": {"FileType": "Promo"},
+                "PromoFull": {"FileType": "PromoFull"},
+                "Stores": {"FileType": "Stores"},
+            },
+            "date_param": "Date",
+            "date_format": "%Y-%m-%d",
+        },
+        "extraction_mode": "anchor",
+        "filename_source": "query",
+        "filename_param": "fileName",
+    },
+]
