@@ -6,7 +6,7 @@ from pathlib import Path
 CHAIN_ID = "7290000000003"
 
 CSV_FILE = Path("data/reference/city_market_claude_addresses.csv")
-STORES_FILE = Path("data/stores/citymarket.json")
+STORES_FILE = Path("data/stores/city market 2.json")
 
 
 def main():

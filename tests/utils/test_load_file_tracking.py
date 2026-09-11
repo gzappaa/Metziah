@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from utils import load_file_tracking
+from utils.file_tracking import load_file_tracking
 
 
 # ---------------------------------------------------------

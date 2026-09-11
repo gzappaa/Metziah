@@ -1,15 +1,15 @@
 """
-Seeds the `stores` table from a geocoded JSON file (e.g.
-data/stores/machsenei_hashuk.json). This unblocks load_prices.py --
-get_store_id() raises KeyError on purpose if a store hasn't been seeded,
-so this has to run before any price file for a new chain can load.
+Seeds the `stores` table from all geocoded JSON files under data/stores/.
+
+Chain metadata is loaded from data/reference/chains.json, which is the
+source of truth for chain names.
 
 Safe to re-run any time (upsert on chain_id, store_id) -- including
 after a DROP DATABASE, or after re-geocoding a store.
 
 Usage:
-    python -m utils.stores.seed_stores data/stores/machsenei_hashuk.json
-    python -m utils.stores.seed_stores data/stores/machsenei_hashuk.json --test
+    python -m utils.stores.seed_stores
+    python -m utils.stores.seed_stores --test
 """
 
 import argparse
@@ -26,6 +26,17 @@ from logging_config import setup_general_logging
 
 setup_general_logging()
 logger = logging.getLogger(__name__)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STORES_DIR = PROJECT_ROOT / "data" / "stores"
+CHAINS_REFERENCE_FILE = (
+    PROJECT_ROOT / "data" / "reference" / "chains.json"
+)
+
+CHAINS_EXTRA_REFERENCE_FILE = (
+    PROJECT_ROOT / "data" / "reference" / "chains_extra.json"
+)
 
 
 def load_stores_from_json(path: Path) -> list[Store]:
@@ -47,9 +58,13 @@ def load_stores_from_json(path: Path) -> list[Store]:
     ]
 
 
+def load_chains_from_json(path: Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("json_path", type=Path)
     parser.add_argument(
         "--test",
         action="store_true",
@@ -57,44 +72,89 @@ def main():
     )
     args = parser.parse_args()
 
-    stores = load_stores_from_json(args.json_path)
+    chains = load_chains_from_json(
+    CHAINS_REFERENCE_FILE
+)
+
+    if CHAINS_EXTRA_REFERENCE_FILE.exists():
+        chains_extra = load_chains_from_json(
+            CHAINS_EXTRA_REFERENCE_FILE
+        )
+        chains.update(chains_extra)
+
+        logger.info(
+            "Loaded %d extra chain(s) from %s",
+            len(chains_extra),
+            CHAINS_EXTRA_REFERENCE_FILE,
+        )
+
+    store_files = sorted(STORES_DIR.glob("*.json"))
+
+    logger.info(
+        "Found %d store JSON file(s) under %s",
+        len(store_files),
+        STORES_DIR,
+    )
+
+    if not store_files:
+        return
+
+    all_stores = []
+
+    for store_file in store_files:
+        stores = load_stores_from_json(store_file)
+
+        logger.info(
+            "Loaded %d store(s) from %s",
+            len(stores),
+            store_file,
+        )
+
+        all_stores.extend(stores)
 
     if args.test:
-        project_root = Path(__file__).resolve().parents[2]
-        test_feeds_dir = project_root / "data" / "test_feeds"
+        test_feeds_dir = PROJECT_ROOT / "data" / "test_feeds"
 
         store_ids = {
             path.name
             for path in test_feeds_dir.glob("*/*/*")
         }
 
-        stores = [
+        all_stores = [
             store
-            for store in stores
+            for store in all_stores
             if store.store_id in store_ids
         ]
 
-    logger.info(
-        "Loaded %d store(s) from %s",
-        len(stores),
-        args.json_path,
-    )
-
-    if not stores:
+    if not all_stores:
+        logger.info("No stores to seed.")
         return
 
-    chain_ids = {s.chain_id for s in stores}
+    chain_ids = {store.chain_id for store in all_stores}
 
     with get_connection() as conn:
         for chain_id in chain_ids:
-            ensure_chain(conn, chain_id)
+            chain = chains.get(chain_id)
 
-        upsert_stores(conn, stores)
+            if chain is None:
+                raise KeyError(
+                    f"Chain {chain_id} is not defined in "
+                    f"{CHAINS_REFERENCE_FILE}"
+                )
+
+            ensure_chain(
+                conn,
+                chain_id,
+                chain["name_he_normalized"],
+                chain["name_en_normalized"],
+            )
+
+        upsert_stores(conn, all_stores)
         conn.commit()
 
     logger.info(
         "Seeded %d store(s) across %d chain(s)",
-        len(stores),
+        len(all_stores),
         len(chain_ids),
     )
 

@@ -21,3 +21,5 @@ metziah_source_code.pdf
 metziah_tests.pdf
 data/notified_promotions.log
 tests_all.txt
+inspection/reports
+data/reference/file_tracking.csv

@@ -25,7 +25,7 @@ from downloaders.prices import download_prices
 from downloaders.pricesfull import download_pricefull
 from downloaders.promos import download_promos
 from downloaders.promosfull import download_promofull
-from utils.load_file_tracking import update_file_tracking
+from utils.file_tracking.load_file_tracking import update_file_tracking
 
 
 FEEDS_DIR = (

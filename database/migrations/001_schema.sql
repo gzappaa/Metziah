@@ -30,8 +30,9 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- ============================================================
 
 CREATE TABLE chains (
-    chain_id TEXT PRIMARY KEY,
-    name     TEXT NOT NULL
+    chain_id           TEXT PRIMARY KEY,
+    name_he_normalized TEXT NOT NULL,
+    name_en_normalized TEXT NOT NULL
 );
 
 
@@ -127,6 +128,7 @@ CREATE TABLE file_tracking (
     chain_id      TEXT NOT NULL REFERENCES chains(chain_id),
     sub_chain_id  TEXT,
     store_id      TEXT,
+    source        TEXT NOT NULL,
     file_type     TEXT NOT NULL CHECK (
         file_type IN (
             'PriceFull',
@@ -141,6 +143,7 @@ CREATE TABLE file_tracking (
     downloaded    BOOLEAN NOT NULL DEFAULT false,
     loaded        BOOLEAN NOT NULL DEFAULT false,
     updated_at    TIMESTAMPTZ DEFAULT now(),
+    file_size BIGINT,
 
     CHECK (
         (file_type = 'Stores' AND store_id IS NULL)
@@ -150,7 +153,6 @@ CREATE TABLE file_tracking (
 
     UNIQUE (chain_id, filename)
 );
-
 
 -- Promo delta files:
 -- multiple files per store/day are allowed.

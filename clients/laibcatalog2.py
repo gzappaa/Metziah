@@ -5,8 +5,6 @@ import logging
 
 import httpx
 
-from database.repository import get_publishing_sources
-
 
 logger = logging.getLogger(__name__)
 
@@ -19,57 +17,10 @@ class LaibcatalogClient:
 
     def __init__(
         self,
-        supermarket_name: str,
+        chain_id: str,
     ):
-        self.supermarket_name = supermarket_name
-
-        self.source_url = None
-        self.chain_id = None
-
-    def _get_source(self) -> dict:
-
-        sources = get_publishing_sources(
-            "laibcatalog"
-        )
-
-        source = next(
-            (
-                source
-                for source in sources
-                if source["name"] == self.supermarket_name
-            ),
-            None,
-        )
-
-        if source is None:
-            raise ValueError(
-                f"No laibcatalog source found for "
-                f"'{self.supermarket_name}'"
-            )
-
-        return source
-
-    def _configure(self) -> None:
-
-        source = self._get_source()
-
-        self.source_url = source["url"]
-        self.chain_id = source["chain_id"]
-
-        logger.info(
-            "Configured Laibcatalog source: %s",
-            self.supermarket_name,
-        )
-
-        logger.info(
-            "Source URL: %s",
-            self.source_url,
-        )
-
-        logger.info(
-            "Chain ID: %s",
-            self.chain_id,
-        )
+        self.chain_id = chain_id
+        self.source_url = "https://laibcatalog.co.il"
 
     async def _get_with_retry(
         self,
@@ -137,10 +88,7 @@ class LaibcatalogClient:
     async def get_files(
         self,
         branch_number=None,
-    ) -> dict:
-
-        if self.chain_id is None:
-            self._configure()
+    ) -> list[dict]:
 
         params = {
             "edi": self.chain_id,
@@ -150,12 +98,13 @@ class LaibcatalogClient:
             params["branchNumber"] = branch_number
 
         logger.info(
-            "Requesting file list (branch=%s)",
+            "Requesting file list for chain %s (branch=%s)",
+            self.chain_id,
             branch_number or "all",
         )
 
         response = await self._get_with_retry(
-            f"{self.source_url.rstrip('/')}/webapi/api/getfiles",
+            f"{self.source_url}/webapi/api/getfiles",
             params=params,
         )
 
@@ -166,11 +115,8 @@ class LaibcatalogClient:
         filename: str,
     ) -> str:
 
-        if self.chain_id is None:
-            self._configure()
-
         return (
-            f"{self.source_url.rstrip('/')}"
+            f"{self.source_url}"
             f"/webapi/{self.chain_id}/{filename}"
         )
 
@@ -185,13 +131,11 @@ class LaibcatalogClient:
 
     async def check(self) -> dict:
 
-        self._configure()
-
         files = await self.get_files()
 
         return {
-            "name": self.supermarket_name,
-            "url": self.source_url,
             "chain_id": self.chain_id,
+            "url": self.source_url,
             "files": files,
         }
+

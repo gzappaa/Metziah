@@ -2,12 +2,9 @@
 
 import logging
 import time
-from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
-
-from database.repository import get_publishing_sources
 
 
 logger = logging.getLogger(__name__)
@@ -19,39 +16,28 @@ class BinaProjectsClient:
     BACKOFF_SECONDS = [2, 4, 8]
     TIMEOUT = 30
 
+
     def __init__(
         self,
-        supermarket_name: str,
+        source_url: str,
     ):
-        self.supermarket_name = supermarket_name
+        self.source_url = source_url.rstrip("/")
 
-        self.source_url = None
-        self.base_url = None
+        parsed = urlparse(self.source_url)
+
+        self.base_url = urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                "",
+                "",
+                "",
+                "",
+            )
+        )
 
         self.session = requests.Session()
 
-    def _get_source(self) -> dict:
-
-        sources = get_publishing_sources(
-            "binaprojects"
-        )
-
-        source = next(
-            (
-                source
-                for source in sources
-                if source["name"] == self.supermarket_name
-            ),
-            None,
-        )
-
-        if source is None:
-            raise ValueError(
-                f"No binaprojects source found for "
-                f"'{self.supermarket_name}'"
-            )
-
-        return source
 
     def _get_with_retry(
         self,
@@ -72,6 +58,12 @@ class BinaProjectsClient:
                 )
 
                 response.raise_for_status()
+
+                logger.info(
+                    "GET %s -> HTTP %d",
+                    response.url,
+                    response.status_code,
+                )
 
                 return response
 
@@ -96,24 +88,23 @@ class BinaProjectsClient:
                     )
 
             except requests.HTTPError:
-
                 raise
+
+        logger.error(
+            "All %d attempts failed for %s",
+            self.MAX_RETRIES,
+            url,
+        )
 
         raise last_exc
 
-    def get_main_page(self) -> str:
 
-        response = self._get_with_retry(
-            self.source_url
-        )
-
-        logger.info(
-            "GET %s -> %d",
-            response.url,
-            response.status_code,
-        )
-
-        return response.text
+    # WFileType:
+    # 1 = stores
+    # 2 = prices
+    # 3 = promo
+    # 4 = pricefull
+    # 5 = promofull
 
     def get_hok_files(
         self,
@@ -122,12 +113,8 @@ class BinaProjectsClient:
         file_type: int = 0,
     ) -> list[dict]:
 
-        hok_url = (
-            f"{self.base_url}/MainIO_Hok.aspx"
-        )
-
         response = self._get_with_retry(
-            hok_url,
+            f"{self.base_url}/MainIO_Hok.aspx",
             params={
                 "wReshet": "",
                 "WStore": store,
@@ -139,92 +126,39 @@ class BinaProjectsClient:
             },
         )
 
-        logger.info(
-            "GET %s -> HTTP %d",
-            response.url,
-            response.status_code,
-        )
-
         return response.json()
 
-    def get_latest_store_files(
+
+    def get_download_url(
         self,
-    ) -> list[dict]:
+        filename: str,
+    ) -> str:
 
-        files = self.get_hok_files()
+        response = self._get_with_retry(
+            f"{self.base_url}/Download.aspx",
+            params={
+                "FileNm": filename,
+            },
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
 
-        latest = {}
+        data = response.json()
 
-        for file in files:
-
-            store = file["Store"].strip()
-
-            if not store:
-                continue
-
-            date = datetime.strptime(
-                file["DateFile"].strip(),
-                "%H:%M %d/%m/%Y",
+        if not data or not data[0].get("SPath"):
+            raise RuntimeError(
+                f"No download URL returned for {filename}"
             )
 
-            key = (
-                store,
-                file["TypeFile"],
-            )
+        return data[0]["SPath"]
 
-            if (
-                key not in latest
-                or date > latest[key]["datetime"]
-            ):
-                latest[key] = {
-                    "store": store,
-                    "file_name": file["FileNm"],
-                    "file_type": file["TypeFile"],
-                    "file_extension": file["TypeExpFile"],
-                    "date": file["DateFile"].strip(),
-                    "datetime": date,
-                }
 
-        return list(latest.values())
+    def download_file(
+        self,
+        url: str,
+    ) -> bytes:
 
-    def check(self) -> dict:
+        response = self._get_with_retry(url)
 
-        source = self._get_source()
-
-        self.source_url = source["url"]
-
-        parsed = urlparse(
-            self.source_url
-        )
-
-        self.base_url = (
-            f"{parsed.scheme}://"
-            f"{parsed.netloc}"
-        )
-
-        logger.info(
-            "Checking BinaProjects source: %s",
-            self.supermarket_name,
-        )
-
-        logger.info(
-            "Source URL: %s",
-            self.source_url,
-        )
-
-        logger.info(
-            "Base URL: %s",
-            self.base_url,
-        )
-
-        main_page = self.get_main_page()
-
-        files = self.get_latest_store_files()
-
-        return {
-            "name": self.supermarket_name,
-            "url": self.source_url,
-            "base_url": self.base_url,
-            "main_page": main_page,
-            "latest_store_files": files,
-        }
+        return response.content

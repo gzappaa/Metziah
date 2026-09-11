@@ -1,17 +1,14 @@
 # clients/publishedprices.py
 
-import re
-import time
-from datetime import datetime
 import logging
+import time
+
 import requests
 from bs4 import BeautifulSoup
 
-from database.repository import get_publishing_sources
-
-
 
 logger = logging.getLogger(__name__)
+
 
 class PublishedPricesClient:
 
@@ -21,65 +18,18 @@ class PublishedPricesClient:
     BACKOFF_SECONDS = [2, 4, 8]
     TIMEOUT = 30
 
-    FILE_RE = re.compile(
-        r"^(?P<file_type>[A-Za-z]+)"
-        r"(?P<chain_id>\d+)-"
-        r"(?P<store_id>\d+)-"
-        r"(?P<timestamp>\d{12})"
-        r"\.gz$"
-    )
 
     def __init__(
         self,
-        supermarket_name: str,
+        username: str,
+        password: str,
     ):
-        self.supermarket_name = supermarket_name
-
-        self.username = None
-        self.password = ""
+        self.username = username
+        self.password = password
 
         self.session = requests.Session()
         self.csrf_token = None
 
-    def _get_credentials(self) -> None:
-
-        sources = get_publishing_sources(
-            "publishedprices"
-        )
-
-        source = next(
-            (
-                source
-                for source in sources
-                if source["name"] == self.supermarket_name
-            ),
-            None,
-        )
-
-        if source is None:
-            raise ValueError(
-                f"No publishedprices source found for "
-                f"'{self.supermarket_name}'"
-            )
-
-        credentials = source.get(
-            "credentials",
-            []
-        )
-
-        if not credentials:
-            raise ValueError(
-                f"No credentials found for "
-                f"'{self.supermarket_name}'"
-            )
-
-        credential = credentials[0]
-
-        self.username = credential["username"]
-        self.password = credential.get(
-            "password",
-            ""
-        )
 
     def _get_with_retry(
         self,
@@ -92,6 +42,7 @@ class PublishedPricesClient:
         for attempt in range(self.MAX_RETRIES):
 
             try:
+
                 response = self.session.get(
                     url,
                     timeout=self.TIMEOUT,
@@ -99,6 +50,12 @@ class PublishedPricesClient:
                 )
 
                 response.raise_for_status()
+
+                logger.info(
+                    "GET %s -> HTTP %d",
+                    response.url,
+                    response.status_code,
+                )
 
                 return response
 
@@ -109,11 +66,12 @@ class PublishedPricesClient:
 
                 last_exc = exc
 
-                print(
-                    f"Attempt "
-                    f"{attempt + 1}/"
-                    f"{self.MAX_RETRIES} "
-                    f"failed for {url}: {exc}"
+                logger.warning(
+                    "Attempt %d/%d failed for %s: %s",
+                    attempt + 1,
+                    self.MAX_RETRIES,
+                    url,
+                    exc,
                 )
 
                 if attempt < self.MAX_RETRIES - 1:
@@ -125,7 +83,14 @@ class PublishedPricesClient:
 
                 raise
 
+        logger.error(
+            "All %d attempts failed for %s",
+            self.MAX_RETRIES,
+            url,
+        )
+
         raise last_exc
+
 
     def login(self) -> None:
 
@@ -173,14 +138,29 @@ class PublishedPricesClient:
             f"Logged in as '{self.username}'"
             not in response.text
         ):
-            for keyword in ("invalid", "incorrect", "locked", "disabled", "error", "expired", "denied"):
-                idx = response.text.lower().find(keyword)
+            for keyword in (
+                "invalid",
+                "incorrect",
+                "locked",
+                "disabled",
+                "error",
+                "expired",
+                "denied",
+            ):
+                idx = response.text.lower().find(
+                    keyword
+                )
+
                 if idx != -1:
                     logger.warning(
                         "DEBUG found '%s' near: %s",
                         keyword,
-                        response.text[max(0, idx-100):idx+200],
+                        response.text[
+                            max(0, idx - 100):
+                            idx + 200
+                        ],
                     )
+
             raise RuntimeError(
                 f"Login failed for user "
                 f"'{self.username}'"
@@ -210,7 +190,11 @@ class PublishedPricesClient:
                 "CSRF token after login is empty"
             )
 
-    def get_files(self, cd: str = "/") -> dict:
+
+    def get_files(
+        self,
+        cd: str = "/",
+    ) -> dict:
 
         if self.csrf_token is None:
             raise RuntimeError(
@@ -263,88 +247,23 @@ class PublishedPricesClient:
 
         return response.json()
 
-    def find_latest_files(
+
+    def build_download_url(
         self,
-        response_json: dict,
-    ) -> list[dict]:
+        filename: str,
+    ) -> str:
 
-        latest_by_store_and_type = {}
-
-        for file in response_json.get(
-            "aaData",
-            [],
-        ):
-
-            filename = file.get("fname")
-
-            if not filename:
-                continue
-
-            match = self.FILE_RE.match(
-                filename
-            )
-
-            if not match:
-                continue
-
-            timestamp = datetime.strptime(
-                match.group("timestamp"),
-                "%Y%m%d%H%M",
-            )
-
-            file_type = match.group(
-                "file_type"
-            )
-
-            chain_id = match.group(
-                "chain_id"
-            )
-
-            store_id = match.group(
-                "store_id"
-            )
-
-            key = (
-                file_type,
-                chain_id,
-                store_id,
-            )
-
-            existing = (
-                latest_by_store_and_type.get(
-                    key
-                )
-            )
-
-            if (
-                existing is None
-                or timestamp > existing["timestamp"]
-            ):
-                latest_by_store_and_type[key] = {
-                    "filename": filename,
-                    "file_type": file_type,
-                    "chain_id": chain_id,
-                    "store_id": store_id,
-                    "timestamp": timestamp,
-                    "size": file.get("size"),
-                    "url": (
-                        f"{self.BASE_URL}"
-                        f"/file/d/{filename}"
-                    ),
-                }
-
-        return list(
-            latest_by_store_and_type.values()
+        return (
+            f"{self.BASE_URL}"
+            f"/file/d/{filename}"
         )
 
-    def check(self) -> list[dict]:
 
-        self._get_credentials()
+    def download_file(
+        self,
+        url: str,
+    ) -> bytes:
 
-        self.login()
+        response = self._get_with_retry(url)
 
-        response_json = self.get_files()
-
-        return self.find_latest_files(
-            response_json
-        )
+        return response.content

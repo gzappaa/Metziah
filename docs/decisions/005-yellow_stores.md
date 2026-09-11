@@ -1,4 +1,4 @@
-markdown # Decision 005: Yellow Store Registry and Address/City Normalization
+# Decision 005: Yellow Store Registry and Address/City Normalization
 
 **Date:** **2026**-09-06
 

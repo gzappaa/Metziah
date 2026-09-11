@@ -24,6 +24,7 @@ class Candidate:
     text: str
     href: str
     filename: str | None = None
+    file_size: str | None = None
 
 
 class HtmlFileLinkClient:
@@ -69,6 +70,7 @@ class HtmlFileLinkClient:
         filename_column: str | None = None,
         filename_source: str = "path",
         filename_param: str | None = None,
+        file_size_column: int | None = None,
     ):
         self.name = name
         self.base_url = base_url.rstrip("/")
@@ -76,6 +78,7 @@ class HtmlFileLinkClient:
         self.filename_column = filename_column
         self.filename_source = filename_source
         self.filename_param = filename_param
+        self.file_size_column = file_size_column
 
     async def _get_with_retry(
         self,
@@ -218,11 +221,30 @@ class HtmlFileLinkClient:
                 text,
             )
 
+            file_size = None
+
+            if self.file_size_column is not None:
+                row = anchor.xpath("ancestor::tr[1]")
+
+                if row:
+                    cells = row[0].xpath("./td")
+
+                    if self.file_size_column < len(cells):
+                        file_size = (
+                            cells[self.file_size_column]
+                            .text_content()
+                            or ""
+                        ).strip()
+
+                        if not file_size:
+                            file_size = None
+
             candidates.append(
                 Candidate(
                     text=text,
                     href=absolute_href,
                     filename=filename,
+                    file_size=file_size,
                 )
             )
 
@@ -306,11 +328,26 @@ class HtmlFileLinkClient:
                             filename = cell_text
                             break
 
+
+                file_size = None
+
+                if self.file_size_column is not None:
+                    if self.file_size_column < len(cells):
+                        file_size = (
+                            cells[self.file_size_column]
+                            .text_content()
+                            or ""
+                        ).strip()
+
+                        if not file_size:
+                            file_size = None
+
                 candidates.append(
                     Candidate(
-                        text=filename,
+                        text=filename or "",
                         href=absolute_href,
                         filename=filename or None,
+                        file_size=file_size,
                     )
                 )
 

@@ -21,6 +21,7 @@ DATA_DIR = BASE_DIR / "data"
 
 FEEDS_DIR = DATA_DIR / "feeds"
 STORES_DIR = DATA_DIR / "stores"
+CHAINS_FILE = DATA_DIR / "reference" / "chains.json"
 
 STORES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -47,8 +48,10 @@ STORE_ELEMENT_TAGS = ("Store", "SubChainStoreXMLObject")
 def findtext_any(elem, tags) -> str | None:
     for tag in tags:
         val = elem.findtext(tag)
+
         if val is not None:
             return val
+
     return None
 
 
@@ -83,7 +86,13 @@ def sanitize_filename(name: str) -> str:
     name = name.strip()
     name = re.sub(r'[\\/:*?"<>|]', "", name)
     name = re.sub(r"\s+", " ", name)
+
     return name
+
+
+def load_chain_reference():
+    with open(CHAINS_FILE, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def find_stores_file(chain_dir: Path) -> Path | None:
@@ -94,7 +103,8 @@ def find_stores_file(chain_dir: Path) -> Path | None:
         return None
 
     candidates = [
-        p for p in stores_subdir.iterdir()
+        p
+        for p in stores_subdir.iterdir()
         if p.is_file()
         and p.name.lower().startswith("stores")
         and ":" not in p.name
@@ -108,6 +118,7 @@ def find_stores_file(chain_dir: Path) -> Path | None:
             "Multiple stores files found in %s, using most recent",
             stores_subdir,
         )
+
         candidates.sort(
             key=lambda p: p.stat().st_mtime,
             reverse=True,
@@ -138,7 +149,8 @@ def read_xml_content(path: Path) -> bytes:
     if raw[:2] == b"PK":
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
             names = [
-                n for n in zf.namelist()
+                n
+                for n in zf.namelist()
                 if n.lower().endswith(".xml")
             ]
 
@@ -342,6 +354,8 @@ def save_changes_log(chain_key, changes):
 
 def main():
 
+    chains = load_chain_reference()
+
     for chain_dir in sorted(FEEDS_DIR.iterdir()):
 
         if not chain_dir.is_dir():
@@ -378,20 +392,43 @@ def main():
             )
             continue
 
+        chain_id = chain_info["chain_id"]
+
+        # The manually maintained reference registry is the
+        # source of truth for chain naming.
+        chain_reference = chains.get(chain_id)
+
+        if chain_reference is None:
+            logger.error(
+                "Chain ID %s is not present in %s -- skipping",
+                chain_id,
+                CHAINS_FILE,
+            )
+            continue
+
+        name_en_normalized = chain_reference.get(
+            "name_en_normalized"
+        )
+
+        if not name_en_normalized:
+            logger.error(
+                "Chain ID %s has no name_en_normalized in %s -- skipping",
+                chain_id,
+                CHAINS_FILE,
+            )
+            continue
+
+        safe_name = sanitize_filename(
+            name_en_normalized
+        )
+
+        output_file = STORES_DIR / f"{safe_name}.json"
+
         if not stores:
             logger.warning(
                 "Parsed 0 stores for %s -- check schema variant",
-                chain_id_from_path,
+                chain_id,
             )
-
-        chain_name = (
-            chain_info["chain_name"]
-            or chain_id_from_path
-        )
-
-        safe_name = sanitize_filename(chain_name)
-
-        output_file = STORES_DIR / f"{safe_name}.json"
 
         old_stores = load_existing(output_file)
 

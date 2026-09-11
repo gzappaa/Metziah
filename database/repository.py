@@ -46,77 +46,66 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SUPERMARKET_SOURCES_FILE = (
-    BASE_DIR
-    / "monitoring"
+CHAINS_FILE = (
+    Path(__file__).parent.parent
     / "data"
-    / "supermarket_sources.json"
+    / "reference"
+    / "chains.json"
 )
 
 
 def get_publishing_sources(
-    publishing_type: str,
+    client_name: str,
 ) -> list[dict]:
     """
-    Read supermarket_sources.json and return sources
-    matching the requested publishing type.
+    Read chains.json and return chains matching the
+    requested client.
 
-    The returned fields depend on the publishing type:
+    The returned fields are:
 
-        publishedprices:
-            name
-            url
-            credentials
+        chain_id
+        name
+        name_normalized
+        url
 
-        laibcatalog:
-            name
-            url
-            chain_id
-
-        binaprojects:
-            name
-            url
+    PublishedPricesClient additionally returns:
+        credentials
     """
 
-    with SUPERMARKET_SOURCES_FILE.open(
+    with CHAINS_FILE.open(
         encoding="utf-8"
     ) as file:
-        supermarkets = json.load(file)
+        chains = json.load(file)
 
     sources = []
 
-    for supermarket in supermarkets:
+    for chain_id, chain in chains.items():
 
-        for source in supermarket.get(
-            "sources",
-            []
-        ):
+        if chain.get("client") != client_name:
+            continue
 
-            if source.get("type") != publishing_type:
-                continue
+        result = {
+            "chain_id": chain_id,
+            "name": chain["Chain_name_store_file"],
+            "name_normalized": chain.get(
+                "name_en_normalized",
+                chain["Chain_name_store_file"],
+            ),
+            "url": chain["publishing_in"],
+        }
 
-            result = {
-                "name": supermarket["name"],
-                "url": source["url"],
-            }
+        if client_name == "PublishedPricesClient":
+            result["credentials"] = chain.get(
+                "credentials",
+                {},
+            )
 
-            if publishing_type == "publishedprices":
-
-                result["credentials"] = source.get(
-                    "credentials",
-                    []
-                )
-
-            elif publishing_type == "laibcatalog":
-
-                result["chain_id"] = source["chain_id"]
-
-            sources.append(result)
+        sources.append(result)
 
     logger.info(
         "Found %d %s sources",
         len(sources),
-        publishing_type,
+        client_name,
     )
 
     return sources
@@ -220,19 +209,36 @@ def upsert_stores(conn, stores: list) -> None:
         )
 
 
-def ensure_chain(conn, chain_id: str) -> None:
+def ensure_chain(
+    conn,
+    chain_id: str,
+    name_he_normalized: str,
+    name_en_normalized: str,
+) -> None:
     """
-    Makes sure the chain exists before inserting rows that reference it.
+    Makes sure the chain exists and is synchronized with chains.json
+    before inserting rows that reference it.
     """
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chains (chain_id)
-            VALUES (%s)
-            ON CONFLICT DO NOTHING
+            INSERT INTO chains (
+                chain_id,
+                name_he_normalized,
+                name_en_normalized
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT (chain_id)
+            DO UPDATE SET
+                name_he_normalized = EXCLUDED.name_he_normalized,
+                name_en_normalized = EXCLUDED.name_en_normalized
             """,
-            (chain_id,),
+            (
+                chain_id,
+                name_he_normalized,
+                name_en_normalized,
+            ),
         )
 
 
@@ -1126,6 +1132,9 @@ def insert_file_tracking(conn, files):
         - downloaded can change from false -> true if the file
           now exists locally.
         - downloaded=true is never reverted.
+        - file_size is set/updated whenever a non-null value comes
+          in (i.e. once the file is found on disk); never cleared
+          back to null once known.
         - loaded is never modified.
     """
 
@@ -1141,6 +1150,7 @@ def insert_file_tracking(conn, files):
             filename,
             file_date,
             downloaded,
+            file_size,
             loaded
         )
         VALUES (
@@ -1151,12 +1161,15 @@ def insert_file_tracking(conn, files):
             %(filename)s,
             %(file_date)s,
             %(downloaded)s,
+            %(file_size)s,
             false
         )
         ON CONFLICT (chain_id, filename)
         DO UPDATE SET
             downloaded =
-                file_tracking.downloaded OR EXCLUDED.downloaded
+                file_tracking.downloaded OR EXCLUDED.downloaded,
+            file_size =
+                COALESCE(EXCLUDED.file_size, file_tracking.file_size)
     """
 
     with conn.cursor() as cur:

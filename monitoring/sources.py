@@ -34,6 +34,8 @@ HEADERS = {
 
 OUTPUT_FILE = Path(__file__).parent / "data" / "supermarket_sources.json"
 
+CHAINS_FILE = Path(__file__).parent.parent / "data" / "reference" / "chains.json"
+
 
 SOURCE_TYPES = {
     "publishedprices.co.il": "publishedprices",
@@ -57,6 +59,10 @@ logger = logging.getLogger(__name__)
 
 source_changes_logger = setup_isolated_logging(
     "source_changes"
+)
+
+chains_registry_logger = setup_isolated_logging(
+    "chains_registry_changes"
 )
 
 
@@ -469,6 +475,157 @@ def load_existing(path: Path) -> dict:
         for supermarket in supermarkets
     }
 
+def load_chains(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        logger.warning(
+            "chains.json not found at %s",
+            path,
+        )
+        return {}
+
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as file:
+        return json.load(file)
+
+
+
+def load_chain_gov_names(
+    chains: dict[str, dict],
+) -> set[str]:
+    """
+    Load the set of Chain_name_gov_page values currently
+    present in the manually-curated chains.json registry.
+    """
+
+    return {
+        entry.get("Chain_name_gov_page", "")
+        for entry in chains.values()
+        if entry.get("Chain_name_gov_page")
+    }
+
+def check_chain_credentials(
+    supermarkets: list[dict],
+    chains: dict[str, dict],
+) -> list[str]:
+    """
+    Validate credentials scraped from the government page
+    against credentials stored in chains.json.
+
+    For each government username:
+        - the username must exist in chains.json under the
+          same Chain_name_gov_page
+        - the password must match
+
+    Passwords are never included in logs.
+    """
+
+    changes = []
+
+    for supermarket in supermarkets:
+        gov_name = supermarket["name"]
+
+        # Credentials are currently attached to every source
+        # belonging to the supermarket, so take them from the
+        # first source that contains them.
+        government_credentials = next(
+            (
+                source.get("credentials", [])
+                for source in supermarket.get("sources", [])
+                if source.get("credentials")
+            ),
+            [],
+        )
+
+        if not government_credentials:
+            continue
+
+        registry_credentials = []
+
+        for chain in chains.values():
+            if chain.get("Chain_name_gov_page") != gov_name:
+                continue
+
+            credential = chain.get("credentials")
+
+            if credential:
+                registry_credentials.append(credential)
+
+        registry_by_username = {
+            credential.get("username"): credential
+            for credential in registry_credentials
+            if credential.get("username")
+        }
+
+        for credential in government_credentials:
+            username = credential.get("username")
+            password = credential.get("password", "")
+
+            if not username:
+                continue
+
+            registry_credential = registry_by_username.get(
+                username
+            )
+
+            if registry_credential is None:
+                changes.append(
+                    f"CREDENTIAL MISSING FROM chains.json: "
+                    f"{gov_name} | user: {username}"
+                )
+                continue
+
+            if (
+                registry_credential.get("password", "")
+                != password
+            ):
+                changes.append(
+                    f"CHANGED PASSWORD: "
+                    f"{gov_name} | user: {username}"
+                )
+
+    return changes
+
+
+def check_chains_registry(
+    supermarkets: list[dict],
+    chain_names: set[str],
+) -> list[str]:
+    """
+    Compare the freshly scraped gov-page supermarket names
+    against the manually-curated chains.json registry.
+
+    This does not modify chains.json. It only reports:
+        - gov-page names with no matching chains.json entry
+          (a new chain needs to be added manually)
+        - chains.json entries whose gov-page name no longer
+          appears in the current gov scrape (possibly renamed
+          or delisted upstream)
+
+    Credential-level drift is checked separately by
+    check_chain_credentials().
+    """
+
+    scraped_names = {
+        supermarket["name"]
+        for supermarket in supermarkets
+    }
+
+    changes = []
+
+    for name in sorted(scraped_names - chain_names):
+        changes.append(
+            f"MISSING FROM chains.json: {name}"
+        )
+
+    for name in sorted(chain_names - scraped_names):
+        changes.append(
+            f"STALE IN chains.json (no longer in gov scrape): {name}"
+        )
+
+    return changes
+
 
 def credential_signature(
     credentials: list[dict],
@@ -698,6 +855,27 @@ def save_changes_log(
         )
 
 
+def save_chains_registry_changes_log(
+    changes: list[str],
+) -> None:
+
+    if not changes:
+        logger.info(
+            "chains.json is up to date with gov scrape"
+        )
+        return
+
+    chains_registry_logger.info(
+        "%d chains.json discrepancy(ies) detected",
+        len(changes),
+    )
+
+    for change in changes:
+        chains_registry_logger.info(
+            change
+        )
+
+
 def save_supermarket_sources(
     supermarkets: list[dict],
 ) -> None:
@@ -751,6 +929,32 @@ def main() -> None:
 
     save_changes_log(changes)
 
+    chains = load_chains(
+        CHAINS_FILE
+    )
+
+    chain_names = load_chain_gov_names(
+        chains
+    )
+
+    registry_changes = check_chains_registry(
+        supermarkets,
+        chain_names,
+    )
+
+    credential_changes = check_chain_credentials(
+        supermarkets,
+        chains,
+    )
+
+    save_chains_registry_changes_log(
+        registry_changes
+    )
+
+    save_chains_registry_changes_log(
+    credential_changes
+)
+
     save_supermarket_sources(
         supermarkets
     )
@@ -763,6 +967,16 @@ def main() -> None:
     else:
         logger.info(
             "No source changes"
+        )
+
+    if registry_changes:
+        logger.info(
+            "Found %d chains.json discrepancies",
+            len(registry_changes),
+        )
+    else:
+        logger.info(
+            "No chains.json discrepancies"
         )
 
     logger.info(

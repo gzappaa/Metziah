@@ -1,6 +1,6 @@
 SOURCES = [
     {
-        "name": "Hazi Hinam",
+        "name": "hazi hinam",
         "listing": {
             "base_url": "https://shop.hazi-hinam.co.il/Prices",
             "pagination": "numeric",
@@ -23,7 +23,7 @@ SOURCES = [
         "filename_source": "path",
     },
     {
-        "name": "Super-Pharm",
+        "name": "super pharm",
         "listing": {
             "base_url": "https://prices.super-pharm.co.il/",
             "pagination": "numeric",
@@ -44,7 +44,7 @@ SOURCES = [
         "filename_source": "path",
     },
     {
-        "name": "Shufersal",
+        "name": "shufersal",
         "listing": {
             "base_url": "https://prices.shufersal.co.il/",
             "pagination": "numeric",
@@ -68,9 +68,10 @@ SOURCES = [
         },
         "extraction_mode": "anchor",
         "filename_source": "path",
+        "file_size_column": 2,
     },
     {
-        "name": "City Market",
+        "name": "city market 2",
         "listing": {
             "base_url": "https://www.citymarket-shops.co.il/",
             "pagination": "numeric",
@@ -93,7 +94,7 @@ SOURCES = [
         "filename_source": "row",
     },
     {
-        "name": "Netiv Hesed",
+        "name": "netiv hesed",
         "listing": {
             "base_url": "https://app.netiv-hesed.com/",
             "pagination": None,

@@ -1,13 +1,12 @@
 import argparse
 import asyncio
-import json
 import logging
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 from logging_config import setup_general_logging
 from clients.publishedprices import PublishedPricesClient
@@ -18,6 +17,7 @@ from clients.html_client import HtmlFileLinkClient
 from clients.html_config import SOURCES as HTML_SOURCES
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
+from database.repository import get_publishing_sources
 
 
 setup_general_logging()
@@ -29,24 +29,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "feeds"
 TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 
-SOURCES_FILE = (
-    BASE_DIR
-    / "monitoring"
-    / "data"
-    / "supermarket_sources.json"
-)
-
 
 # Merged regex covering PublishedPrices, BinaProjects, and Laibcatalog
 # Stores filenames. Handles both hyphen-separated (date-time) and
 # concatenated (12-digit YYYYMMDDHHMM) timestamp formats, optional
 # subchain/store segments, optional "Full" suffix, and gz/xml/xml.gz
 # extensions.
-#
-# NOTE: not yet verified against real filenames from the HTML-based
-# sources (Hazi Hinam, Super-Pharm, Shufersal, City Market, Netiv
-# Hesed) or Carrefour/Mishnat Yosef/Wolt. Check real data before
-# relying on this in prod for those chains.
 GENERIC_STORES_FILE_RE = re.compile(
     r"^Stores(?:Full)?"
     r"(?P<chain_id>\d{13})"
@@ -146,9 +134,11 @@ def find_latest_stores_file(
     )
 
     for entry in response_json.get("aaData", []):
+
         fname = entry.get("fname", "")
 
         if "Stores" in fname:
+
             logger.info(
                 "PublishedPrices Stores candidate: %s",
                 fname,
@@ -220,7 +210,6 @@ def find_stores_file_recursive(
         if not fname:
             continue
 
-        # Heuristic: folders have no file extension
         if "." in fname:
             continue
 
@@ -269,97 +258,6 @@ def find_latest_stores_file_laibcatalog(
     )
 
 
-def load_sources(
-    source_type: str,
-) -> list[dict]:
-
-    with open(
-        SOURCES_FILE,
-        encoding="utf-8",
-    ) as f:
-
-        entries = json.load(f)
-
-    results = []
-
-    for entry in entries:
-
-        for source in entry.get(
-            "sources",
-            [],
-        ):
-
-            if source.get(
-                "type"
-            ) != source_type:
-                continue
-
-            results.append(
-                {
-                    "name": entry["name"],
-                    "url": source.get("url"),
-                    "credentials": source.get(
-                        "credentials",
-                        [],
-                    ),
-                    "chain_id": source.get("chain_id"),
-                }
-            )
-
-    return results
-
-
-def load_publishedprices_credentials(
-    source_type: str,
-) -> list[dict]:
-
-    with open(
-        SOURCES_FILE,
-        encoding="utf-8",
-    ) as f:
-
-        entries = json.load(f)
-
-    results = []
-
-    for entry in entries:
-
-        for source in entry.get(
-            "sources",
-            [],
-        ):
-
-            if source.get(
-                "type"
-            ) != source_type:
-                continue
-
-            for credential in source.get(
-                "credentials",
-                [],
-            ):
-
-                username = credential.get(
-                    "username"
-                )
-
-                if not username:
-                    continue
-
-                results.append(
-                    {
-                        "name": entry["name"],
-                        "username": username,
-                        "password": credential.get(
-                            "password",
-                            "",
-                        ),
-                    }
-                )
-
-    return results
-
-
 def get_storage_path(
     chain_id: str,
     data_dir: Path,
@@ -380,13 +278,7 @@ def save_stores_file(
     fetch_content: Callable[[], bytes],
 ) -> Path | None:
     """
-    Shared save path for sync downloaders: prepares the per-chain
-    folder (wiping it in test mode), skips the network call if the
-    file is already on disk, otherwise calls fetch_content() to get
-    the bytes, writes them, and removes stale Stores* files.
-
-    fetch_content is only invoked when a download is actually needed,
-    and any exception it raises is treated as a failed download.
+    Shared save path for sync downloaders.
     """
 
     folder = get_storage_path(
@@ -439,17 +331,6 @@ def save_stores_file(
 
         return None
 
-    for old_file in folder.glob("Stores*"):
-
-        if old_file.name != filename:
-
-            logger.info(
-                "REMOVE OLD: %s",
-                old_file.name,
-            )
-
-            old_file.unlink()
-
     return destination
 
 
@@ -461,8 +342,7 @@ async def save_stores_file_async(
     fetch_content,
 ) -> Path | None:
     """
-    Async counterpart to save_stores_file — same behavior, but
-    awaits fetch_content() instead of calling it directly.
+    Async counterpart to save_stores_file.
     """
 
     folder = get_storage_path(
@@ -515,17 +395,6 @@ async def save_stores_file_async(
 
         return None
 
-    for old_file in folder.glob("Stores*"):
-
-        if old_file.name != filename:
-
-            logger.info(
-                "REMOVE OLD: %s",
-                old_file.name,
-            )
-
-            old_file.unlink()
-
     return destination
 
 
@@ -543,11 +412,10 @@ def download_stores_publishedprices(
     )
 
     client = PublishedPricesClient(
-        username
+        username,
+        password,
     )
 
-    client.username = username
-    client.password = password
 
     logger.info(
         "Logging in and listing files for %s (%s)...",
@@ -583,11 +451,9 @@ def download_stores_publishedprices(
 
     def fetch_content() -> bytes:
 
-        response = client._get_with_retry(
+        return client.download_file(
             latest["url"]
         )
-
-        return response.content
 
     return save_stores_file(
         chain_id=latest["chain_id"],
@@ -610,24 +476,7 @@ def download_stores_binaprojects(
         else DATA_DIR
     )
 
-    client = BinaProjectsClient(
-        name
-    )
-
-    client.source_url = url
-
-    parsed = urlparse(url)
-
-    client.base_url = urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            "",
-            "",
-            "",
-            "",
-        )
-    )
+    client = BinaProjectsClient(url)
 
     logger.info(
         "Listing files for %s (BinaProjects)...",
@@ -635,20 +484,14 @@ def download_stores_binaprojects(
     )
 
     try:
-
-        client.get_main_page()
-
         files = client.get_hok_files(
             file_type=1
         )
-
     except Exception:
-
         logger.exception(
             "Failed getting file list for %s",
             name,
         )
-
         return None
 
     latest = find_latest_stores_file_binaprojects(
@@ -656,39 +499,20 @@ def download_stores_binaprojects(
     )
 
     if latest is None:
-
         logger.warning(
             "No Stores file found for %s",
             name,
         )
-
         return None
 
     def fetch_content() -> bytes:
-
-        download_response = client._get_with_retry(
-            f"{client.base_url}/Download.aspx",
-            params={
-                "FileNm": latest["filename"],
-            },
+        download_url = client.get_download_url(
+            latest["filename"]
         )
 
-        download_json = download_response.json()
-
-        if (
-            not download_json
-            or not download_json[0].get("SPath")
-        ):
-
-            raise RuntimeError(
-                f"No SPath returned for {latest['filename']}"
-            )
-
-        file_url = download_json[0]["SPath"]
-
-        response = client._get_with_retry(file_url)
-
-        return response.content
+        return client.download_file(
+            download_url
+        )
 
     return save_stores_file(
         chain_id=latest["chain_id"],
@@ -712,13 +536,9 @@ async def download_stores_laibcatalog(
         else DATA_DIR
     )
 
-    client = LaibcatalogClient(name)
-
-    # Bypass the DB-backed _configure()/_get_source() lookup — we
-    # already have url/chain_id from supermarket_sources.json,
-    # same pattern used for PublishedPricesClient above.
-    client.source_url = url
-    client.chain_id = chain_id
+    client = LaibcatalogClient(
+        chain_id
+    )
 
     logger.info(
         "Listing files for %s (Laibcatalog)...",
@@ -761,7 +581,9 @@ async def download_stores_laibcatalog(
             latest["filename"]
         )
 
-        return await client.download_file(download_url)
+        return await client.download_file(
+            download_url
+        )
 
     return await save_stores_file_async(
         chain_id=resolved_chain_id,
@@ -775,7 +597,6 @@ async def download_stores_laibcatalog(
 async def download_stores_carrefour(
     test: bool = False,
 ) -> Path | None:
-
 
     data_dir = (
         TEST_DATA_DIR
@@ -867,18 +688,6 @@ async def download_stores_html(
     source: dict,
     test: bool = False,
 ) -> Path | None:
-    """
-    Generic Stores downloader for every publisher configured in
-    clients/html_config.py (Hazi Hinam, Super-Pharm, Shufersal,
-    City Market, Netiv Hesed) — one function instead of five.
-
-    NOTE: only fetches the configured listing/category page as-is,
-    with the 'Stores' file_type params. Doesn't yet handle
-    pagination, sort params, or Shufersal's separate category
-    endpoint's own quirks — add if a Stores file turns out not to
-    be on page 1 for some chain. Also unverified: whether these
-    chains' Stores filenames match GENERIC_STORES_FILE_RE.
-    """
 
     data_dir = (
         TEST_DATA_DIR
@@ -891,7 +700,8 @@ async def download_stores_html(
     categories = source["categories"]
 
     stores_params = categories.get(
-        "file_types", {}
+        "file_types",
+        {},
     ).get("Stores")
 
     if stores_params is None:
@@ -981,11 +791,6 @@ async def download_stores_html(
 async def download_stores_mishnatyosef(
     test: bool = False,
 ) -> Path | None:
-    """
-    NOTE: key names in Mishnat Yosef's listing JSON haven't been
-    verified — assuming common 'name'/'fileName' + 'url'/'href'
-    style keys. Adjust once we've inspected a real response.
-    """
 
     data_dir = (
         TEST_DATA_DIR
@@ -1063,11 +868,6 @@ async def download_stores_mishnatyosef(
 async def download_stores_wolt(
     test: bool = False,
 ) -> Path | None:
-    """
-    Only checks the most recent date page (mirrors WoltClient.check()).
-    If Wolt doesn't republish Stores on every date page, this will
-    need to walk back through older pages until one is found.
-    """
 
     data_dir = (
         TEST_DATA_DIR
@@ -1120,7 +920,10 @@ async def download_stores_wolt(
 
     for url in file_urls:
 
-        filename = urlparse(url).path.rsplit("/", 1)[-1]
+        filename = urlparse(url).path.rsplit(
+            "/",
+            1,
+        )[-1]
 
         if not filename:
             continue
@@ -1172,23 +975,46 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    pp_sources = load_publishedprices_credentials(
-        "publishedprices"
+    pp_sources = get_publishing_sources(
+        "PublishedPricesClient"
     )
 
     logger.info(
-        "Found %d publishedprices sources",
+        "Found %d PublishedPrices sources",
         len(pp_sources),
     )
 
     for source in pp_sources:
 
+        credentials = source.get(
+            "credentials",
+            {},
+        )
+
+        username = credentials.get(
+            "username"
+        )
+
+        password = credentials.get(
+            "password",
+            "",
+        )
+
+        if not username:
+
+            logger.warning(
+                "Skipping %s: no username",
+                source["name"],
+            )
+
+            continue
+
         try:
 
             download_stores_publishedprices(
                 source["name"],
-                source["username"],
-                source["password"],
+                username,
+                password,
                 test=args.test,
             )
 
@@ -1199,12 +1025,12 @@ if __name__ == "__main__":
                 source["name"],
             )
 
-    bina_sources = load_sources(
-        "binaprojects"
+    bina_sources = get_publishing_sources(
+        "BinaProjectsClient"
     )
 
     logger.info(
-        "Found %d binaprojects sources",
+        "Found %d BinaProjects sources",
         len(bina_sources),
     )
 
@@ -1225,12 +1051,12 @@ if __name__ == "__main__":
                 source["name"],
             )
 
-    laib_sources = load_sources(
-        "laibcatalog"
+    laib_sources = get_publishing_sources(
+        "LaibcatalogClient"
     )
 
     logger.info(
-        "Found %d laibcatalog sources",
+        "Found %d Laibcatalog sources",
         len(laib_sources),
     )
 
