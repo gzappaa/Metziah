@@ -23,3 +23,4 @@ data/notified_promotions.log
 tests_all.txt
 inspection/reports
 data/reference/file_tracking.csv
+discard*

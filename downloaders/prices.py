@@ -1,4 +1,4 @@
-# downloaders/pricesfull.py
+# downloaders/prices.py
 
 import argparse
 import asyncio
@@ -32,44 +32,46 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "feeds"
 TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 
+IGNORED_BINA_STORES = {
+    ("7290058156016", "017", "396"),
+}
 
-# Extracts the time component that trails the date in PriceFull filenames,
-# used only to break ties when a store has more than one PriceFull file
-# on the same day. Falls back to "000000" (arbitrary but stable) when a
-# source's filenames don't carry a time component.
-TIME_SUFFIX_RE = re.compile(r"\d{8}-?(\d{3,6})")
-
-
+# Extracts the time component from PriceFull filenames.
+# Used to determine which same-day PriceFull is the latest for each store.
 def _extract_time_suffix(filename: str) -> str:
-    match = TIME_SUFFIX_RE.search(filename)
+    date_match = re.search(
+        r"-(\d{8})-(\d+)(?:\.[^.]+)?$",
+        filename,
+    )
 
-    if not match:
+    if not date_match:
         return "000000"
 
-    return match.group(1).zfill(6)
+    value = date_match.group(2)
+
+    if len(value) == 3:
+        return value + "000"
+
+    if len(value) == 4:
+        return value + "00"
+
+    if len(value) == 6:
+        return value
+
+    return "000000"
 
 
-def find_latest_pricefull_files_per_store(
+def find_price_files(
     files: list[dict],
     filename_key: str,
-    date_key: str | None = None,
-    date_format: str | None = None,
-) -> dict[tuple, dict]:
+) -> list[dict]:
     """
-    Generic latest-PriceFull-file finder, grouped by
-    (chain_id, sub_chain_id, store_id, file_date) — unlike Stores,
-    PriceFull needs one winner per store per day, not one per chain.
-
-    Reuses parse_filename() from utils/file_tracking so PriceFull
-    filename rules live in exactly one place.
-
-    date_key/date_format: for sources where the timestamp lives in a
-    separate metadata field rather than being embedded in the filename
-    (e.g. BinaProjects' 'DateFile'). If omitted, the time is parsed
-    from the filename itself for same-day tie-breaking.
+    Find all Price files published today.
     """
 
-    latest: dict[tuple, dict] = {}
+    price_files = []
+
+    today = date.today()
 
     for file in files:
 
@@ -83,56 +85,26 @@ def find_latest_pricefull_files_per_store(
         except ValueError:
             continue
 
-        if record["file_type"] != "PriceFull":
+        if record["file_type"] != "Price":
             continue
 
-        if record["sub_chain_id"] is None or record["store_id"] is None:
+        if record["store_id"] is None:
             continue
 
-        key = (
-            record["chain_id"],
-            record["sub_chain_id"],
-            record["store_id"],
-            record["file_date"],
-        )
+        if record["file_date"] != today:
+            continue
 
-        if date_key is not None:
-
-            date_text = (file.get(date_key) or "").strip()
-
-            if not date_text:
-                continue
-
-            try:
-                sort_key = datetime.strptime(
-                    date_text,
-                    date_format,
-                )
-            except ValueError:
-                continue
-
-        else:
-            sort_key = (
-                record["file_date"],
-                _extract_time_suffix(filename),
-            )
-
-        if (
-            key not in latest
-            or sort_key > latest[key]["sort_key"]
-        ):
-            latest[key] = {
+        price_files.append(
+            {
                 **file,
                 "filename": filename,
                 "chain_id": record["chain_id"],
-                "sub_chain_id": record["sub_chain_id"],
                 "store_id": record["store_id"],
                 "file_date": record["file_date"],
-                "sort_key": sort_key,
             }
+        )
 
-    return latest
-
+    return price_files
 
 def _trim_for_test(
     latest_files: dict[tuple, dict],
@@ -155,53 +127,19 @@ def _trim_for_test(
 
 def get_storage_path(
     chain_id: str,
-    sub_chain_id: str,
     store_id: str,
     data_dir: Path,
 ) -> Path:
-
     return (
         data_dir
         / chain_id
-        / sub_chain_id
         / store_id
-        / "pricesfull"
+        / "prices"
     )
 
 
-def _cleanup_old_pricefull_files(
-    folder: Path,
-    keep_filename: str,
-    file_date: date,
-) -> None:
-    """
-    Remove older same-day PriceFull files for this store, now that
-    keep_filename has been written successfully.
-    """
-
-    for old_file in folder.glob("PriceFull*.gz"):
-
-        if old_file.name == keep_filename:
-            continue
-
-        try:
-            old_record = parse_filename(old_file.name)
-        except ValueError:
-            continue
-
-        if old_record["file_date"] == file_date:
-
-            logger.info(
-                "REMOVE OLD SAME DAY: %s",
-                old_file.name,
-            )
-
-            old_file.unlink()
-
-
-def save_pricefull_file(
+def save_price_file(
     chain_id: str,
-    sub_chain_id: str,
     store_id: str,
     filename: str,
     file_date: date,
@@ -209,13 +147,9 @@ def save_pricefull_file(
     test: bool,
     fetch_content,
 ) -> Path | None:
-    """
-    Shared save path for sync downloaders.
-    """
 
     folder = get_storage_path(
         chain_id,
-        sub_chain_id,
         store_id,
         data_dir,
     )
@@ -263,19 +197,10 @@ def save_pricefull_file(
 
         return None
 
-    if not test:
-        _cleanup_old_pricefull_files(
-            folder,
-            filename,
-            file_date,
-        )
-
     return destination
 
-
-async def save_pricefull_file_async(
+async def save_price_file_async(
     chain_id: str,
-    sub_chain_id: str,
     store_id: str,
     filename: str,
     file_date: date,
@@ -283,13 +208,9 @@ async def save_pricefull_file_async(
     test: bool,
     fetch_content,
 ) -> Path | None:
-    """
-    Async counterpart to save_pricefull_file.
-    """
 
     folder = get_storage_path(
         chain_id,
-        sub_chain_id,
         store_id,
         data_dir,
     )
@@ -336,13 +257,6 @@ async def save_pricefull_file_async(
         )
 
         return None
-
-    if not test:
-        _cleanup_old_pricefull_files(
-            folder,
-            filename,
-            file_date,
-        )
 
     return destination
 
@@ -422,7 +336,7 @@ def list_publishedprices_entries_recursive(
     return entries
 
 
-def download_pricefull_publishedprices(
+def download_price_publishedprices(
     name: str,
     username: str,
     password: str = "",
@@ -460,42 +374,36 @@ def download_pricefull_publishedprices(
         client
     )
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         entries,
         filename_key="fname",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for %s",
+            "No Price files found for %s",
             name,
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        name,
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        def fetch_content(latest=latest) -> bytes:
+        def fetch_content(price_file=price_file) -> bytes:
             download_url = (
                 f"{PublishedPricesClient.BASE_URL}"
-                f"/file/d/{latest['path']}"
+                f"/file/d/{price_file['path']}"
             )
             return client.download_file(
                 download_url
             )
 
-        result = save_pricefull_file(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
-            filename=latest["filename"],
-            file_date=latest["file_date"],
+        result = save_price_file(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -507,7 +415,7 @@ def download_pricefull_publishedprices(
     return downloaded_files
 
 
-def download_pricefull_binaprojects(
+def download_price_binaprojects(
     name: str,
     url: str,
     test: bool = False,
@@ -527,9 +435,9 @@ def download_pricefull_binaprojects(
     )
 
     try:
-        # file_type=4 -> PriceFull, per the documented WFileType mapping.
+        # file_type=2 -> Price, per the documented WFileType mapping.
         files = client.get_hok_files(
-            file_type=4
+            file_type=2
         )
     except Exception:
         logger.exception(
@@ -538,43 +446,65 @@ def download_pricefull_binaprojects(
         )
         return []
 
-    latest_files = find_latest_pricefull_files_per_store(
+    filtered_files = []
+
+    for file in files:
+        filename = (file.get("FileNm") or "").strip()
+
+        if not filename:
+            continue
+
+        try:
+            record = parse_filename(filename)
+        except ValueError:
+            continue
+
+        key = (
+            record["chain_id"],
+            record["sub_chain_id"],
+            record["store_id"],
+        )
+
+        if key in IGNORED_BINA_STORES:
+            logger.info(
+                "IGNORING BinaProjects file: %s",
+                filename,
+            )
+            continue
+
+        filtered_files.append(file)
+
+    files = filtered_files
+
+    price_files = find_price_files(
         files,
         filename_key="FileNm",
-        date_key="DateFile",
-        date_format="%H:%M %d/%m/%Y",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for %s",
+            "No Price files found for %s",
             name,
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        name,
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        def fetch_content(latest=latest) -> bytes:
+        def fetch_content(price_file=price_file) -> bytes:
             download_url = client.get_download_url(
-                latest["filename"]
+                price_file["filename"]
             )
             return client.download_file(
                 download_url
             )
 
-        result = save_pricefull_file(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
-            filename=latest["filename"],
-            file_date=latest["file_date"],
+        result = save_price_file(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -585,8 +515,7 @@ def download_pricefull_binaprojects(
 
     return downloaded_files
 
-
-async def download_pricefull_laibcatalog(
+async def download_price_laibcatalog(
     name: str,
     url: str,
     chain_id: str,
@@ -618,45 +547,41 @@ async def download_pricefull_laibcatalog(
         )
         return []
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         files,
         filename_key="fileName",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for %s",
+            "No Price files found for %s",
             name,
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        name,
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
         resolved_chain_id = (
-            latest.get("chain_id") or chain_id
+            price_file.get("chain_id") or chain_id
         )
 
-        async def fetch_content(latest=latest) -> bytes:
+        async def fetch_content(
+            price_file=price_file,
+        ) -> bytes:
             download_url = client.build_download_url(
-                latest["filename"]
+                price_file["filename"]
             )
             return await client.download_file(
                 download_url
             )
 
-        result = await save_pricefull_file_async(
+        result = await save_price_file_async(
             chain_id=resolved_chain_id,
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
-            filename=latest["filename"],
-            file_date=latest["file_date"],
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -667,8 +592,7 @@ async def download_pricefull_laibcatalog(
 
     return downloaded_files
 
-
-async def download_pricefull_carrefour(
+async def download_price_carrefour(
     test: bool = False,
 ) -> list[Path]:
 
@@ -716,44 +640,40 @@ async def download_pricefull_carrefour(
                     {"filename": filename}
                 )
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         normalized,
         filename_key="filename",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for Carrefour"
+            "No Price files found for Carrefour"
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        "Carrefour",
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        filename = latest["filename"]
+        filename = price_file["filename"]
 
         download_url = urljoin(
             f"{client.base_url}/",
             f"{path.strip('/')}/{filename}",
         )
 
-        async def fetch_content(download_url=download_url) -> bytes:
+        async def fetch_content(
+            download_url=download_url,
+        ) -> bytes:
             return await client.download_file(
                 download_url
             )
 
-        result = await save_pricefull_file_async(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
+        result = await save_price_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
             filename=filename,
-            file_date=latest["file_date"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -764,8 +684,171 @@ async def download_pricefull_carrefour(
 
     return downloaded_files
 
+async def get_html_page(
+    client: HtmlFileLinkClient,
+    page: int,
+    page_param: str,
+    params: dict | None = None,
+):
+    request_params = dict(params or {})
+    request_params[page_param] = page
 
-async def download_pricefull_html(
+    return await client.get_candidates(
+        params=request_params
+    )
+
+
+def _page_fingerprint(candidates) -> tuple:
+    return tuple(
+        (
+            getattr(candidate, "filename", None),
+            getattr(candidate, "href", None),
+            getattr(candidate, "text", None),
+        )
+        for candidate in candidates
+    )
+
+
+async def get_all_html_candidates(
+    client: HtmlFileLinkClient,
+    listing_config: dict,
+) -> list:
+    pagination = listing_config.get("pagination")
+
+    if pagination is None:
+        return await client.get_candidates()
+
+    if pagination != "numeric":
+        raise ValueError(
+            f"Unsupported pagination type for "
+            f"{client.name}: {pagination!r}"
+        )
+
+    page_param = listing_config["page_param"]
+
+    page_batch_size = listing_config.get(
+        "concurrency",
+        10,
+    )
+
+    all_candidates = []
+    seen_pages = set()
+    page = 1
+
+    while True:
+        pages = list(
+            range(
+                page,
+                page + page_batch_size,
+            )
+        )
+
+        logger.info(
+            "%s: requesting pages %d-%d",
+            client.name,
+            pages[0],
+            pages[-1],
+        )
+
+        results = await asyncio.gather(
+            *(
+                get_html_page(
+                    client,
+                    current_page,
+                    page_param,
+                    listing_config.get("price_params"),
+                )
+                for current_page in pages
+            ),
+            return_exceptions=True,
+        )
+
+        stop_after_batch = False
+
+        for current_page, candidates in zip(
+            pages,
+            results,
+        ):
+            if isinstance(candidates, Exception):
+                logger.error(
+                    "%s: page %d failed: %s",
+                    client.name,
+                    current_page,
+                    candidates,
+                )
+                continue
+
+            if not candidates:
+                logger.info(
+                    "%s: page %d is empty",
+                    client.name,
+                    current_page,
+                )
+                stop_after_batch = True
+                continue
+
+            fingerprint = _page_fingerprint(candidates)
+
+            if fingerprint in seen_pages:
+                logger.info(
+                    "%s: page %d repeats a previous page",
+                    client.name,
+                    current_page,
+                )
+                stop_after_batch = True
+                continue
+
+            seen_pages.add(fingerprint)
+
+            today_count = 0
+            recognized_count = 0
+            older_count = 0
+
+            for candidate in candidates:
+                filename = getattr(
+                    candidate,
+                    "filename",
+                    None,
+                )
+
+                if not filename:
+                    continue
+
+                try:
+                    record = parse_filename(filename)
+                except ValueError:
+                    continue
+
+                recognized_count += 1
+
+                if record["file_date"] == date.today():
+                    today_count += 1
+                    all_candidates.append(candidate)
+
+                elif record["file_date"] < date.today():
+                    older_count += 1
+
+            logger.info(
+                "%s: page %d -> %d candidates, "
+                "%d recognized, %d today, %d older",
+                client.name,
+                current_page,
+                len(candidates),
+                recognized_count,
+                today_count,
+                older_count,
+            )
+
+        if stop_after_batch:
+            break
+
+        page += page_batch_size
+
+    return all_candidates
+
+
+
+async def download_price_html(
     source: dict,
     test: bool = False,
 ) -> list[Path]:
@@ -780,19 +863,14 @@ async def download_pricefull_html(
     listing = source["listing"]
     categories = source["categories"]
 
-    # NOTE: assumes each HTML source's html_config.py entry defines a
-    # "PriceFull" key under categories["file_types"], mirroring how
-    # "Stores" is configured in stores.py. Verify against live config —
-    # some sources may only ever publish Price/PriceFull under a
-    # combined filter param rather than a distinct one.
-    pricefull_params = categories.get(
+    price_params = categories.get(
         "file_types",
         {},
-    ).get("PriceFull")
+    ).get("Price")
 
-    if pricefull_params is None:
+    if price_params is None:
         logger.warning(
-            "No 'PriceFull' file_type configured for %s",
+            "No 'Price' file_type configured for %s",
             name,
         )
         return []
@@ -817,8 +895,12 @@ async def download_pricefull_html(
     )
 
     try:
-        candidates = await client.get_candidates(
-            params=pricefull_params
+        candidates = await get_all_html_candidates(
+            client,
+            {
+                **listing,
+                "price_params": price_params,
+            },
         )
 
     except Exception:
@@ -834,7 +916,7 @@ async def download_pricefull_html(
         if candidate.filename
     }
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         [
             {"filename": filename}
             for filename in href_by_filename
@@ -842,35 +924,29 @@ async def download_pricefull_html(
         filename_key="filename",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for %s",
+            "No Price files found for %s",
             name,
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        name,
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        filename = latest["filename"]
+        filename = price_file["filename"]
         href = href_by_filename[filename]
 
         async def fetch_content(href=href) -> bytes:
             response = await client._get_with_retry(href)
             return response.content
 
-        result = await save_pricefull_file_async(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
+        result = await save_price_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
             filename=filename,
-            file_date=latest["file_date"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -882,7 +958,7 @@ async def download_pricefull_html(
     return downloaded_files
 
 
-async def download_pricefull_mishnatyosef(
+async def download_price_mishnatyosef(
     test: bool = False,
 ) -> list[Path]:
 
@@ -912,7 +988,7 @@ async def download_pricefull_mishnatyosef(
 
     for entry in files:
 
-        if entry.get("type") != "PriceFull":
+        if entry.get("type") != "Price":
             continue
 
         filename = entry.get("name")
@@ -927,38 +1003,32 @@ async def download_pricefull_mishnatyosef(
 
         href_by_filename[filename] = url
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         normalized,
         filename_key="filename",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for Mishnat Yosef"
+            "No Price files found for Mishnat Yosef"
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        "Mishnat Yosef",
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        filename = latest["filename"]
+        filename = price_file["filename"]
         href = href_by_filename[filename]
 
         async def fetch_content(href=href) -> bytes:
             return await client.download_file(href)
 
-        result = await save_pricefull_file_async(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
+        result = await save_price_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
             filename=filename,
-            file_date=latest["file_date"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -970,7 +1040,7 @@ async def download_pricefull_mishnatyosef(
     return downloaded_files
 
 
-async def download_pricefull_wolt(
+async def download_price_wolt(
     test: bool = False,
 ) -> list[Path]:
 
@@ -1031,38 +1101,32 @@ async def download_pricefull_wolt(
 
         href_by_filename[filename] = url
 
-    latest_files = find_latest_pricefull_files_per_store(
+    price_files = find_price_files(
         normalized,
         filename_key="filename",
     )
 
-    if not latest_files:
+    if not price_files:
         logger.warning(
-            "No PriceFull files found for Wolt"
+            "No Price files found for Wolt"
         )
         return []
 
-    latest_files = _trim_for_test(
-        latest_files,
-        "Wolt",
-    ) if test else latest_files
-
     downloaded_files = []
 
-    for latest in latest_files.values():
+    for price_file in price_files:
 
-        filename = latest["filename"]
+        filename = price_file["filename"]
         href = href_by_filename[filename]
 
         async def fetch_content(href=href) -> bytes:
             return await client.download_file(href)
 
-        result = await save_pricefull_file_async(
-            chain_id=latest["chain_id"],
-            sub_chain_id=latest["sub_chain_id"],
-            store_id=latest["store_id"],
+        result = await save_price_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
             filename=filename,
-            file_date=latest["file_date"],
+            file_date=price_file["file_date"],
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
@@ -1125,7 +1189,7 @@ if __name__ == "__main__":
         try:
 
             all_downloaded.extend(
-                download_pricefull_publishedprices(
+                download_price_publishedprices(
                     source["name"],
                     username,
                     password,
@@ -1154,7 +1218,7 @@ if __name__ == "__main__":
         try:
 
             all_downloaded.extend(
-                download_pricefull_binaprojects(
+                download_price_binaprojects(
                     source["name"],
                     source["url"],
                     test=args.test,
@@ -1192,7 +1256,7 @@ if __name__ == "__main__":
 
             all_downloaded.extend(
                 asyncio.run(
-                    download_pricefull_laibcatalog(
+                    download_price_laibcatalog(
                         source["name"],
                         source["url"],
                         source["chain_id"],
@@ -1219,7 +1283,7 @@ if __name__ == "__main__":
 
             all_downloaded.extend(
                 asyncio.run(
-                    download_pricefull_html(
+                    download_price_html(
                         source,
                         test=args.test,
                     )
@@ -1237,7 +1301,7 @@ if __name__ == "__main__":
 
         all_downloaded.extend(
             asyncio.run(
-                download_pricefull_carrefour(
+                download_price_carrefour(
                     test=args.test
                 )
             )
@@ -1253,7 +1317,7 @@ if __name__ == "__main__":
 
         all_downloaded.extend(
             asyncio.run(
-                download_pricefull_mishnatyosef(
+                download_price_mishnatyosef(
                     test=args.test
                 )
             )
@@ -1269,7 +1333,7 @@ if __name__ == "__main__":
 
         all_downloaded.extend(
             asyncio.run(
-                download_pricefull_wolt(
+                download_price_wolt(
                     test=args.test
                 )
             )
@@ -1282,6 +1346,6 @@ if __name__ == "__main__":
         )
 
     logger.info(
-        "Finished. Downloaded %d PriceFull file(s) total.",
+        "Finished. Downloaded %d Price file(s) total.",
         len(all_downloaded),
     )

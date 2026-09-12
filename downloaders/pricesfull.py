@@ -32,39 +32,31 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "feeds"
 TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
 
+IGNORED_BINA_STORES = {
+    ("7290058156016", "017", "396"),
+}
 
 # Extracts the time component from PriceFull filenames.
-
-# Used to determine which same-day PriceFull i
+# Used to determine which same-day PriceFull is the latest for each store.
 def _extract_time_suffix(filename: str) -> str:
-    date_match = re.search(r"(?<!\d)\d{8}", filename)
+    date_match = re.search(
+        r"-(\d{8})-(\d+)(?:\.[^.]+)?$",
+        filename,
+    )
 
     if not date_match:
         return "000000"
 
-    suffix = filename[date_match.end():]
+    value = date_match.group(2)
 
-    # Remove the separator between date and time, if present.
-    suffix = suffix.lstrip("-")
+    if len(value) == 3:
+        return value + "000"
 
-    # YYYYMMDD-HHMMSS / YYYYMMDD-HHMM
-    if suffix and suffix[0].isdigit():
-        match = re.match(r"\d{3,6}", suffix)
+    if len(value) == 4:
+        return value + "00"
 
-        if match:
-            value = match.group(0)
-
-            if len(value) == 3:
-                # 020 -> 00:02:00
-                return value + "000"
-
-            if len(value) == 4:
-                # 0515 -> 05:15:00
-                return value + "00"
-
-            if len(value) == 6:
-                # 051500 -> 05:15:00
-                return value
+    if len(value) == 6:
+        return value
 
     return "000000"
 
@@ -539,6 +531,36 @@ def download_pricefull_binaprojects(
         )
         return []
 
+    filtered_files = []
+
+    for file in files:
+        filename = (file.get("FileNm") or "").strip()
+
+        if not filename:
+            continue
+
+        try:
+            record = parse_filename(filename)
+        except ValueError:
+            continue
+
+        key = (
+            record["chain_id"],
+            record["sub_chain_id"],
+            record["store_id"],
+        )
+
+        if key in IGNORED_BINA_STORES:
+            logger.info(
+                "IGNORING BinaProjects file: %s",
+                filename,
+            )
+            continue
+
+        filtered_files.append(file)
+
+    files = filtered_files
+
     latest_files = find_latest_pricefull_files_per_store(
         files,
         filename_key="FileNm",
@@ -762,6 +784,169 @@ async def download_pricefull_carrefour(
 
     return downloaded_files
 
+async def get_html_page(
+    client: HtmlFileLinkClient,
+    page: int,
+    page_param: str,
+    params: dict | None = None,
+):
+    request_params = dict(params or {})
+    request_params[page_param] = page
+
+    return await client.get_candidates(
+        params=request_params
+    )
+
+
+def _page_fingerprint(candidates) -> tuple:
+    return tuple(
+        (
+            getattr(candidate, "filename", None),
+            getattr(candidate, "href", None),
+            getattr(candidate, "text", None),
+        )
+        for candidate in candidates
+    )
+
+
+async def get_all_html_candidates(
+    client: HtmlFileLinkClient,
+    listing_config: dict,
+) -> list:
+    pagination = listing_config.get("pagination")
+
+    if pagination is None:
+        return await client.get_candidates()
+
+    if pagination != "numeric":
+        raise ValueError(
+            f"Unsupported pagination type for "
+            f"{client.name}: {pagination!r}"
+        )
+
+    page_param = listing_config["page_param"]
+
+    page_batch_size = listing_config.get(
+        "concurrency",
+        10,
+    )
+
+    all_candidates = []
+    seen_pages = set()
+    page = 1
+
+    while True:
+        pages = list(
+            range(
+                page,
+                page + page_batch_size,
+            )
+        )
+
+        logger.info(
+            "%s: requesting pages %d-%d",
+            client.name,
+            pages[0],
+            pages[-1],
+        )
+
+        results = await asyncio.gather(
+            *(
+                get_html_page(
+                    client,
+                    current_page,
+                    page_param,
+                    listing_config.get("pricefull_params"),
+                )
+                for current_page in pages
+            ),
+            return_exceptions=True,
+        )
+
+        stop_after_batch = False
+
+        for current_page, candidates in zip(
+            pages,
+            results,
+        ):
+            if isinstance(candidates, Exception):
+                logger.error(
+                    "%s: page %d failed: %s",
+                    client.name,
+                    current_page,
+                    candidates,
+                )
+                continue
+
+            if not candidates:
+                logger.info(
+                    "%s: page %d is empty",
+                    client.name,
+                    current_page,
+                )
+                stop_after_batch = True
+                continue
+
+            fingerprint = _page_fingerprint(candidates)
+
+            if fingerprint in seen_pages:
+                logger.info(
+                    "%s: page %d repeats a previous page",
+                    client.name,
+                    current_page,
+                )
+                stop_after_batch = True
+                continue
+
+            seen_pages.add(fingerprint)
+
+            today_count = 0
+            recognized_count = 0
+            older_count = 0
+
+            for candidate in candidates:
+                filename = getattr(
+                    candidate,
+                    "filename",
+                    None,
+                )
+
+                if not filename:
+                    continue
+
+                try:
+                    record = parse_filename(filename)
+                except ValueError:
+                    continue
+
+                recognized_count += 1
+
+                if record["file_date"] == date.today():
+                    today_count += 1
+                    all_candidates.append(candidate)
+
+                elif record["file_date"] < date.today():
+                    older_count += 1
+
+            logger.info(
+                "%s: page %d -> %d candidates, "
+                "%d recognized, %d today, %d older",
+                client.name,
+                current_page,
+                len(candidates),
+                recognized_count,
+                today_count,
+                older_count,
+            )
+
+        if stop_after_batch:
+            break
+
+        page += page_batch_size
+
+    return all_candidates
+
+
 
 async def download_pricefull_html(
     source: dict,
@@ -815,8 +1000,12 @@ async def download_pricefull_html(
     )
 
     try:
-        candidates = await client.get_candidates(
-            params=pricefull_params
+        candidates = await get_all_html_candidates(
+            client,
+            {
+                **listing,
+                "pricefull_params": pricefull_params,
+            },
         )
 
     except Exception:
