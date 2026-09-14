@@ -1,13 +1,7 @@
 # downloaders/promos.py
 
-import argparse
-import asyncio
 import logging
-import re
-import shutil
-from datetime import date, datetime
-from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from logging_config import setup_general_logging
 from clients.publishedprices import PublishedPricesClient
@@ -15,324 +9,35 @@ from clients.binaprojects import BinaProjectsClient
 from clients.laibcatalog import LaibcatalogClient
 from clients.carrefour import CarrefourClient
 from clients.html_client import HtmlFileLinkClient
-from clients.html_config import SOURCES as HTML_SOURCES
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
-from database.repository import get_publishing_sources
 
 from utils.file_tracking.parser_file_tracking import parse_filename
+
+from downloaders.common import (
+    get_data_dir,
+    filter_test_store_files,
+    list_publishedprices_entries_recursive,
+    filter_ignored_bina_stores,
+    normalize_carrefour_listing,
+    normalize_wolt_file_urls,
+    normalize_mishnatyosef_listing,
+    get_all_html_candidates,
+)
+from downloaders.delta_family import (
+    find_delta_files,
+    save_delta_file,
+    save_delta_file_async,
+)
+from downloaders.runner import run
 
 
 setup_general_logging()
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_DIR = BASE_DIR / "data" / "feeds"
-TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
-
-IGNORED_BINA_STORES = {
-    ("7290058156016", "017", "396"),
-}
-
-
-def _extract_time_suffix(filename: str) -> str:
-    date_match = re.search(
-        r"-(\d{8})-(\d+)(?:\.[^.]+)?$",
-        filename,
-    )
-
-    if not date_match:
-        return "000000"
-
-    value = date_match.group(2)
-
-    if len(value) == 3:
-        return value + "000"
-
-    if len(value) == 4:
-        return value + "00"
-
-    if len(value) == 6:
-        return value
-
-    return "000000"
-
-
-def find_promo_files(
-    files: list[dict],
-    filename_key: str,
-) -> list[dict]:
-    """
-    Find all Promo files published today.
-    """
-
-    promo_files = []
-
-    today = date.today()
-
-    for file in files:
-
-        filename = (file.get(filename_key) or "").strip()
-
-        if not filename:
-            continue
-
-        try:
-            record = parse_filename(filename)
-        except ValueError:
-            continue
-
-        if record["file_type"] != "Promo":
-            continue
-
-        if record["store_id"] is None:
-            continue
-
-        if record["file_date"] != today:
-            continue
-
-        promo_files.append(
-            {
-                **file,
-                "filename": filename,
-                "chain_id": record["chain_id"],
-                "store_id": record["store_id"],
-                "file_date": record["file_date"],
-            }
-        )
-
-    return promo_files
-
-def _trim_for_test(
-    latest_files: dict[tuple, dict],
-    name: str,
-    limit: int = 5,
-) -> dict[tuple, dict]:
-    if len(latest_files) <= limit:
-        return latest_files
-
-    logger.info(
-        "TEST MODE: keeping first %d stores for %s",
-        limit,
-        name,
-    )
-
-    return dict(
-        list(latest_files.items())[:limit]
-    )
-
-
-def get_storage_path(
-    chain_id: str,
-    store_id: str,
-    data_dir: Path,
-) -> Path:
-    return (
-        data_dir
-        / chain_id
-        / store_id
-        / "promos"
-    )
-
-
-def save_promo_file(
-    chain_id: str,
-    store_id: str,
-    filename: str,
-    file_date: date,
-    data_dir: Path,
-    test: bool,
-    fetch_content,
-) -> Path | None:
-
-    folder = get_storage_path(
-        chain_id,
-        store_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = folder / filename
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            filename,
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        filename,
-    )
-
-    try:
-        content = fetch_content()
-        destination.write_bytes(content)
-
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            filename,
-        )
-
-        return None
-
-    return destination
-
-async def save_promo_file_async(
-    chain_id: str,
-    store_id: str,
-    filename: str,
-    file_date: date,
-    data_dir: Path,
-    test: bool,
-    fetch_content,
-) -> Path | None:
-
-    folder = get_storage_path(
-        chain_id,
-        store_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = folder / filename
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            filename,
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        filename,
-    )
-
-    try:
-        content = await fetch_content()
-        destination.write_bytes(content)
-
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            filename,
-        )
-
-        return None
-
-    return destination
-
-
-def list_publishedprices_entries_recursive(
-    client: PublishedPricesClient,
-    cd: str = "/",
-    depth: int = 0,
-    max_depth: int = 2,
-) -> list[dict]:
-    """
-    Recursively lists raw file entries (not filtered to any file_type),
-    each tagged with its full 'path' for URL construction — needed
-    since PriceFull, unlike Stores, may have several live files at once
-    across different stores/folders.
-    """
-
-    try:
-        response_json = client.get_files(
-            cd=cd
-        )
-    except Exception:
-        logger.exception(
-            "Failed listing '%s' for %s",
-            cd,
-            client.username,
-        )
-        return []
-
-    entries = []
-
-    for entry in response_json.get("aaData", []):
-
-        fname = entry.get("fname")
-
-        if not fname:
-            continue
-
-        if "." not in fname:
-
-            if depth >= max_depth:
-
-                logger.warning(
-                    "Max recursion depth reached at %s/%s",
-                    cd.rstrip("/"),
-                    fname,
-                )
-
-                continue
-
-            sub_cd = f"{cd.rstrip('/')}/{fname}"
-
-            entries.extend(
-                list_publishedprices_entries_recursive(
-                    client,
-                    cd=sub_cd,
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                )
-            )
-
-            continue
-
-        path = (
-            f"{cd.strip('/')}/{fname}"
-            if cd != "/"
-            else fname
-        )
-
-        entries.append(
-            {
-                "fname": fname,
-                "path": path,
-            }
-        )
-
-    return entries
+FILE_TYPE = "Promo"
+SUBFOLDER = "promos"
 
 
 def download_promo_publishedprices(
@@ -340,49 +45,30 @@ def download_promo_publishedprices(
     username: str,
     password: str = "",
     test: bool = False,
-) -> list[Path]:
+) -> list:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
-    client = PublishedPricesClient(
-        username,
-        password,
-    )
+    data_dir = get_data_dir(test)
+    client = PublishedPricesClient(username, password)
 
     logger.info(
-        "Logging in and listing files for %s (%s)...",
-        name,
-        username,
+        "Logging in and listing files for %s (%s)...", name, username,
     )
 
     try:
         client.login()
-
     except Exception:
-        logger.exception(
-            "Failed logging in for %s",
-            username,
-        )
+        logger.exception("Failed logging in for %s", username)
         return []
 
-    entries = list_publishedprices_entries_recursive(
-        client
-    )
+    entries = list_publishedprices_entries_recursive(client)
 
-    promo_files = find_promo_files(
-        entries,
-        filename_key="fname",
-    )
+    promo_files = find_delta_files(entries, FILE_TYPE, filename_key="fname")
+
+    if test:
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning(
-            "No Promo files found for %s",
-            name,
-        )
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
         return []
 
     downloaded_files = []
@@ -391,14 +77,11 @@ def download_promo_publishedprices(
 
         def fetch_content(promo_file=promo_file) -> bytes:
             download_url = (
-                f"{PublishedPricesClient.BASE_URL}"
-                f"/file/d/{promo_file['path']}"
+                f"{PublishedPricesClient.BASE_URL}/file/d/{promo_file['path']}"
             )
-            return client.download_file(
-                download_url
-            )
+            return client.download_file(download_url)
 
-        result = save_promo_file(
+        result = save_delta_file(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=promo_file["filename"],
@@ -406,6 +89,7 @@ def download_promo_publishedprices(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -418,73 +102,29 @@ def download_promo_binaprojects(
     name: str,
     url: str,
     test: bool = False,
-) -> list[Path]:
+) -> list:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = BinaProjectsClient(url)
 
-    logger.info(
-        "Listing files for %s (BinaProjects)...",
-        name,
-    )
+    logger.info("Listing files for %s (BinaProjects)...", name)
 
     try:
         # file_type=3 -> Promo, per the documented WFileType mapping.
-        files = client.get_hok_files(
-            file_type=3
-        )
+        files = client.get_hok_files(file_type=3)
     except Exception:
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
+        logger.exception("Failed getting file list for %s", name)
         return []
 
-    filtered_files = []
+    files = filter_ignored_bina_stores(files, "FileNm", parse_filename)
 
-    for file in files:
-        filename = (file.get("FileNm") or "").strip()
+    promo_files = find_delta_files(files, FILE_TYPE, filename_key="FileNm")
 
-        if not filename:
-            continue
-
-        try:
-            record = parse_filename(filename)
-        except ValueError:
-            continue
-
-        key = (
-            record["chain_id"],
-            record["sub_chain_id"],
-            record["store_id"],
-        )
-
-        if key in IGNORED_BINA_STORES:
-            logger.info(
-                "IGNORING BinaProjects file: %s",
-                filename,
-            )
-            continue
-
-        filtered_files.append(file)
-
-    files = filtered_files
-
-    promo_files = find_promo_files(
-        files,
-        filename_key="FileNm",
-    )
+    if test:
+       promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning(
-            "No Promo files found for %s",
-            name,
-        )
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
         return []
 
     downloaded_files = []
@@ -492,14 +132,10 @@ def download_promo_binaprojects(
     for promo_file in promo_files:
 
         def fetch_content(promo_file=promo_file) -> bytes:
-            download_url = client.get_download_url(
-                promo_file["filename"]
-            )
-            return client.download_file(
-                download_url
-            )
+            download_url = client.get_download_url(promo_file["filename"])
+            return client.download_file(download_url)
 
-        result = save_promo_file(
+        result = save_delta_file(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=promo_file["filename"],
@@ -507,6 +143,7 @@ def download_promo_binaprojects(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -514,69 +151,45 @@ def download_promo_binaprojects(
 
     return downloaded_files
 
+
 async def download_promo_laibcatalog(
     name: str,
     url: str,
     chain_id: str,
     test: bool = False,
-) -> list[Path]:
+) -> list:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
+    data_dir = get_data_dir(test)
+    client = LaibcatalogClient(chain_id)
 
-    client = LaibcatalogClient(
-        chain_id
-    )
-
-    logger.info(
-        "Listing files for %s (Laibcatalog)...",
-        name,
-    )
+    logger.info("Listing files for %s (Laibcatalog)...", name)
 
     try:
         files = await client.get_files()
-
     except Exception:
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
+        logger.exception("Failed getting file list for %s", name)
         return []
 
-    promo_files = find_promo_files(
-        files,
-        filename_key="fileName",
-    )
+    promo_files = find_delta_files(files, FILE_TYPE, filename_key="fileName")
+
+    if test:
+       promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning(
-            "No Promo files found for %s",
-            name,
-        )
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
         return []
 
     downloaded_files = []
 
     for promo_file in promo_files:
 
-        resolved_chain_id = (
-            promo_file.get("chain_id") or chain_id
-        )
+        resolved_chain_id = promo_file.get("chain_id") or chain_id
 
-        async def fetch_content(
-            promo_file=promo_file,
-        ) -> bytes:
-            download_url = client.build_download_url(
-                promo_file["filename"]
-            )
-            return await client.download_file(
-                download_url
-            )
+        async def fetch_content(promo_file=promo_file) -> bytes:
+            download_url = client.build_download_url(promo_file["filename"])
+            return await client.download_file(download_url)
 
-        result = await save_promo_file_async(
+        result = await save_delta_file_async(
             chain_id=resolved_chain_id,
             store_id=promo_file["store_id"],
             filename=promo_file["filename"],
@@ -584,6 +197,7 @@ async def download_promo_laibcatalog(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -591,63 +205,30 @@ async def download_promo_laibcatalog(
 
     return downloaded_files
 
-async def download_promo_carrefour(
-    test: bool = False,
-) -> list[Path]:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
+async def download_promo_carrefour(test: bool = False) -> list:
 
+    data_dir = get_data_dir(test)
     client = CarrefourClient()
 
-    logger.info(
-        "Listing files for Carrefour..."
-    )
+    logger.info("Listing files for Carrefour...")
 
     try:
         listing = await client.get_files()
-
     except Exception:
-        logger.exception(
-            "Failed getting file list for Carrefour"
-        )
+        logger.exception("Failed getting file list for Carrefour")
         return []
 
     path = listing["path"]
-    files = listing["files"]
+    normalized = normalize_carrefour_listing(listing["files"])
 
-    normalized = []
+    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
 
-    for entry in files:
-
-        if isinstance(entry, str):
-            normalized.append(
-                {"filename": entry}
-            )
-        else:
-            filename = (
-                entry.get("name")
-                or entry.get("fileName")
-                or entry.get("Name")
-            )
-
-            if filename:
-                normalized.append(
-                    {"filename": filename}
-                )
-
-    promo_files = find_promo_files(
-        normalized,
-        filename_key="filename",
-    )
+    if test:
+       promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning(
-            "No Promo files found for Carrefour"
-        )
+        logger.warning("No %s files found for Carrefour", FILE_TYPE)
         return []
 
     downloaded_files = []
@@ -657,18 +238,13 @@ async def download_promo_carrefour(
         filename = promo_file["filename"]
 
         download_url = urljoin(
-            f"{client.base_url}/",
-            f"{path.strip('/')}/{filename}",
+            f"{client.base_url}/", f"{path.strip('/')}/{filename}",
         )
 
-        async def fetch_content(
-            download_url=download_url,
-        ) -> bytes:
-            return await client.download_file(
-                download_url
-            )
+        async def fetch_content(download_url=download_url) -> bytes:
+            return await client.download_file(download_url)
 
-        result = await save_promo_file_async(
+        result = await save_delta_file_async(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=filename,
@@ -676,6 +252,7 @@ async def download_promo_carrefour(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -683,201 +260,22 @@ async def download_promo_carrefour(
 
     return downloaded_files
 
-async def get_html_page(
-    client: HtmlFileLinkClient,
-    page: int,
-    page_param: str,
-    params: dict | None = None,
-):
-    request_params = dict(params or {})
-    request_params[page_param] = page
 
-    return await client.get_candidates(
-        params=request_params
-    )
+async def download_promo_html(source: dict, test: bool = False) -> list:
 
-
-def _page_fingerprint(candidates) -> tuple:
-    return tuple(
-        (
-            getattr(candidate, "filename", None),
-            getattr(candidate, "href", None),
-            getattr(candidate, "text", None),
-        )
-        for candidate in candidates
-    )
-
-
-async def get_all_html_candidates(
-    client: HtmlFileLinkClient,
-    listing_config: dict,
-) -> list:
-    pagination = listing_config.get("pagination")
-
-    if pagination is None:
-        return await client.get_candidates()
-
-    if pagination != "numeric":
-        raise ValueError(
-            f"Unsupported pagination type for "
-            f"{client.name}: {pagination!r}"
-        )
-
-    page_param = listing_config["page_param"]
-
-    page_batch_size = listing_config.get(
-        "concurrency",
-        10,
-    )
-
-    all_candidates = []
-    seen_pages = set()
-    page = 1
-
-    while True:
-        pages = list(
-            range(
-                page,
-                page + page_batch_size,
-            )
-        )
-
-        logger.info(
-            "%s: requesting pages %d-%d",
-            client.name,
-            pages[0],
-            pages[-1],
-        )
-
-        results = await asyncio.gather(
-            *(
-                get_html_page(
-                    client,
-                    current_page,
-                    page_param,
-                    listing_config.get("promo_params"),
-                )
-                for current_page in pages
-            ),
-            return_exceptions=True,
-        )
-
-        stop_after_batch = False
-
-        for current_page, candidates in zip(
-            pages,
-            results,
-        ):
-            if isinstance(candidates, Exception):
-                logger.error(
-                    "%s: page %d failed: %s",
-                    client.name,
-                    current_page,
-                    candidates,
-                )
-                continue
-
-            if not candidates:
-                logger.info(
-                    "%s: page %d is empty",
-                    client.name,
-                    current_page,
-                )
-                stop_after_batch = True
-                continue
-
-            fingerprint = _page_fingerprint(candidates)
-
-            if fingerprint in seen_pages:
-                logger.info(
-                    "%s: page %d repeats a previous page",
-                    client.name,
-                    current_page,
-                )
-                stop_after_batch = True
-                continue
-
-            seen_pages.add(fingerprint)
-
-            today_count = 0
-            recognized_count = 0
-            older_count = 0
-
-            for candidate in candidates:
-                filename = getattr(
-                    candidate,
-                    "filename",
-                    None,
-                )
-
-                if not filename:
-                    continue
-
-                try:
-                    record = parse_filename(filename)
-                except ValueError:
-                    continue
-
-                recognized_count += 1
-
-                if record["file_date"] == date.today():
-                    today_count += 1
-                    all_candidates.append(candidate)
-
-                elif record["file_date"] < date.today():
-                    older_count += 1
-
-            logger.info(
-                "%s: page %d -> %d candidates, "
-                "%d recognized, %d today, %d older",
-                client.name,
-                current_page,
-                len(candidates),
-                recognized_count,
-                today_count,
-                older_count,
-            )
-
-        if stop_after_batch:
-            break
-
-        page += page_batch_size
-
-    return all_candidates
-
-
-
-async def download_promo_html(
-    source: dict,
-    test: bool = False,
-) -> list[Path]:
-
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
+    data_dir = get_data_dir(test)
 
     name = source["name"]
     listing = source["listing"]
     categories = source["categories"]
 
-    promo_params = categories.get(
-        "file_types",
-        {},
-    ).get("Promo")
+    promo_params = categories.get("file_types", {}).get(FILE_TYPE)
 
     if promo_params is None:
-        logger.warning(
-            "No 'Promo' file_type configured for %s",
-            name,
-        )
+        logger.warning("No '%s' file_type configured for %s", FILE_TYPE, name)
         return []
 
-    base_url = categories.get(
-        "endpoint",
-        listing["base_url"],
-    )
+    base_url = categories.get("endpoint", listing["base_url"])
 
     client = HtmlFileLinkClient(
         name=name,
@@ -888,25 +286,17 @@ async def download_promo_html(
         filename_param=source.get("filename_param"),
     )
 
-    logger.info(
-        "Listing files for %s (HTML)...",
-        name,
-    )
+    logger.info("Listing files for %s (HTML)...", name)
 
     try:
         candidates = await get_all_html_candidates(
             client,
-            {
-                **listing,
-                "promo_params": promo_params,
-            },
+            {**listing, "file_type_params": promo_params},
+            "file_type_params",
+            parse_filename,
         )
-
     except Exception:
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
+        logger.exception("Failed getting file list for %s", name)
         return []
 
     href_by_filename = {
@@ -915,19 +305,17 @@ async def download_promo_html(
         if candidate.filename
     }
 
-    promo_files = find_promo_files(
-        [
-            {"filename": filename}
-            for filename in href_by_filename
-        ],
+    promo_files = find_delta_files(
+        [{"filename": filename} for filename in href_by_filename],
+        FILE_TYPE,
         filename_key="filename",
     )
 
+    if test:
+       promo_files = filter_test_store_files(promo_files)
+
     if not promo_files:
-        logger.warning(
-            "No Promo files found for %s",
-            name,
-        )
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
         return []
 
     downloaded_files = []
@@ -941,7 +329,7 @@ async def download_promo_html(
             response = await client._get_with_retry(href)
             return response.content
 
-        result = await save_promo_file_async(
+        result = await save_delta_file_async(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=filename,
@@ -949,6 +337,7 @@ async def download_promo_html(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -957,60 +346,30 @@ async def download_promo_html(
     return downloaded_files
 
 
-async def download_promo_mishnatyosef(
-    test: bool = False,
-) -> list[Path]:
+async def download_promo_mishnatyosef(test: bool = False) -> list:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = MishnatYosefClient()
 
-    logger.info(
-        "Listing files for Mishnat Yosef..."
-    )
+    logger.info("Listing files for Mishnat Yosef...")
 
     try:
         files = await client.get_files()
-
     except Exception:
-        logger.exception(
-            "Failed getting file list for Mishnat Yosef"
-        )
+        logger.exception("Failed getting file list for Mishnat Yosef")
         return []
 
-    normalized = []
-    href_by_filename = {}
-
-    for entry in files:
-
-        if entry.get("type") != "Promo":
-            continue
-
-        filename = entry.get("name")
-        url = entry.get("url")
-
-        if not filename or not url:
-            continue
-
-        normalized.append(
-            {"filename": filename}
-        )
-
-        href_by_filename[filename] = url
-
-    promo_files = find_promo_files(
-        normalized,
-        filename_key="filename",
+    normalized, href_by_filename = normalize_mishnatyosef_listing(
+        files, FILE_TYPE,
     )
 
+    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+
+    if test:
+       promo_files = filter_test_store_files(promo_files)
+
     if not promo_files:
-        logger.warning(
-            "No Promo files found for Mishnat Yosef"
-        )
+        logger.warning("No %s files found for Mishnat Yosef", FILE_TYPE)
         return []
 
     downloaded_files = []
@@ -1023,7 +382,7 @@ async def download_promo_mishnatyosef(
         async def fetch_content(href=href) -> bytes:
             return await client.download_file(href)
 
-        result = await save_promo_file_async(
+        result = await save_delta_file_async(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=filename,
@@ -1031,6 +390,7 @@ async def download_promo_mishnatyosef(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -1039,76 +399,38 @@ async def download_promo_mishnatyosef(
     return downloaded_files
 
 
-async def download_promo_wolt(
-    test: bool = False,
-) -> list[Path]:
+async def download_promo_wolt(test: bool = False) -> list:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = WoltClient()
 
-    logger.info(
-        "Listing date pages for Wolt..."
-    )
+    logger.info("Listing date pages for Wolt...")
 
     try:
         date_pages = await client.get_date_pages()
-
     except Exception:
-        logger.exception(
-            "Failed getting date pages for Wolt"
-        )
+        logger.exception("Failed getting date pages for Wolt")
         return []
 
     if not date_pages:
-        logger.warning(
-            "No date pages found for Wolt"
-        )
+        logger.warning("No date pages found for Wolt")
         return []
 
     try:
-        file_urls = await client.get_files(
-            date_pages[0]
-        )
-
+        file_urls = await client.get_files(date_pages[0])
     except Exception:
-        logger.exception(
-            "Failed getting file list for Wolt"
-        )
+        logger.exception("Failed getting file list for Wolt")
         return []
 
-    normalized = []
-    href_by_filename = {}
+    normalized, href_by_filename = normalize_wolt_file_urls(file_urls)
 
-    for url in file_urls:
+    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
 
-        filename = urlparse(url).path.rsplit(
-            "/",
-            1,
-        )[-1]
-
-        if not filename:
-            continue
-
-        normalized.append(
-            {"filename": filename}
-        )
-
-        href_by_filename[filename] = url
-
-    promo_files = find_promo_files(
-        normalized,
-        filename_key="filename",
-    )
+    if test:
+       promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning(
-            "No Promo files found for Wolt"
-        )
+        logger.warning("No %s files found for Wolt", FILE_TYPE)
         return []
 
     downloaded_files = []
@@ -1121,7 +443,7 @@ async def download_promo_wolt(
         async def fetch_content(href=href) -> bytes:
             return await client.download_file(href)
 
-        result = await save_promo_file_async(
+        result = await save_delta_file_async(
             chain_id=promo_file["chain_id"],
             store_id=promo_file["store_id"],
             filename=filename,
@@ -1129,6 +451,7 @@ async def download_promo_wolt(
             data_dir=data_dir,
             test=test,
             fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
         if result:
@@ -1138,213 +461,13 @@ async def download_promo_wolt(
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        help="Use test_feeds directory and cap each source at 5 stores",
-    )
-
-    args = parser.parse_args()
-
-    all_downloaded: list[Path] = []
-
-    pp_sources = get_publishing_sources(
-        "PublishedPricesClient"
-    )
-
-    logger.info(
-        "Found %d PublishedPrices sources",
-        len(pp_sources),
-    )
-
-    for source in pp_sources:
-
-        credentials = source.get(
-            "credentials",
-            {},
-        )
-
-        username = credentials.get(
-            "username"
-        )
-
-        password = credentials.get(
-            "password",
-            "",
-        )
-
-        if not username:
-
-            logger.warning(
-                "Skipping %s: no username",
-                source["name"],
-            )
-
-            continue
-
-        try:
-
-            all_downloaded.extend(
-                download_promo_publishedprices(
-                    source["name"],
-                    username,
-                    password,
-                    test=args.test,
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    bina_sources = get_publishing_sources(
-        "BinaProjectsClient"
-    )
-
-    logger.info(
-        "Found %d BinaProjects sources",
-        len(bina_sources),
-    )
-
-    for source in bina_sources:
-
-        try:
-
-            all_downloaded.extend(
-                download_promo_binaprojects(
-                    source["name"],
-                    source["url"],
-                    test=args.test,
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    laib_sources = get_publishing_sources(
-        "LaibcatalogClient"
-    )
-
-    logger.info(
-        "Found %d Laibcatalog sources",
-        len(laib_sources),
-    )
-
-    for source in laib_sources:
-
-        if not source.get("chain_id"):
-
-            logger.warning(
-                "Skipping %s: no chain_id in registry",
-                source["name"],
-            )
-
-            continue
-
-        try:
-
-            all_downloaded.extend(
-                asyncio.run(
-                    download_promo_laibcatalog(
-                        source["name"],
-                        source["url"],
-                        source["chain_id"],
-                        test=args.test,
-                    )
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    logger.info(
-        "Found %d HTML-based sources",
-        len(HTML_SOURCES),
-    )
-
-    for source in HTML_SOURCES:
-
-        try:
-
-            all_downloaded.extend(
-                asyncio.run(
-                    download_promo_html(
-                        source,
-                        test=args.test,
-                    )
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    try:
-
-        all_downloaded.extend(
-            asyncio.run(
-                download_promo_carrefour(
-                    test=args.test
-                )
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Carrefour"
-        )
-
-    try:
-
-        all_downloaded.extend(
-            asyncio.run(
-                download_promo_mishnatyosef(
-                    test=args.test
-                )
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Mishnat Yosef"
-        )
-
-    try:
-
-        all_downloaded.extend(
-            asyncio.run(
-                download_promo_wolt(
-                    test=args.test
-                )
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Wolt"
-        )
-
-    logger.info(
-        "Finished. Downloaded %d Promo file(s) total.",
-        len(all_downloaded),
+    run(
+        FILE_TYPE,
+        download_promo_publishedprices,
+        download_promo_binaprojects,
+        download_promo_laibcatalog,
+        download_promo_html,
+        download_promo_carrefour,
+        download_promo_mishnatyosef,
+        download_promo_wolt,
     )

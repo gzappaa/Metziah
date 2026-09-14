@@ -38,7 +38,7 @@ from database.repository import (
     upsert_promotion_items,
     upsert_promotions,
 )
-from parsers.xml import MachseneiXmlParser
+from parsers.xml import StoreXmlParser
 from logging_config import setup_isolated_logging
 
 
@@ -300,7 +300,7 @@ def _log_changes(
 
 def load_one_file(
     conn,
-    parser: MachseneiXmlParser,
+    parser: StoreXmlParser,
     filepath: Path,
     feeds_dir: Path,
     file_type: str,
@@ -522,7 +522,7 @@ def load_files(
     file_tracking.loaded is handled by the caller.
     """
 
-    parser = MachseneiXmlParser()
+    parser = StoreXmlParser()
     loaded_files = []
 
     for filepath, file_type in files:

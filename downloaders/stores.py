@@ -1,12 +1,18 @@
-import argparse
-import asyncio
+# downloaders/stores.py
+"""
+Stores files are published once per chain (not once per store, unlike
+PriceFull/PromoFull/Price/Promo), so this module keeps its own
+find-latest logic (GENERIC_STORES_FILE_RE / find_latest_matching_file)
+rather than sharing full_family.py or delta_family.py. It does reuse the
+protocol-level helpers from common.py.
+"""
+
 import logging
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from logging_config import setup_general_logging
 from clients.publishedprices import PublishedPricesClient
@@ -14,20 +20,27 @@ from clients.binaprojects import BinaProjectsClient
 from clients.laibcatalog import LaibcatalogClient
 from clients.carrefour import CarrefourClient
 from clients.html_client import HtmlFileLinkClient
-from clients.html_config import SOURCES as HTML_SOURCES
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
-from database.repository import get_publishing_sources
+
+from downloaders.common import (
+    get_data_dir,
+    save_file,
+    save_file_async,
+    list_publishedprices_entries_recursive,
+    normalize_carrefour_listing,
+    normalize_wolt_file_urls,
+    normalize_mishnatyosef_listing,
+)
+from downloaders.runner import run
 
 
 setup_general_logging()
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_DIR = BASE_DIR / "data" / "feeds"
-TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
+FILE_TYPE = "Stores"
+SUBFOLDER = "stores"
 
 
 # Merged regex covering PublishedPrices, BinaProjects, and Laibcatalog
@@ -86,14 +99,8 @@ def find_latest_matching_file(
                 continue
 
             try:
-
-                timestamp = datetime.strptime(
-                    date_text,
-                    date_format,
-                )
-
+                timestamp = datetime.strptime(date_text, date_format)
             except ValueError:
-
                 continue
 
         else:
@@ -101,18 +108,11 @@ def find_latest_matching_file(
             date_part = match.group("date")
 
             try:
-
-                timestamp = datetime.strptime(
-                    date_part,
-                    "%Y%m%d",
-                )
-
+                timestamp = datetime.strptime(date_part, "%Y%m%d")
             except ValueError:
-
                 continue
 
         if latest is None or timestamp > latest["timestamp"]:
-
             latest = {
                 "filename": filename,
                 "chain_id": match.group("chain_id"),
@@ -138,30 +138,20 @@ def find_latest_stores_file(
         fname = entry.get("fname", "")
 
         if "Stores" in fname:
-
-            logger.info(
-                "PublishedPrices Stores candidate: %s",
-                fname,
-            )
+            logger.info("PublishedPrices Stores candidate: %s", fname)
 
     latest = find_latest_matching_file(
-        response_json.get("aaData", []),
-        filename_key="fname",
+        response_json.get("aaData", []), filename_key="fname",
     )
 
     if latest is None:
         return None
 
     path = (
-        f"{cd.strip('/')}/{latest['filename']}"
-        if cd != "/"
-        else latest["filename"]
+        f"{cd.strip('/')}/{latest['filename']}" if cd != "/" else latest["filename"]
     )
 
-    latest["url"] = (
-        f"{PublishedPricesClient.BASE_URL}"
-        f"/file/d/{path}"
-    )
+    latest["url"] = f"{PublishedPricesClient.BASE_URL}/file/d/{path}"
 
     return latest
 
@@ -174,25 +164,12 @@ def find_stores_file_recursive(
 ) -> dict | None:
 
     try:
-
-        response_json = client.get_files(
-            cd=cd
-        )
-
+        response_json = client.get_files(cd=cd)
     except Exception:
-
-        logger.exception(
-            "Failed listing '%s' for %s",
-            cd,
-            client.username,
-        )
-
+        logger.exception("Failed listing '%s' for %s", cd, client.username)
         return None
 
-    latest = find_latest_stores_file(
-        response_json,
-        cd=cd,
-    )
+    latest = find_latest_stores_file(response_json, cd=cd)
 
     if latest is not None:
         return latest
@@ -200,10 +177,7 @@ def find_stores_file_recursive(
     if depth >= max_depth:
         return None
 
-    for entry in response_json.get(
-        "aaData",
-        [],
-    ):
+    for entry in response_json.get("aaData", []):
 
         fname = entry.get("fname")
 
@@ -215,19 +189,13 @@ def find_stores_file_recursive(
 
         logger.info(
             "'%s' looks like a folder for %s — recursing",
-            fname,
-            client.username,
+            fname, client.username,
         )
 
-        sub_cd = (
-            f"{cd.rstrip('/')}/{fname}"
-        )
+        sub_cd = f"{cd.rstrip('/')}/{fname}"
 
         found = find_stores_file_recursive(
-            client,
-            cd=sub_cd,
-            depth=depth + 1,
-            max_depth=max_depth,
+            client, cd=sub_cd, depth=depth + 1, max_depth=max_depth,
         )
 
         if found is not None:
@@ -236,166 +204,19 @@ def find_stores_file_recursive(
     return None
 
 
-def find_latest_stores_file_binaprojects(
-    files: list[dict],
-) -> dict | None:
-
+def find_latest_stores_file_binaprojects(files: list[dict]) -> dict | None:
     return find_latest_matching_file(
-        files,
-        filename_key="FileNm",
-        date_key="DateFile",
+        files, filename_key="FileNm", date_key="DateFile",
         date_format="%H:%M %d/%m/%Y",
     )
 
 
-def find_latest_stores_file_laibcatalog(
-    files: list[dict],
-) -> dict | None:
-
-    return find_latest_matching_file(
-        files,
-        filename_key="fileName",
-    )
+def find_latest_stores_file_laibcatalog(files: list[dict]) -> dict | None:
+    return find_latest_matching_file(files, filename_key="fileName")
 
 
-def get_storage_path(
-    chain_id: str,
-    data_dir: Path,
-) -> Path:
-
-    return (
-        data_dir
-        / chain_id
-        / "stores"
-    )
-
-
-def save_stores_file(
-    chain_id: str,
-    filename: str,
-    data_dir: Path,
-    test: bool,
-    fetch_content: Callable[[], bytes],
-) -> Path | None:
-    """
-    Shared save path for sync downloaders.
-    """
-
-    folder = get_storage_path(
-        chain_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = folder / filename
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            filename,
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        filename,
-    )
-
-    try:
-
-        content = fetch_content()
-
-        destination.write_bytes(content)
-
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            filename,
-        )
-
-        return None
-
-    return destination
-
-
-async def save_stores_file_async(
-    chain_id: str,
-    filename: str,
-    data_dir: Path,
-    test: bool,
-    fetch_content,
-) -> Path | None:
-    """
-    Async counterpart to save_stores_file.
-    """
-
-    folder = get_storage_path(
-        chain_id,
-        data_dir,
-    )
-
-    if test and folder.exists():
-
-        logger.warning(
-            "TEST MODE: deleting existing %s",
-            folder,
-        )
-
-        shutil.rmtree(folder)
-
-    folder.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    destination = folder / filename
-
-    if destination.exists():
-
-        logger.info(
-            "UP TO DATE: %s",
-            filename,
-        )
-
-        return destination
-
-    logger.info(
-        "DOWNLOAD: %s",
-        filename,
-    )
-
-    try:
-
-        content = await fetch_content()
-
-        destination.write_bytes(content)
-
-    except Exception:
-
-        logger.exception(
-            "FAILED downloading %s",
-            filename,
-        )
-
-        return None
-
-    return destination
+def get_storage_path(chain_id: str, data_dir: Path) -> Path:
+    return data_dir / chain_id / SUBFOLDER
 
 
 def download_stores_publishedprices(
@@ -405,62 +226,33 @@ def download_stores_publishedprices(
     test: bool = False,
 ) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
-    client = PublishedPricesClient(
-        username,
-        password,
-    )
-
+    data_dir = get_data_dir(test)
+    client = PublishedPricesClient(username, password)
 
     logger.info(
-        "Logging in and listing files for %s (%s)...",
-        name,
-        username,
+        "Logging in and listing files for %s (%s)...", name, username,
     )
 
     try:
-
         client.login()
-
     except Exception:
-
-        logger.exception(
-            "Failed logging in for %s",
-            username,
-        )
-
+        logger.exception("Failed logging in for %s", username)
         return None
 
-    latest = find_stores_file_recursive(
-        client
-    )
+    latest = find_stores_file_recursive(client)
 
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for %s",
-            username,
-        )
-
+        logger.warning("No Stores file found for %s", username)
         return None
 
     def fetch_content() -> bytes:
+        return client.download_file(latest["url"])
 
-        return client.download_file(
-            latest["url"]
-        )
-
-    return save_stores_file(
-        chain_id=latest["chain_id"],
-        filename=latest["filename"],
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return save_file(
+        get_storage_path(latest["chain_id"], data_dir),
+        latest["filename"],
+        test,
+        fetch_content,
     )
 
 
@@ -470,56 +262,32 @@ def download_stores_binaprojects(
     test: bool = False,
 ) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = BinaProjectsClient(url)
 
-    logger.info(
-        "Listing files for %s (BinaProjects)...",
-        name,
-    )
+    logger.info("Listing files for %s (BinaProjects)...", name)
 
     try:
-        files = client.get_hok_files(
-            file_type=1
-        )
+        files = client.get_hok_files(file_type=1)
     except Exception:
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
+        logger.exception("Failed getting file list for %s", name)
         return None
 
-    latest = find_latest_stores_file_binaprojects(
-        files
-    )
+    latest = find_latest_stores_file_binaprojects(files)
 
     if latest is None:
-        logger.warning(
-            "No Stores file found for %s",
-            name,
-        )
+        logger.warning("No Stores file found for %s", name)
         return None
 
     def fetch_content() -> bytes:
-        download_url = client.get_download_url(
-            latest["filename"]
-        )
+        download_url = client.get_download_url(latest["filename"])
+        return client.download_file(download_url)
 
-        return client.download_file(
-            download_url
-        )
-
-    return save_stores_file(
-        chain_id=latest["chain_id"],
-        filename=latest["filename"],
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return save_file(
+        get_storage_path(latest["chain_id"], data_dir),
+        latest["filename"],
+        test,
+        fetch_content,
     )
 
 
@@ -530,193 +298,88 @@ async def download_stores_laibcatalog(
     test: bool = False,
 ) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
+    data_dir = get_data_dir(test)
+    client = LaibcatalogClient(chain_id)
 
-    client = LaibcatalogClient(
-        chain_id
-    )
-
-    logger.info(
-        "Listing files for %s (Laibcatalog)...",
-        name,
-    )
+    logger.info("Listing files for %s (Laibcatalog)...", name)
 
     try:
-
         files = await client.get_files()
-
     except Exception:
-
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
-
+        logger.exception("Failed getting file list for %s", name)
         return None
 
-    latest = find_latest_stores_file_laibcatalog(
-        files
-    )
+    latest = find_latest_stores_file_laibcatalog(files)
 
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for %s",
-            name,
-        )
-
+        logger.warning("No Stores file found for %s", name)
         return None
 
-    resolved_chain_id = (
-        latest.get("chain_id") or chain_id
-    )
+    resolved_chain_id = latest.get("chain_id") or chain_id
 
     async def fetch_content() -> bytes:
+        download_url = client.build_download_url(latest["filename"])
+        return await client.download_file(download_url)
 
-        download_url = client.build_download_url(
-            latest["filename"]
-        )
-
-        return await client.download_file(
-            download_url
-        )
-
-    return await save_stores_file_async(
-        chain_id=resolved_chain_id,
-        filename=latest["filename"],
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return await save_file_async(
+        get_storage_path(resolved_chain_id, data_dir),
+        latest["filename"],
+        test,
+        fetch_content,
     )
 
 
-async def download_stores_carrefour(
-    test: bool = False,
-) -> Path | None:
+async def download_stores_carrefour(test: bool = False) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = CarrefourClient()
 
-    logger.info(
-        "Listing files for Carrefour..."
-    )
+    logger.info("Listing files for Carrefour...")
 
     try:
-
         listing = await client.get_files()
-
     except Exception:
-
-        logger.exception(
-            "Failed getting file list for Carrefour"
-        )
-
+        logger.exception("Failed getting file list for Carrefour")
         return None
 
     path = listing["path"]
-    files = listing["files"]
+    normalized = normalize_carrefour_listing(listing["files"])
 
-    normalized = []
-
-    for entry in files:
-
-        if isinstance(entry, str):
-
-            normalized.append(
-                {"filename": entry}
-            )
-
-        else:
-
-            filename = (
-                entry.get("name")
-                or entry.get("fileName")
-                or entry.get("Name")
-            )
-
-            if filename:
-
-                normalized.append(
-                    {"filename": filename}
-                )
-
-    latest = find_latest_matching_file(
-        normalized,
-        filename_key="filename",
-    )
+    latest = find_latest_matching_file(normalized, filename_key="filename")
 
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for Carrefour"
-        )
-
+        logger.warning("No Stores file found for Carrefour")
         return None
 
     filename = latest["filename"]
 
     download_url = urljoin(
-        f"{client.base_url}/",
-        f"{path.strip('/')}/{filename}",
+        f"{client.base_url}/", f"{path.strip('/')}/{filename}",
     )
 
     async def fetch_content() -> bytes:
+        return await client.download_file(download_url)
 
-        return await client.download_file(
-            download_url
-        )
-
-    return await save_stores_file_async(
-        chain_id=latest["chain_id"],
-        filename=filename,
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return await save_file_async(
+        get_storage_path(latest["chain_id"], data_dir), filename, test, fetch_content,
     )
 
 
-async def download_stores_html(
-    source: dict,
-    test: bool = False,
-) -> Path | None:
+async def download_stores_html(source: dict, test: bool = False) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
+    data_dir = get_data_dir(test)
 
     name = source["name"]
     listing = source["listing"]
     categories = source["categories"]
 
-    stores_params = categories.get(
-        "file_types",
-        {},
-    ).get("Stores")
+    stores_params = categories.get("file_types", {}).get(FILE_TYPE)
 
     if stores_params is None:
-
-        logger.warning(
-            "No 'Stores' file_type configured for %s",
-            name,
-        )
-
+        logger.warning("No 'Stores' file_type configured for %s", name)
         return None
 
-    base_url = categories.get(
-        "endpoint",
-        listing["base_url"],
-    )
+    base_url = categories.get("endpoint", listing["base_url"])
 
     client = HtmlFileLinkClient(
         name=name,
@@ -727,24 +390,15 @@ async def download_stores_html(
         filename_param=source.get("filename_param"),
     )
 
-    logger.info(
-        "Listing files for %s (HTML)...",
-        name,
-    )
+    logger.info("Listing files for %s (HTML)...", name)
 
     try:
-
-        candidates = await client.get_candidates(
-            params=stores_params
-        )
-
+        # NOTE: unlike PriceFull/PromoFull/Price/Promo, Stores files are
+        # published once per day, so this is a single request rather
+        # than the paginated crawl in common.get_all_html_candidates.
+        candidates = await client.get_candidates(params=stores_params)
     except Exception:
-
-        logger.exception(
-            "Failed getting file list for %s",
-            name,
-        )
-
+        logger.exception("Failed getting file list for %s", name)
         return None
 
     href_by_filename = {
@@ -754,402 +408,111 @@ async def download_stores_html(
     }
 
     latest = find_latest_matching_file(
-        [
-            {"filename": filename}
-            for filename in href_by_filename
-        ],
+        [{"filename": filename} for filename in href_by_filename],
         filename_key="filename",
     )
 
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for %s",
-            name,
-        )
-
+        logger.warning("No Stores file found for %s", name)
         return None
 
     filename = latest["filename"]
     href = href_by_filename[filename]
 
     async def fetch_content() -> bytes:
-
         response = await client._get_with_retry(href)
-
         return response.content
 
-    return await save_stores_file_async(
-        chain_id=latest["chain_id"],
-        filename=filename,
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return await save_file_async(
+        get_storage_path(latest["chain_id"], data_dir), filename, test, fetch_content,
     )
 
 
-async def download_stores_mishnatyosef(
-    test: bool = False,
-) -> Path | None:
+async def download_stores_mishnatyosef(test: bool = False) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = MishnatYosefClient()
 
-    logger.info(
-        "Listing files for Mishnat Yosef..."
-    )
+    logger.info("Listing files for Mishnat Yosef...")
 
     try:
-
         files = await client.get_files()
-
     except Exception:
-
-        logger.exception(
-            "Failed getting file list for Mishnat Yosef"
-        )
-
+        logger.exception("Failed getting file list for Mishnat Yosef")
         return None
 
-    normalized = []
-    href_by_filename = {}
-
-    for entry in files:
-
-        if entry.get("type") != "Stores":
-            continue
-
-        filename = entry.get("name")
-        url = entry.get("url")
-
-        if not filename or not url:
-            continue
-
-        normalized.append(
-            {"filename": filename}
-        )
-
-        href_by_filename[filename] = url
-
-    latest = find_latest_matching_file(
-        normalized,
-        filename_key="filename",
+    normalized, href_by_filename = normalize_mishnatyosef_listing(
+        files, FILE_TYPE,
     )
 
+    latest = find_latest_matching_file(normalized, filename_key="filename")
+
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for Mishnat Yosef"
-        )
-
+        logger.warning("No Stores file found for Mishnat Yosef")
         return None
 
     filename = latest["filename"]
     href = href_by_filename[filename]
 
     async def fetch_content() -> bytes:
-
         return await client.download_file(href)
 
-    return await save_stores_file_async(
-        chain_id=latest["chain_id"],
-        filename=filename,
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return await save_file_async(
+        get_storage_path(latest["chain_id"], data_dir), filename, test, fetch_content,
     )
 
 
-async def download_stores_wolt(
-    test: bool = False,
-) -> Path | None:
+async def download_stores_wolt(test: bool = False) -> Path | None:
 
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
-    )
-
+    data_dir = get_data_dir(test)
     client = WoltClient()
 
-    logger.info(
-        "Listing date pages for Wolt..."
-    )
+    logger.info("Listing date pages for Wolt...")
 
     try:
-
         date_pages = await client.get_date_pages()
-
     except Exception:
-
-        logger.exception(
-            "Failed getting date pages for Wolt"
-        )
-
+        logger.exception("Failed getting date pages for Wolt")
         return None
 
     if not date_pages:
-
-        logger.warning(
-            "No date pages found for Wolt"
-        )
-
+        logger.warning("No date pages found for Wolt")
         return None
 
     try:
-
-        file_urls = await client.get_files(
-            date_pages[0]
-        )
-
+        file_urls = await client.get_files(date_pages[0])
     except Exception:
-
-        logger.exception(
-            "Failed getting file list for Wolt"
-        )
-
+        logger.exception("Failed getting file list for Wolt")
         return None
 
-    normalized = []
-    href_by_filename = {}
+    normalized, href_by_filename = normalize_wolt_file_urls(file_urls)
 
-    for url in file_urls:
-
-        filename = urlparse(url).path.rsplit(
-            "/",
-            1,
-        )[-1]
-
-        if not filename:
-            continue
-
-        normalized.append(
-            {"filename": filename}
-        )
-
-        href_by_filename[filename] = url
-
-    latest = find_latest_matching_file(
-        normalized,
-        filename_key="filename",
-    )
+    latest = find_latest_matching_file(normalized, filename_key="filename")
 
     if latest is None:
-
-        logger.warning(
-            "No Stores file found for Wolt"
-        )
-
+        logger.warning("No Stores file found for Wolt")
         return None
 
     filename = latest["filename"]
     href = href_by_filename[filename]
 
     async def fetch_content() -> bytes:
-
         return await client.download_file(href)
 
-    return await save_stores_file_async(
-        chain_id=latest["chain_id"],
-        filename=filename,
-        data_dir=data_dir,
-        test=test,
-        fetch_content=fetch_content,
+    return await save_file_async(
+        get_storage_path(latest["chain_id"], data_dir), filename, test, fetch_content,
     )
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        help="Use test_feeds directory",
+    run(
+        FILE_TYPE,
+        download_stores_publishedprices,
+        download_stores_binaprojects,
+        download_stores_laibcatalog,
+        download_stores_html,
+        download_stores_carrefour,
+        download_stores_mishnatyosef,
+        download_stores_wolt,
+        test_help="Use test_feeds directory",
     )
-
-    args = parser.parse_args()
-
-    pp_sources = get_publishing_sources(
-        "PublishedPricesClient"
-    )
-
-    logger.info(
-        "Found %d PublishedPrices sources",
-        len(pp_sources),
-    )
-
-    for source in pp_sources:
-
-        credentials = source.get(
-            "credentials",
-            {},
-        )
-
-        username = credentials.get(
-            "username"
-        )
-
-        password = credentials.get(
-            "password",
-            "",
-        )
-
-        if not username:
-
-            logger.warning(
-                "Skipping %s: no username",
-                source["name"],
-            )
-
-            continue
-
-        try:
-
-            download_stores_publishedprices(
-                source["name"],
-                username,
-                password,
-                test=args.test,
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    bina_sources = get_publishing_sources(
-        "BinaProjectsClient"
-    )
-
-    logger.info(
-        "Found %d BinaProjects sources",
-        len(bina_sources),
-    )
-
-    for source in bina_sources:
-
-        try:
-
-            download_stores_binaprojects(
-                source["name"],
-                source["url"],
-                test=args.test,
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    laib_sources = get_publishing_sources(
-        "LaibcatalogClient"
-    )
-
-    logger.info(
-        "Found %d Laibcatalog sources",
-        len(laib_sources),
-    )
-
-    for source in laib_sources:
-
-        if not source.get("chain_id"):
-
-            logger.warning(
-                "Skipping %s: no chain_id in registry",
-                source["name"],
-            )
-
-            continue
-
-        try:
-
-            asyncio.run(
-                download_stores_laibcatalog(
-                    source["name"],
-                    source["url"],
-                    source["chain_id"],
-                    test=args.test,
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    logger.info(
-        "Found %d HTML-based sources",
-        len(HTML_SOURCES),
-    )
-
-    for source in HTML_SOURCES:
-
-        try:
-
-            asyncio.run(
-                download_stores_html(
-                    source,
-                    test=args.test,
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Failed processing %s",
-                source["name"],
-            )
-
-    try:
-
-        asyncio.run(
-            download_stores_carrefour(
-                test=args.test
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Carrefour"
-        )
-
-    try:
-
-        asyncio.run(
-            download_stores_mishnatyosef(
-                test=args.test
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Mishnat Yosef"
-        )
-
-    try:
-
-        asyncio.run(
-            download_stores_wolt(
-                test=args.test
-            )
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Failed processing Wolt"
-        )

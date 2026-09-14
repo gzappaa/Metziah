@@ -29,7 +29,7 @@ from database.repository import (
     upsert_store_products,
     _resolve_fill_only,
 )
-from parsers.xml import MachseneiXmlParser
+from parsers.xml import StoreXmlParser
 from logging_config import setup_isolated_logging
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ def _log_changes(
 
 def load_one_file(
     conn,
-    parser: MachseneiXmlParser,
+    parser: StoreXmlParser,
     filepath: Path,
     feeds_dir: Path,
     log_changes: bool = True,
@@ -444,7 +444,7 @@ def load_files(
     Successfully loaded files are marked as loaded in file_tracking.
     Failed files remain loaded = false.
     """
-    parser = MachseneiXmlParser()
+    parser = StoreXmlParser()
     loaded_files = []
 
     for filepath in filepaths:

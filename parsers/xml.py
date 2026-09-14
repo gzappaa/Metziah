@@ -9,7 +9,7 @@ from models.product import Product
 logger = logging.getLogger(__name__)
 
 
-class MachseneiXmlParser:
+class StoreXmlParser:
 
     def parse_price_file(self, xml_content):
 

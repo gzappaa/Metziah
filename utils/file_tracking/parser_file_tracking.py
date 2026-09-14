@@ -19,71 +19,24 @@ FEEDS_DIR = (
 
 
 FILE_TYPE_PATTERN = re.compile(
-    r"^(?P<file_type>PriceFull|Price|PromoFull|Promo|StoresFull|Stores)",
-    re.IGNORECASE,
-)
-
-DATE_PATTERN = re.compile(
-    r"(?<!\d)(?P<date>\d{8})"
-)
-
-CHAIN_ID_PATTERN = re.compile(
-    r"^(?:PriceFull|Price|PromoFull|Promo|StoresFull|Stores)"
-    r"(?P<chain_id>\d{13})",
-    re.IGNORECASE,
-)
-
-STORE_IDS_PATTERN = re.compile(
-    r"(?P<ids>\d+(?:-\d+)*)-(?=\d{8})"
-)
-
-GENERIC_STORES_FILE_RE = re.compile(
-    r"^Stores(?:Full)?"
+    r"^(?P<file_type>PriceFull|Price|PromoFull|Promo|StoresFull|Stores)"
     r"(?P<chain_id>\d{13})"
-    r"(?:-\d+)*-"
-    r"(?P<date>\d{8})"
-    r"-?(?P<time>\d{3,6})"
-    r"(?:-\d{3,6})?"
-    r"(?:\.(?:gz|xml(?:\.gz)?))?$",
+    r"(?P<ids>(?:-\d+)*)"
+    r"-(?P<date>20\d{6})"
+    r"(?P<suffix>.*)$",
     re.IGNORECASE,
 )
 
 
 def parse_filename(filename: str) -> dict:
-    file_type_match = FILE_TYPE_PATTERN.match(filename)
+    match = FILE_TYPE_PATTERN.match(filename)
 
-    if not file_type_match:
+    if not match:
         raise ValueError(
-            f"Unrecognized file type: {filename}"
+            f"Unrecognized filename structure: {filename}"
         )
 
-    file_date = None
-
-    for match in DATE_PATTERN.finditer(filename):
-        value = match.group("date")
-
-        try:
-            file_date = datetime.strptime(
-                value,
-                "%Y%m%d",
-            ).date()
-            break
-        except ValueError:
-            continue
-
-    if file_date is None:
-        raise ValueError(
-            f"No valid YYYYMMDD date found in filename: {filename}"
-        )
-
-    chain_match = CHAIN_ID_PATTERN.match(filename)
-
-    if not chain_match:
-        raise ValueError(
-            f"No chain ID found in filename: {filename}"
-        )
-
-    file_type = file_type_match.group("file_type").lower()
+    file_type = match.group("file_type").lower()
 
     if file_type == "storesfull":
         file_type = "stores"
@@ -96,37 +49,41 @@ def parse_filename(filename: str) -> dict:
         "stores": "Stores",
     }[file_type]
 
+    chain_id = match.group("chain_id")
+    ids_text = match.group("ids")
+    date_text = match.group("date")
+
+    try:
+        file_date = datetime.strptime(
+            date_text,
+            "%Y%m%d",
+        ).date()
+    except ValueError:
+        raise ValueError(
+            f"Invalid YYYYMMDD date in filename: {filename}"
+        )
+
+    # Remove the leading "-" and split numeric components.
+    ids = ids_text.lstrip("-").split("-") if ids_text else []
+
     sub_chain_id = None
     store_id = None
 
-    if file_type == "Stores":
-        if not GENERIC_STORES_FILE_RE.match(filename):
+    if file_type != "Stores":
+
+        if not ids:
             raise ValueError(
-                f"Invalid Stores filename format: {filename}"
+                f"Missing store/sub-chain ID in filename: {filename}"
             )
 
-    else:
-        store_match = STORE_IDS_PATTERN.search(filename)
-
-        if not store_match:
-            raise ValueError(
-                f"Could not extract sub-chain/store ID: {filename}"
-            )
-
-        ids = store_match.group("ids").split("-")
-
-        # One numeric component before the date is ALWAYS the store ID.
         if len(ids) == 1:
             store_id = ids[0]
-
-        # With multiple components, the final component is the store ID
-        # and the component immediately before it is the sub-chain ID.
         else:
             sub_chain_id = ids[-2]
             store_id = ids[-1]
 
     return {
-        "chain_id": chain_match.group("chain_id"),
+        "chain_id": chain_id,
         "sub_chain_id": sub_chain_id,
         "store_id": store_id,
         "file_type": file_type,
@@ -154,7 +111,6 @@ def get_local_path(record: dict) -> Path:
     return (
         FEEDS_DIR
         / record["chain_id"]
-        / record["sub_chain_id"]
         / record["store_id"]
         / file_type_dirs[record["file_type"]]
         / record["filename"]
