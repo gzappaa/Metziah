@@ -22,6 +22,7 @@ Each store's PromoFull is an independent authoritative snapshot.
 """
 
 import gzip
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -40,10 +41,41 @@ from database.repository import (
 )
 from parsers.xml import StoreXmlParser
 from logging_config import setup_isolated_logging
+from utils.file_tracking.parser_file_tracking import parse_filename
 
 
 logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("promo_changes")
+
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+CHAINS_FILE = BASE_DIR / "data" / "reference" / "chains.json"
+CHAINS_EXTRA_FILE = (
+    BASE_DIR / "data" / "reference" / "chains_extra.json"
+)
+
+
+def _load_chain_metadata():
+    """
+    Load chain metadata from the main and extra chain registries.
+
+    Same convention as update_products._load_chain_metadata():
+    chains_extra.json entries take precedence over chains.json.
+
+    Needed here because ensure_chain() now requires the chain's
+    normalized names, not just its id.
+    """
+    with CHAINS_FILE.open("r", encoding="utf-8") as f:
+        chains = json.load(f)
+
+    if CHAINS_EXTRA_FILE.exists():
+        with CHAINS_EXTRA_FILE.open("r", encoding="utf-8") as f:
+            extra_chains = json.load(f)
+
+        chains.update(extra_chains)
+
+    return chains
 
 
 def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
@@ -145,8 +177,6 @@ def _fetch_existing_promotion_items(
             (row[0], row[1], row[2]): (row[3], row[4])
             for row in cur.fetchall()
         }
-
-
 
 
 def _normalize_datetime_for_diff(dt: datetime | None):
@@ -304,6 +334,7 @@ def load_one_file(
     filepath: Path,
     feeds_dir: Path,
     file_type: str,
+    chain_metadata: dict,
     log_changes: bool = True,
 ) -> None:
 
@@ -326,20 +357,85 @@ def load_one_file(
         )
         return
 
-    path_chain_id, path_sub_chain_id, path_store_id = (
-        filepath.relative_to(feeds_dir).parts[:3]
+    valid_promotions = []
+
+    for promotion in promotions:
+        if promotion.promotion_id is None:
+            logger.warning(
+                "Skipping promotion with null promotion_id: "
+                "chain_id=%s store_id=%s description=%s file=%s",
+                filepath.relative_to(feeds_dir).parts[0],
+                filepath.relative_to(feeds_dir).parts[1],
+                promotion.description,
+                filepath,
+            )
+            continue
+
+        valid_promotions.append(promotion)
+
+    promotions = valid_promotions
+
+    if not promotions:
+        logger.warning(
+            "No valid promotions with promotion_id found in %s",
+            filepath,
+        )
+        return
+
+    relative_parts = filepath.relative_to(
+        feeds_dir
+    ).parts
+
+    if len(relative_parts) < 2:
+        raise ValueError(
+            f"Unexpected feed path structure: {filepath}"
+        )
+
+    path_chain_id = relative_parts[0]
+    path_store_id = relative_parts[1]
+
+    # The feed path is the source of truth for database identity.
+    chain_id = path_chain_id
+    store_id = path_store_id
+
+    filename_info = parse_filename(filepath.name)
+
+    filename_chain_id = filename_info["chain_id"]
+    filename_sub_chain_id = filename_info["sub_chain_id"]
+
+    if (
+        filename_chain_id
+        and filename_chain_id != chain_id
+    ):
+        logger.warning(
+            "Filename chain_id=%s differs from resolved chain_id=%s: %s",
+            filename_chain_id,
+            chain_id,
+            filepath,
+        )
+
+    chain = chain_metadata.get(
+        str(chain_id)
     )
+
+    if chain is None:
+        raise KeyError(
+            f"Chain {chain_id} not found in "
+            f"{CHAINS_FILE} or {CHAINS_EXTRA_FILE}"
+        )
 
     ensure_chain(
         conn,
-        path_chain_id,
+        chain_id,
+        chain["name_he_normalized"],
+        chain["name_en_normalized"],
     )
 
     update_store_subchain(
         conn,
-        path_chain_id,
-        path_store_id,
-        path_sub_chain_id,
+        chain_id,
+        store_id,
+        filename_sub_chain_id,
     )
 
     all_groups = []
@@ -352,7 +448,9 @@ def load_one_file(
     for promotion in promotions:
 
         _, groups, items = split_promotion(
-            promotion
+            promotion,
+            chain_id,
+            store_id,
         )
 
         all_groups.extend(groups)
@@ -381,9 +479,6 @@ def load_one_file(
 
     existing_promotions = {}
     existing_items = {}
-
-    existing_promotions = {}
-    existing_items = {}
     item_names = {}
 
     if log_changes:
@@ -391,8 +486,8 @@ def load_one_file(
         existing_promotions = (
             _fetch_existing_promotions(
                 conn,
-                path_chain_id,
-                path_store_id,
+                chain_id,
+                store_id,
                 promotion_ids_in_file,
             )
         )
@@ -400,8 +495,8 @@ def load_one_file(
         existing_items = (
             _fetch_existing_promotion_items(
                 conn,
-                path_chain_id,
-                path_store_id,
+                chain_id,
+                store_id,
             )
         )
 
@@ -412,14 +507,14 @@ def load_one_file(
 
         item_names = _fetch_item_names(
             conn,
-            path_chain_id,
-            path_store_id,
+            chain_id,
+            store_id,
             all_relevant_codes,
         )
 
         _log_changes(
-            path_chain_id,
-            path_store_id,
+            chain_id,
+            store_id,
             file_type,
             promotions,
             item_keys_in_file,
@@ -454,8 +549,8 @@ def load_one_file(
         removed_promotions = (
             reconcile_removed_promotions(
                 conn,
-                path_chain_id,
-                path_store_id,
+                chain_id,
+                store_id,
                 promotion_ids_in_file,
             )
         )
@@ -463,8 +558,8 @@ def load_one_file(
         removed_groups = (
             reconcile_removed_promotion_groups(
                 conn,
-                path_chain_id,
-                path_store_id,
+                chain_id,
+                store_id,
                 group_keys_in_file,
             )
         )
@@ -472,8 +567,8 @@ def load_one_file(
         removed_items = (
             reconcile_removed_promotion_items(
                 conn,
-                path_chain_id,
-                path_store_id,
+                chain_id,
+                store_id,
                 item_keys_in_file,
             )
         )
@@ -492,8 +587,8 @@ def load_one_file(
         "removed_items=%d",
         filepath.name,
         file_type,
-        path_chain_id,
-        path_store_id,
+        chain_id,
+        store_id,
         len(promotions),
         len(all_items),
         removed_promotions,
@@ -523,6 +618,7 @@ def load_files(
     """
 
     parser = StoreXmlParser()
+    chain_metadata = _load_chain_metadata()
     loaded_files = []
 
     for filepath, file_type in files:
@@ -535,6 +631,7 @@ def load_files(
                 filepath,
                 feeds_dir,
                 file_type,
+                chain_metadata,
                 log_changes=log_changes,
             )
 

@@ -24,3 +24,6 @@ tests_all.txt
 inspection/reports
 data/reference/file_tracking.csv
 discard*
+monitoring/data/prices_vs_pricesfull_report.json
+monitoring/data/promos_vs_promofull_report.json
+data/test_feeds

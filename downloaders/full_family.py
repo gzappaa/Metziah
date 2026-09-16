@@ -130,6 +130,7 @@ def get_storage_path(
     data_dir: Path,
     subfolder: str,
 ) -> Path:
+    store_id = str(int(store_id))
     return data_dir / chain_id / store_id / subfolder
 
 

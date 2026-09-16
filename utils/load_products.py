@@ -1,39 +1,20 @@
 """
-Standalone price loader.
+Standalone product loader.
 
-Walks the selected feeds directory, finds the latest PriceFull file
-for each chain/store, parses it, and upserts into:
+Walks the selected feeds directory, finds the latest PriceFull file for
+each chain/sub-chain/store, parses product information, resolves canonical
+product names, and upserts:
 
-    prices
+    products
+    store_products
 
-Product identity, names, and metadata are handled entirely by
-load_products.py / update_products.py -- this loader ignores them.
-
-Decoupled from the live download step on purpose -- run this manually
-or via its own cron entry, pointed at whatever's already on disk.
-
-This loader is intentionally PriceFull-only, the same convention used
-by load_promos.py for PromoFull: a delta "Price" file only contains
-changed items, not a full store snapshot, and update_prices.py always
-reconciles (deletes) items missing from what it just parsed. Loading a
-delta file through this path would incorrectly delete every item the
-delta didn't happen to mention. Delta Price files are handled later by
-the scheduler/cron, not by this standalone backfill loader.
-
-Thin CLI wrapper only -- actual loading logic lives in
-utils/update_prices.py (load_files/load_one_file), shared with cron's
-run_prices_and_load(). Runs with log_changes=False so backfill/manual
-runs never write to price_changes.log -- that log stays exclusively a
-record of live cron activity.
-
-File tracking is handled by load_files(). Successfully loaded files are
-marked loaded=true there; failed files remain loaded=false.
+Price data is intentionally ignored here.
 
 Usage:
-    python scripts/load_prices.py
-    python scripts/load_prices.py --dev
-    python scripts/load_prices.py --test
-    python scripts/load_prices.py --feeds-dir data/feeds
+    python scripts/load_products.py
+    python scripts/load_products.py --dev
+    python scripts/load_products.py --test
+    python scripts/load_products.py --feeds-dir data/feeds
 """
 
 import argparse
@@ -47,7 +28,7 @@ from utils.file_tracking.parser_file_tracking import (
     extract_time_suffix,
     parse_filename,
 )
-from utils.update_prices import load_files
+from utils.update_products import load_files
 
 
 setup_general_logging()
@@ -203,7 +184,6 @@ def main():
             conn,
             files,
             args.feeds_dir,
-            log_changes=False,
         )
 
     logger.info("Done.")

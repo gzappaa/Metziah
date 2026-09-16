@@ -338,6 +338,9 @@ def main():
     # chain_id -> set of unique ItemCodes
     chain_items = {}
 
+    # ALL globally unique ItemCodes across all chains/stores.
+    global_items = set()
+
     # Files that failed to open/parse.
     unreadable_files = []
 
@@ -355,7 +358,12 @@ def main():
         try:
             item_codes = extract_item_codes(path)
 
+            # Keep the per-chain set for the chain summary.
             chain_items[chain_id].update(item_codes)
+
+            # Also keep ONE global set.
+            global_items.update(item_codes)
+
             chain_files[chain_id] += 1
 
         except Exception as exc:
@@ -372,20 +380,23 @@ def main():
 
     # ------------------------------------------------------------
     # Global statistics
+    #
+    # IMPORTANT:
+    # These statistics are now based on the globally unique
+    # ItemCode strings, NOT the sum of unique codes per chain.
     # ------------------------------------------------------------
 
-    total_items = sum(
-        len(items)
-        for items in chain_items.values()
+    total_items = len(global_items)
+
+    global_length_counts = Counter(
+        len(code)
+        for code in global_items
     )
 
-    global_length_counts = Counter()
-    global_categories = Counter()
-
-    for items in chain_items.values():
-        for code in items:
-            global_length_counts[len(code)] += 1
-            global_categories[code_category(code)] += 1
+    global_categories = Counter(
+        code_category(code)
+        for code in global_items
+    )
 
     recognized_gtin_total = sum(
         global_categories[key]
@@ -422,16 +433,21 @@ def main():
     )
     lines.append("=" * 60)
     lines.append("")
+
     lines.append(
         f"Latest PriceFull files inspected: "
         f"{len(latest_files):,}"
     )
+
     lines.append(
         f"Chains found: {len(chain_items):,}"
     )
+
     lines.append(
-        f"Total unique ItemCodes: {total_items:,}"
+        f"Globally unique ItemCodes: "
+        f"{total_items:,}"
     )
+
     lines.append("")
 
     lines.append("GENERAL SUMMARY")
@@ -462,7 +478,7 @@ def main():
         f"  Valid GTIN/EAN/UPC checksum: "
         f"{global_categories['valid_gtin']:,} "
         f"({format_percentage(valid_ratio_all)} "
-        f"of all unique codes)"
+        f"of all globally unique codes)"
     )
 
     lines.append(
@@ -488,6 +504,8 @@ def main():
 
     # ------------------------------------------------------------
     # Per-chain summary
+    #
+    # This remains chain-specific.
     # ------------------------------------------------------------
 
     lines.append("")
@@ -609,15 +627,19 @@ def main():
 
         for entry in unreadable_files:
             lines.append("")
+
             lines.append(
                 f"Chain: {entry['chain']}"
             )
+
             lines.append(
                 f"Store: {entry['store']}"
             )
+
             lines.append(
                 f"File:  {entry['path']}"
             )
+
             lines.append(
                 f"Error: {entry['error']}"
             )

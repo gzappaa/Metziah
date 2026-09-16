@@ -134,3 +134,37 @@ def normalize_file(
     record["downloaded"] = get_local_path(record).exists()
 
     return record
+
+
+def extract_time_suffix(filename: str) -> str:
+    """
+    Extract the time component from a feed filename.
+
+    Supports filenames with either HHMMSS or shorter HHMM-style
+    suffixes and normalizes the result to six digits for chronological
+    comparison.
+    """
+    match = re.search(
+        r"-(\d{8})(?:-?(\d+))?(?:\.[^.]+)?$",
+        filename,
+    )
+
+    if not match:
+        return "000000"
+
+    value = match.group(2) or ""
+
+    if len(value) == 1:
+        return value + "00000"
+    if len(value) == 2:
+        return value + "0000"
+    if len(value) == 3:
+        return value + "000"
+    if len(value) == 4:
+        return value + "00"
+    if len(value) == 5:
+        return value + "0"
+    if len(value) == 6:
+        return value
+
+    return "000000"

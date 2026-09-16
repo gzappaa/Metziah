@@ -6,13 +6,13 @@ stores product identity, store-specific product data, and price state
 separately:
 
     products
-        Real barcodes. Global product identity.
+        Valid GTINs. Global product identity.
 
     store_products
-        Non-barcode item codes, scoped to chain + store + item_code.
+        Non-GTIN/internal item codes, scoped to chain + store + item_code.
 
     prices
-        Per-store price state for both barcode and non-barcode items.
+        Per-store price state for both GTIN and non-GTIN items.
 
 Promotion objects are also transformed to match the database structure.
 The parser represents a promotion as a nested tree:
@@ -29,26 +29,99 @@ package_quantity belong to prices because they describe how an item is
 sold at a particular store, not what the item is.
 """
 
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 from models.product import Product
-
-# EAN-8 / UPC-A(12) / EAN-13 -- the common real-barcode lengths seen in
-# these feeds. Internal/non-barcode item_codes (loose produce, deli,
-# bakery) don't match this shape.
-_BARCODE_RE = re.compile(r"^\d{8}$|^\d{12}$|^\d{13}$")
+from models.promo import Promotion
 
 
-def looks_like_barcode(item_code: str) -> bool:
-    return bool(_BARCODE_RE.match(item_code))
+# Supported GTIN/EAN/UPC lengths:
+#
+#   8  = EAN-8
+#   12 = UPC-A / GTIN-12
+#   13 = EAN-13 / GTIN-13
+#   14 = GTIN-14
+#
+# We do NOT classify a code as a global product merely because it has one
+# of these lengths. The GTIN check digit must also be valid.
+_GTIN_LENGTHS = {8, 12, 13, 14}
+
+
+def gtin_checksum_valid(code: str) -> bool:
+    """
+    Validate a GTIN/EAN/UPC check digit.
+
+    Supported lengths:
+        8   EAN-8
+        12  UPC-A / GTIN-12
+        13  EAN-13 / GTIN-13
+        14  GTIN-14
+
+    Returns False for:
+        - non-numeric codes
+        - unsupported lengths
+        - invalid check digits
+    """
+    if not code.isdigit():
+        return False
+
+    if len(code) not in _GTIN_LENGTHS:
+        return False
+
+    digits = [int(digit) for digit in code]
+
+    check_digit = digits[-1]
+    body = digits[:-1]
+
+    total = 0
+    weight = 3
+
+    for digit in reversed(body):
+        total += digit * weight
+        weight = 1 if weight == 3 else 3
+
+    calculated = (10 - (total % 10)) % 10
+
+    return calculated == check_digit
+
+
+def is_valid_gtin(item_code: str) -> bool:
+    """
+    Return True only when item_code is a valid GTIN/EAN/UPC.
+
+    Only valid GTINs are treated as global product identities.
+
+    Everything else -- including numeric codes with an invalid checksum --
+    is treated as a store-specific/internal item code.
+    """
+    return gtin_checksum_valid(item_code)
+
+
+def normalize_store_id(store_id: str) -> str:
+    """
+    Normalize a feed StoreID to the canonical database store ID.
+
+    Numeric IDs ignore leading zeroes:
+        001 -> 1
+        018 -> 18
+        006 -> 6
+
+    Non-numeric IDs are returned unchanged.
+    """
+    store_id = store_id.strip()
+
+    if store_id.isdigit():
+        return str(int(store_id))
+
+    return store_id
+
 
 
 @dataclass
 class ProductRecord:
-    """Maps 1:1 to the `products` table (real barcodes only)."""
+    """Maps 1:1 to the `products` table (valid GTINs only)."""
 
     item_code: str
     name: str
@@ -60,10 +133,12 @@ class ProductRecord:
 @dataclass
 class StoreProductRecord:
     """
-    Maps 1:1 to the `store_products` table (non-barcode item_codes).
-    Scoped to (chain_id, store_id, item_code) -- store_id here is the
-    text StoreID from the XML (e.g. "018"), same as PriceRecord; the
-    repository layer resolves it to stores.id before writing.
+    Maps 1:1 to the `store_products` table (non-GTIN/internal item_codes).
+
+    Scoped to (chain_id, store_id, item_code).
+
+    store_id is the canonical database store ID. Feed IDs are normalized
+    so leading zeroes do not affect store identity.
     """
 
     chain_id: str
@@ -78,9 +153,10 @@ class StoreProductRecord:
 @dataclass
 class PriceRecord:
     """
-    Maps 1:1 to the `prices` table, except store_id here is still the
-    text StoreID from the XML (e.g. "018") -- the repository layer
-    resolves this to stores.id (the serial) before writing.
+    Maps 1:1 to the `prices` table.
+
+    store_id is the canonical database store ID. Feed IDs are normalized
+    so leading zeroes do not affect store identity.
     """
 
     chain_id: str
@@ -101,18 +177,39 @@ class PriceRecord:
 
 def split_product(
     product: Product,
+    chain_id: str,
+    store_id: str,
 ) -> tuple[ProductRecord | None, StoreProductRecord | None, PriceRecord]:
     """
-    Splits a parsed Product into its DB-table pieces. Exactly one of
-    (product_record, store_product_record) is populated, based on
-    whether item_code looks like a real barcode -- the other is None.
-    price_record is always populated.
+    Split a parsed Product into its DB-table pieces.
+
+    Routing:
+
+        valid GTIN
+            -> ProductRecord
+            -> global `products` table
+
+        anything else
+            -> StoreProductRecord
+            -> store-specific `store_products` table
+
+    A PriceRecord is always created.
+
+    Important:
+        The canonical chain_id and store_id are supplied by the loader
+        from the feed filepath. XML ChainId and StoreId are not used as
+        database identity.
+
+        The GTIN checksum is deliberately validated before a product is
+        considered globally identifiable. A numeric 8/12/13/14-digit code
+        with an invalid checksum is treated as an internal/store-specific
+        code rather than being incorrectly inserted into `products`.
     """
 
     product_record = None
     store_product_record = None
 
-    if looks_like_barcode(product.item_code):
+    if is_valid_gtin(product.item_code):
         product_record = ProductRecord(
             item_code=product.item_code,
             name=product.name,
@@ -122,8 +219,8 @@ def split_product(
         )
     else:
         store_product_record = StoreProductRecord(
-            chain_id=product.chain_id,
-            store_id=product.store_id,
+            chain_id=chain_id,
+            store_id=store_id,
             item_code=product.item_code,
             name=product.name,
             manufacturer=product.manufacturer,
@@ -132,8 +229,8 @@ def split_product(
         )
 
     price_record = PriceRecord(
-        chain_id=product.chain_id,
-        store_id=product.store_id,
+        chain_id=chain_id,
+        store_id=store_id,
         item_code=product.item_code,
         price=product.price,
         unit_price=product.unit_price,
@@ -151,21 +248,42 @@ def split_product(
     return product_record, store_product_record, price_record
 
 
-def split_promotion(promotion):
+
+def split_promotion(
+    promotion: Promotion,
+    chain_id: str,
+    store_id: str,
+):
     """
-    Walks one nested Promotion (with its groups/items) into three flat
-    lists for the three promo tables. Unlike split_product, this isn't
-    a routing decision -- every PromotionGroup always becomes exactly
-    one promotion_groups row, every PromotionItem always becomes
-    exactly one promotion_items row. So no new record types needed,
-    just tree-flattening -- the .groups/.items attributes are simply
-    ignored when building insert tuples in repository.py.
+    Flatten one nested Promotion into:
+
+        promotion
+        groups
+        items
+
+    Every PromotionGroup becomes one group record and every PromotionItem
+    becomes one item record.
+
+    The canonical chain_id and store_id are supplied by the loader from
+    the feed filepath. XML IDs are not used as database identity.
     """
+
+    promotion.chain_id = chain_id
+    promotion.store_id = store_id
+
     groups = []
     items = []
 
     for group in promotion.groups:
+        group.chain_id = chain_id
+        group.store_id = store_id
+
         groups.append(group)
-        items.extend(group.items)
+
+        for item in group.items:
+            item.chain_id = chain_id
+            item.store_id = store_id
+
+            items.append(item)
 
     return promotion, groups, items

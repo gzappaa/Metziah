@@ -22,7 +22,11 @@ from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
 
 from .parser_file_tracking import parse_filename, normalize_file
-from .add_sizes_file_tracking import get_file_size, get_file_size_get, parse_file_size
+from .add_sizes_file_tracking import (
+    get_file_size,
+    get_file_size_get,
+    parse_file_size,
+)
 
 
 setup_general_logging()
@@ -30,9 +34,11 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
+FEEDS_DIR = BASE_DIR / "data" / "feeds"
 REPORTS_DIR = BASE_DIR / "data" / "reference"
 
 SIZE_CONCURRENCY = 20
+
 
 def _publishedprices_is_folder(entry: dict) -> bool:
     filename = entry.get("fname")
@@ -332,6 +338,7 @@ async def get_laibcatalog_files(
 
     return records
 
+
 async def get_carrefour_files(
     slow: bool = False,
 ) -> list[dict]:
@@ -435,8 +442,6 @@ async def get_all_html_candidates(
 
     page_param = listing_config["page_param"]
 
-    # Number of pages requested concurrently.
-    # Can be overridden per source in html_config.py.
     page_batch_size = listing_config.get(
         "concurrency",
         10,
@@ -559,8 +564,6 @@ async def get_all_html_candidates(
         page += page_batch_size
 
     return all_candidates
-
-
 
 
 HEAD_SIZE_SOURCES = {
@@ -730,9 +733,6 @@ async def get_wolt_files(
     date_pages = await client.get_date_pages()
 
     for date_page in date_pages:
-        # Wolt exposes a separate HTML page for each date.
-        # Only fetch today's page — historical pages are irrelevant
-        # for file_tracking.
         if today_str not in date_page:
             continue
 
@@ -830,6 +830,78 @@ async def collect_all_files(
     return all_records
 
 
+def _local_feed_directory(file_type: str) -> str | None:
+    """
+    Map database file_type to the local feed directory.
+    """
+
+    return {
+        "Price": "prices",
+        "PriceFull": "pricesfull",
+        "Promo": "promos",
+        "PromoFull": "promosfull",
+    }.get(file_type)
+
+
+def _is_downloaded_locally(record: dict) -> bool:
+    """
+    Check whether the discovered file exists locally.
+
+    Normal feed files:
+        data/feeds/{chain_id}/{store_id}/{feed_type}/{filename}
+
+    Stores registry files:
+        data/feeds/{chain_id}/stores/{filename}
+    """
+
+    directory = _local_feed_directory(
+        record["file_type"]
+    )
+
+    chain_id = str(record["chain_id"])
+    filename = record["filename"]
+
+    # Store registry files live directly under /stores.
+    if record["file_type"] == "Stores":
+        stores_path = (
+            FEEDS_DIR
+            / chain_id
+            / "stores"
+            / filename
+        )
+
+        return stores_path.is_file()
+
+    if directory is None:
+        return False
+
+    store_id = str(record["store_id"])
+
+    feed_path = (
+        FEEDS_DIR
+        / chain_id
+        / store_id
+        / directory
+        / filename
+    )
+
+    return feed_path.is_file()
+
+
+def _set_downloaded_status(
+    records: list[dict],
+) -> None:
+    """
+    Set downloaded=True when the corresponding file exists
+    in data/feeds.
+    """
+
+    for record in records:
+        record["downloaded"] = _is_downloaded_locally(
+            record
+        )
+
+
 def generate_report(
     records: list[dict],
 ) -> Path:
@@ -907,6 +979,21 @@ async def update_file_tracking(
 
     records = list(
         unique_records.values()
+    )
+
+    # Determine downloaded status from the local filesystem.
+    _set_downloaded_status(records)
+
+    downloaded_count = sum(
+        record["downloaded"]
+        for record in records
+    )
+
+    logger.info(
+        "Local filesystem: %d/%d discovered file(s) "
+        "are already downloaded",
+        downloaded_count,
+        len(records),
     )
 
     if generate_report_file:

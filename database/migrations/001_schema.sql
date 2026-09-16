@@ -182,7 +182,6 @@ WHERE loaded = false;
 CREATE TABLE products (
     item_code             TEXT PRIMARY KEY,
     name                  TEXT,
-    name_count            INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,
@@ -279,15 +278,6 @@ ON prices (store_id, item_code);
 
 CREATE INDEX idx_prices_item_store
 ON prices (item_code, store_id);
-
-
--- ============================================================
--- PRICES PARTITIONS
--- ============================================================
-
-CREATE TABLE prices_7290661400001
-PARTITION OF prices
-FOR VALUES IN ('7290661400001');
 
 
 -- ============================================================
@@ -417,11 +407,3 @@ ON promotion_items (store_id, item_code);
 CREATE INDEX idx_promotion_items_item_store
 ON promotion_items (item_code, store_id);
 
-
--- ============================================================
--- PROMOTION_ITEMS PARTITIONS
--- ============================================================
-
-CREATE TABLE promotion_items_7290661400001
-PARTITION OF promotion_items
-FOR VALUES IN ('7290661400001');

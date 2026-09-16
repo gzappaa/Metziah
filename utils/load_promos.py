@@ -2,10 +2,10 @@
 Standalone loader for the initial PromoFull database seed.
 
 Walks:
-    data/feeds/{chain_id}/{sub_chain_id}/{store_id}/promosfull/
+    data/feeds/{chain_id}/{store_id}/promosfull/
 
-Gzip-decompresses each *.gz PromoFull file, parses it, and upserts it
-into Postgres.
+Finds the latest PromoFull file for each chain/sub-chain/store,
+gzip-decompresses it, parses it, and upserts it into Postgres.
 
 Decoupled from the live download step on purpose -- run this manually
 against PromoFull files already present on disk.
@@ -35,56 +35,75 @@ from pathlib import Path
 
 from config import settings
 from db import get_connection
-from utils.update_promos import load_files
-
 from logging_config import setup_general_logging
+from utils.file_tracking.parser_file_tracking import (
+    extract_time_suffix,
+    parse_filename,
+)
+from utils.update_promos import load_files
 
 
 setup_general_logging()
 logger = logging.getLogger(__name__)
 
-DEFAULT_FEEDS_DIR = Path("data/feeds")
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+DEFAULT_FEEDS_DIR = BASE_DIR / "data" / "feeds"
+TEST_FEEDS_DIR = BASE_DIR / "data" / "test_feeds"
 
 
-import re
-
-
-PROMOFULL_FILENAME_RE = re.compile(
-    r"PromoFull(?P<chain_id>\d+)-(?P<sub_chain_id>\d+)-"
-    r"(?P<store_id>\d+)-(?P<timestamp>\d{8}-\d{6})\.gz$"
-)
-
-
-def find_promo_files(feeds_dir: Path):
+def find_promofull_files(feeds_dir: Path):
     """
-    Find the most recent PromoFull file for each chain/sub-chain/store.
+    Find the latest PromoFull file for each chain/sub-chain/store.
+
+    Files are ordered by their feed date first and timestamp second, so
+    only the most recent snapshot for each chain/sub-chain/store is loaded.
     """
+
     latest = {}
 
-    for filepath in feeds_dir.glob("*/*/*/promosfull/*.gz"):
-        match = PROMOFULL_FILENAME_RE.match(filepath.name)
-
-        if not match:
-            logger.warning("Skipping unrecognized PromoFull filename: %s", filepath.name)
+    for filepath in feeds_dir.glob("*/*/promosfull/*"):
+        try:
+            info = parse_filename(filepath.name)
+        except ValueError:
+            logger.warning(
+                "Skipping unrecognized PromoFull filename: %s",
+                filepath.name,
+            )
             continue
 
-        data = match.groupdict()
+        if info["file_type"] != "PromoFull":
+            continue
 
-        key = (
-            data["chain_id"],
-            data["sub_chain_id"],
-            data["store_id"],
+        chain_id = info["chain_id"]
+        sub_chain_id = info["sub_chain_id"]
+        store_id = info["store_id"]
+
+        file_timestamp = (
+            info["file_date"],
+            extract_time_suffix(filepath.name),
         )
 
-        timestamp = data["timestamp"]
+        key = (
+            chain_id,
+            sub_chain_id,
+            store_id,
+        )
 
-        current = latest.get(key)
+        if (
+            key not in latest
+            or file_timestamp > latest[key][0]
+        ):
+            latest[key] = (
+                file_timestamp,
+                filepath,
+            )
 
-        if current is None or timestamp > current[0]:
-            latest[key] = (timestamp, filepath)
-
-    for _, filepath in latest.values():
-        yield filepath, "PromoFull"
+    yield from (
+        (filepath, "PromoFull")
+        for _, filepath in latest.values()
+    )
 
 
 def main():
@@ -111,6 +130,10 @@ def main():
 
     args = parser_args.parse_args()
 
+    # ------------------------------------------------------------------
+    # Environment safety
+    # ------------------------------------------------------------------
+
     if settings.ENV == "dev" and not args.dev:
         raise RuntimeError(
             "Development database selected. Run with --dev to confirm."
@@ -126,11 +149,34 @@ def main():
             "--test was provided, but the configured environment is not test."
         )
 
+    # ------------------------------------------------------------------
+    # Test feed override
+    # ------------------------------------------------------------------
+
     if args.test:
-        args.feeds_dir = Path("data/test_feeds")
+        args.feeds_dir = TEST_FEEDS_DIR
+
+    # Make a user-supplied relative --feeds-dir relative to the
+    # repository root as well. This keeps the script independent of
+    # the shell's current working directory.
+    elif not args.feeds_dir.is_absolute():
+        args.feeds_dir = BASE_DIR / args.feeds_dir
+
+    args.feeds_dir = args.feeds_dir.resolve()
+
+    logger.info(
+        "Using feeds directory: %s",
+        args.feeds_dir,
+    )
+
+    # ------------------------------------------------------------------
+    # Discover PromoFull files
+    # ------------------------------------------------------------------
 
     files = list(
-        find_promo_files(args.feeds_dir)
+        find_promofull_files(
+            args.feeds_dir
+        )
     )
 
     logger.info(
@@ -141,6 +187,10 @@ def main():
 
     if not files:
         return
+
+    # ------------------------------------------------------------------
+    # Load
+    # ------------------------------------------------------------------
 
     with get_connection() as conn:
         load_files(
