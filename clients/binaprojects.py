@@ -16,7 +16,6 @@ class BinaProjectsClient:
     BACKOFF_SECONDS = [2, 4, 8]
     TIMEOUT = 30
 
-
     def __init__(
         self,
         source_url: str,
@@ -37,7 +36,6 @@ class BinaProjectsClient:
         )
 
         self.session = requests.Session()
-
 
     def _get_with_retry(
         self,
@@ -98,7 +96,6 @@ class BinaProjectsClient:
 
         raise last_exc
 
-
     # WFileType:
     # 1 = stores
     # 2 = prices
@@ -128,7 +125,6 @@ class BinaProjectsClient:
 
         return response.json()
 
-
     def get_download_url(
         self,
         filename: str,
@@ -153,12 +149,33 @@ class BinaProjectsClient:
 
         return data[0]["SPath"]
 
-
     def download_file(
         self,
-        url: str,
+        filename: str,
     ) -> bytes:
 
-        response = self._get_with_retry(url)
+        direct_url = f"{self.base_url}/Download/{filename}"
 
-        return response.content
+        try:
+
+            response = self._get_with_retry(
+                direct_url,
+            )
+
+            return response.content
+
+        except requests.HTTPError:
+
+            logger.warning(
+                "Direct Bina download failed for %s, "
+                "falling back to Download.aspx",
+                filename,
+            )
+
+            download_url = self.get_download_url(
+                filename,
+            )
+
+            return self._get_with_retry(
+                download_url,
+            ).content

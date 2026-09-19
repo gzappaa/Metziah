@@ -16,6 +16,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 import shutil
 from clients.publishedprices import PublishedPricesClient
+from clients.html_client import Candidate
+import json
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +33,54 @@ IGNORED_BINA_STORES = {
 }
 
 
+def _normalize_store_id(store_id) -> str:
+    try:
+        return str(int(store_id))
+    except (TypeError, ValueError):
+        return str(store_id)
+
+
+
 def get_data_dir(test: bool) -> Path:
     return TEST_DATA_DIR if test else DATA_DIR
+
+
+def _load_html_cache(source_name: str) -> list[Candidate]:
+    cache_path = (
+        BASE_DIR
+        / "data"
+        / "cache"
+        / f"{source_name}.json"
+    )
+
+    if not cache_path.is_file():
+        logger.warning(
+            "HTML cache not found for %s: %s",
+            source_name,
+            cache_path,
+        )
+        return []
+
+    try:
+        with cache_path.open("r", encoding="utf-8") as file:
+            cache = json.load(file)
+    except Exception:
+        logger.exception(
+            "Failed reading HTML cache for %s",
+            source_name,
+        )
+        return []
+
+    return [
+        Candidate(
+            text=item.get("text", ""),
+            href=item["url"],
+            filename=item.get("filename"),
+            file_size=item.get("file_size"),
+        )
+        for item in cache.get("files", [])
+        if item.get("url")
+    ]
 
 
 # --- saving to disk ------------------------------------------------------
@@ -136,11 +186,12 @@ def get_test_stores():
             continue
 
         chain_id = price_file.parent.parent.parent.name
-        store_id = price_file.parent.parent.name
+        store_id = price_file.parent.parent.name.zfill(3)
 
         test_stores.add((chain_id, store_id))
 
     return test_stores
+
 
 def filter_test_stores(latest_files):
     test_stores = get_test_stores()
@@ -349,10 +400,16 @@ def normalize_mishnatyosef_listing(
 
 # --- HTML pagination crawler --------------------------------------------
 
-async def _get_html_page(client, page, page_param, params=None):
-    request_params = dict(params or {})
-    request_params[page_param] = page
-    return await client.get_candidates(params=request_params)
+async def _get_html_page(
+    client,
+    page,
+    page_param,
+):
+    return await client.get_candidates(
+        params={
+            page_param: page,
+        }
+    )
 
 
 def _page_fingerprint(candidates) -> tuple:
@@ -369,14 +426,10 @@ def _page_fingerprint(candidates) -> tuple:
 async def get_all_html_candidates(
     client,
     listing_config: dict,
-    file_type_params_key: str,
-    parse_filename,
 ) -> list:
     """
-    Crawls an HTML file-link listing, following numeric pagination if
-    configured, and keeps only candidates whose parsed filename dates
-    to today. `file_type_params_key` is the key inside `listing_config`
-    holding the extra query params needed to filter to this file type.
+    Crawl an HTML file-link listing and return all candidates
+    reported by the publisher.
     """
 
     pagination = listing_config.get("pagination")
@@ -391,14 +444,27 @@ async def get_all_html_candidates(
         )
 
     page_param = listing_config["page_param"]
-    page_batch_size = listing_config.get("concurrency", 10)
+    page_batch_size = listing_config.get(
+        "concurrency",
+        10,
+    )
 
     all_candidates = []
-    seen_pages = set()
+
+    seen_pages = {}
+
+    max_consecutive_repeated_pages = 5
+    consecutive_repeated_pages = 0
+
     page = 1
 
     while True:
-        pages = list(range(page, page + page_batch_size))
+        pages = list(
+            range(
+                page,
+                page + page_batch_size,
+            )
+        )
 
         logger.info(
             "%s: requesting pages %d-%d",
@@ -413,7 +479,6 @@ async def get_all_html_candidates(
                     client,
                     current_page,
                     page_param,
-                    listing_config.get(file_type_params_key),
                 )
                 for current_page in pages
             ),
@@ -422,8 +487,10 @@ async def get_all_html_candidates(
 
         stop_after_batch = False
 
-        for current_page, candidates in zip(pages, results):
-
+        for current_page, candidates in zip(
+            pages,
+            results,
+        ):
             if isinstance(candidates, Exception):
                 logger.error(
                     "%s: page %d failed: %s",
@@ -442,51 +509,46 @@ async def get_all_html_candidates(
                 stop_after_batch = True
                 continue
 
-            fingerprint = _page_fingerprint(candidates)
+            fingerprint = _page_fingerprint(
+                candidates
+            )
 
             if fingerprint in seen_pages:
+                previous_page = seen_pages[fingerprint]
+
                 logger.info(
-                    "%s: page %d repeats a previous page",
+                    "%s: page %d repeats page %d",
                     client.name,
                     current_page,
+                    previous_page,
                 )
-                stop_after_batch = True
+
+                consecutive_repeated_pages += 1
+
+                if (
+                    consecutive_repeated_pages
+                    >= max_consecutive_repeated_pages
+                ):
+                    logger.info(
+                        "%s: stopping pagination after %d consecutive "
+                        "repeated pages",
+                        client.name,
+                        consecutive_repeated_pages,
+                    )
+                    stop_after_batch = True
+
                 continue
 
-            seen_pages.add(fingerprint)
+            consecutive_repeated_pages = 0
+            seen_pages[fingerprint] = current_page
 
-            today_count = 0
-            recognized_count = 0
-            older_count = 0
-
-            for candidate in candidates:
-                filename = getattr(candidate, "filename", None)
-
-                if not filename:
-                    continue
-
-                try:
-                    record = parse_filename(filename)
-                except ValueError:
-                    continue
-
-                recognized_count += 1
-
-                if record["file_date"] == date.today():
-                    today_count += 1
-                    all_candidates.append(candidate)
-                elif record["file_date"] < date.today():
-                    older_count += 1
+            all_candidates.extend(candidates)
 
             logger.info(
-                "%s: page %d -> %d candidates, "
-                "%d recognized, %d today, %d older",
+                "%s: page %d -> %d candidates",
                 client.name,
                 current_page,
                 len(candidates),
-                recognized_count,
-                today_count,
-                older_count,
             )
 
         if stop_after_batch:

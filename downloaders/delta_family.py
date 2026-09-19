@@ -11,9 +11,14 @@ from datetime import date
 from pathlib import Path
 
 from downloaders.common import save_file, save_file_async
-from utils.file_tracking.parser_file_tracking import parse_filename
+from utils.file_tracking.parser_file_tracking import parse_filename, extract_time_suffix
 
 logger = logging.getLogger(__name__)
+
+
+
+
+
 
 
 def find_delta_files(
@@ -60,12 +65,28 @@ def find_delta_files(
     return delta_files
 
 
+def keep_latest_file_per_store(files: list[dict]) -> list[dict]:
+    """Keep only the latest file published today for each chain/store."""
+
+    latest = {}
+
+    for file in files:
+        key = (file["chain_id"], file["store_id"])
+        timestamp = extract_time_suffix(file["filename"])
+
+        if key not in latest or timestamp > latest[key][1]:
+            latest[key] = (file, timestamp)
+
+    return [item[0] for item in latest.values()]
+
+
 def get_storage_path(
     chain_id: str,
     store_id: str,
     data_dir: Path,
     subfolder: str,
 ) -> Path:
+    store_id = str(int(store_id))
     return data_dir / chain_id / store_id / subfolder
 
 

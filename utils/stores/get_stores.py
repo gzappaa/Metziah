@@ -265,6 +265,25 @@ def parse_stores_xml(
 
     return chain_info, stores
 
+def normalize_store_id(store_id) -> str:
+    """
+    Normalize store IDs only for matching.
+
+    Examples:
+        002 -> 2
+        02  -> 2
+        2   -> 2
+        006 -> 6
+        06  -> 6
+        6   -> 6
+    """
+    value = str(store_id).strip()
+
+    if value.isdigit():
+        return value.lstrip("0") or "0"
+
+    return value
+
 
 def load_existing(path: Path):
 
@@ -275,7 +294,7 @@ def load_existing(path: Path):
         stores = json.load(f)
 
     return {
-        store["store_id"]: store
+        normalize_store_id(store["store_id"]): store
         for store in stores
     }
 
@@ -287,54 +306,73 @@ def compare_stores(old, new):
     old_ids = set(old.keys())
 
     new_ids = {
-        store.store_id
+        normalize_store_id(store.store_id)
         for store in new
     }
 
-    for store_id in new_ids - old_ids:
+    # New stores: present in XML but not in existing JSON.
+    for store_id in sorted(new_ids - old_ids):
         changes.append(
             f"NEW STORE: {store_id}"
         )
 
-    for store_id in old_ids - new_ids:
+    # Removed/inactive stores: present in JSON but not XML.
+    for store_id in sorted(old_ids - new_ids):
         changes.append(
             f"REMOVED STORE: {store_id}"
         )
 
-    for store in new:
-
-        if store.store_id not in old:
-            continue
-
-        previous = old[store.store_id]
-
-        fields = [
-            "name",
-            "address",
-            "city",
-            "zip_code",
-        ]
-
-        for field in fields:
-
-            current_value = getattr(
-                store,
-                field,
-            )
-
-            previous_value = previous.get(
-                field
-            )
-
-            if previous_value != current_value:
-                changes.append(
-                    f"CHANGED {store.store_id} "
-                    f"{field}: "
-                    f"{previous_value} -> "
-                    f"{current_value}"
-                )
-
     return changes
+
+
+def merge_stores(old, new):
+    """
+    Existing JSON is the source of truth.
+
+    Store IDs are normalized ONLY for matching.
+
+    Existing JSON records are never replaced or rewritten
+    with XML metadata.
+
+    The only allowed changes are:
+    - Add [N] to an existing store missing from XML.
+    - Append genuinely new stores from XML.
+    """
+
+    merged = []
+
+    new_by_id = {
+        normalize_store_id(store.store_id): store
+        for store in new
+    }
+
+    # Keep every existing JSON record.
+    for normalized_id, old_store in old.items():
+
+        store_copy = dict(old_store)
+
+        # Store is not present in current XML.
+        if normalized_id not in new_by_id:
+
+            name = store_copy.get("name") or ""
+
+            if not name.startswith("[N]"):
+                store_copy["name"] = f"[N] {name}"
+
+        # IMPORTANT:
+        # Keep the original store_id and every other field
+        # exactly as they existed in JSON.
+        merged.append(store_copy)
+
+    # Append only genuinely new stores.
+    for normalized_id, store in new_by_id.items():
+
+        if normalized_id not in old:
+            merged.append(
+                asdict(store)
+            )
+
+    return merged
 
 
 def save_changes_log(chain_key, changes):
@@ -442,6 +480,11 @@ def main():
             changes,
         )
 
+        merged_stores = merge_stores(
+            old_stores,
+            stores,
+        )
+
         with open(
             output_file,
             "w",
@@ -449,7 +492,7 @@ def main():
         ) as f:
 
             json.dump(
-                [asdict(store) for store in stores],
+                merged_stores,
                 f,
                 ensure_ascii=False,
                 indent=4,
@@ -457,7 +500,7 @@ def main():
 
         logger.info(
             "Saved %d stores to %s",
-            len(stores),
+            len(merged_stores),
             output_file.name,
         )
 

@@ -22,22 +22,21 @@ chain_id/store_id/sub_chain_id actually are:
       instead of an ad-hoc regex
     - iter_xml_from_path() is used instead of a bare gzip.open(), so
       container files that hold more than one store's XML document
-      (e.g. a zip) are handled the same way product loading handles
-      them
+      are handled the same way product loading handles them
 
 This module:
-  - parses price feeds 
+  - parses Price and PriceFull feeds
   - deduplicates repeated item codes within a document
   - optionally logs price changes
   - upserts prices
-  - reconciles items removed from the current store snapshot
+  - reconciles items removed from snapshot feeds
   - marks successfully loaded files
 
-It does NOT:
-  - create products
-  - create store_products
-  - resolve product names
-  - modify product metadata
+Feed semantics:
+  - PriceFull is always a complete snapshot.
+  - Price can be either a snapshot or a delta.
+  - The caller specifies whether a Price file is a snapshot.
+  - Delta feeds never reconcile missing items.
 """
 
 import json
@@ -252,23 +251,51 @@ def load_one_file(
     filepath: Path,
     feeds_dir: Path,
     chain_metadata: dict,
+    file_type: str,
+    snapshot: bool = False,
     log_changes: bool = True,
 ) -> bool:
     """
-    Load prices from one feed file.
+    Load prices from one Price or PriceFull feed file.
+
+    PriceFull is always treated as a complete snapshot.
+
+    Price files can either be snapshots or deltas. The caller controls
+    this through `snapshot`.
+
+    Therefore:
+
+        PriceFull
+            -> snapshot
+            -> reconcile missing items
+
+        Price + snapshot=True
+            -> snapshot
+            -> reconcile missing items
+
+        Price + snapshot=False
+            -> delta
+            -> do not reconcile missing items
 
     iter_xml_from_path() yields complete XML documents as bytes. A
     container such as a zip may therefore produce more than one XML
-    document for a single filepath -- each document is a distinct
-    store snapshot and is loaded (dedup/log/upsert/reconcile/commit)
-    independently, the same way update_products.py treats each
-    document independently while scanning.
-
-    Product information is deliberately ignored.
+    document for a single filepath.
 
     Returns True if at least one document in this file produced price
     records, False otherwise.
     """
+    if file_type not in {"Price", "PriceFull"}:
+        raise ValueError(
+            f"Unsupported price file type: {file_type}"
+        )
+
+    # PriceFull is ALWAYS a snapshot.
+    # For Price files, the caller decides through `snapshot`.
+    is_snapshot = (
+        file_type == "PriceFull"
+        or snapshot
+    )
+
     file_had_prices = False
 
     for xml_content in iter_xml_from_path(filepath):
@@ -288,12 +315,10 @@ def load_one_file(
         # ---------------------------------------------------------------
         # Path metadata
         #
-        # data/feeds/{chain_id}/{store_id}/pricesfull/file
+        # data/feeds/{chain_id}/{store_id}/{prices|pricesfull}/file
         #
-        # The path is the source of truth for chain_id/store_id -- store
-        # directories are canonicalized when files are written, so the
-        # directory name is the DB store_id. sub_chain_id comes from the
-        # filename instead, via parse_filename().
+        # The path is the source of truth for chain_id/store_id.
+        # sub_chain_id comes from the filename.
         # ---------------------------------------------------------------
 
         relative_parts = filepath.relative_to(
@@ -405,7 +430,6 @@ def load_one_file(
         # -----------------------------------------------------------
 
         price_records = []
-        item_codes_in_file = set()
 
         for product in products:
             _, _, price_record = split_product(
@@ -416,10 +440,6 @@ def load_one_file(
 
             price_records.append(
                 price_record
-            )
-
-            item_codes_in_file.add(
-                product.item_code
             )
 
         # -----------------------------------------------------------
@@ -433,7 +453,7 @@ def load_one_file(
         )
 
         # The dedupe result is the authoritative set used for both
-        # database writing and reconciliation.
+        # database writing and snapshot reconciliation.
         item_codes_in_file = {
             record.item_code
             for record in price_records
@@ -471,21 +491,27 @@ def load_one_file(
         )
 
         # -----------------------------------------------------------
-        # Remove prices that disappeared from the current snapshot
+        # Remove prices missing from a snapshot.
+        #
+        # PriceFull is always a snapshot.
+        # Price is only a snapshot when snapshot=True.
         # -----------------------------------------------------------
 
-        deleted = reconcile_removed_items(
-            conn,
-            chain_id,
-            store_id_text,
-            item_codes_in_file,
-        )
+        deleted = 0
+
+        if is_snapshot:
+            deleted = reconcile_removed_items(
+                conn,
+                chain_id,
+                store_id_text,
+                item_codes_in_file,
+            )
 
         # -----------------------------------------------------------
         # Log removed items
         # -----------------------------------------------------------
 
-        if log_changes:
+        if log_changes and is_snapshot:
             removed_codes = (
                 set(existing_prices)
                 - item_codes_in_file
@@ -515,9 +541,12 @@ def load_one_file(
         # -----------------------------------------------------------
 
         logger.info(
-            "%s: chain_id=%s store_id=%s "
+            "%s: type=%s snapshot=%s "
+            "chain_id=%s store_id=%s "
             "items=%d removed=%d",
             filepath.name,
+            file_type,
+            is_snapshot,
             chain_id,
             store_id_text,
             len(price_records),
@@ -526,18 +555,34 @@ def load_one_file(
 
     return file_had_prices
 
+
 # ---------------------------------------------------------------------------
 # Multiple files
 # ---------------------------------------------------------------------------
 
 def load_files(
     conn,
-    filepaths: list[Path],
+    files: list[tuple[Path, str, bool]],
     feeds_dir: Path,
     log_changes: bool = True,
 ) -> list[Path]:
     """
-    Load all supplied PriceFull files.
+    Load all supplied Price and PriceFull files.
+
+    Each entry must be:
+
+        (filepath, file_type, snapshot)
+
+    file_type:
+        - Price
+        - PriceFull
+
+    PriceFull is always treated as a snapshot regardless of the
+    snapshot value supplied.
+
+    For Price:
+        snapshot=True  -> reconcile
+        snapshot=False -> delta/no reconciliation
 
     Successfully loaded files are marked as loaded in file_tracking.
 
@@ -548,7 +593,7 @@ def load_files(
 
     loaded_files = []
 
-    for filepath in filepaths:
+    for filepath, file_type, snapshot in files:
         try:
             file_had_prices = load_one_file(
                 conn,
@@ -556,6 +601,8 @@ def load_files(
                 filepath,
                 feeds_dir,
                 chain_metadata,
+                file_type,
+                snapshot=snapshot,
                 log_changes=log_changes,
             )
 

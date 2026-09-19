@@ -7,5 +7,14 @@
         "web_site": "https://city-market.co.il/",
         "publishing_in": "https://citymarketkiryatgat.binaprojects.com/Main.aspx",
         "client": "BinaProjectsClient"
+    },
+    "0000000000000": {
+        "Chain_name_store_file": "unknown",
+        "Chain_name_gov_page": "unknown",
+        "name_he_normalized": "unknown",
+        "name_en_normalized": "unknown",
+        "web_site": "unknown",
+        "publishing_in": "unknown",
+        "client": "unknown"
     }
 }

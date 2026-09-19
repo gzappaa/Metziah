@@ -280,8 +280,7 @@ def download_stores_binaprojects(
         return None
 
     def fetch_content() -> bytes:
-        download_url = client.get_download_url(latest["filename"])
-        return client.download_file(download_url)
+        return client.download_file(latest["filename"])
 
     return save_file(
         get_storage_path(latest["chain_id"], data_dir),

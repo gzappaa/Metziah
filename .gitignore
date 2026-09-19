@@ -27,3 +27,5 @@ discard*
 monitoring/data/prices_vs_pricesfull_report.json
 monitoring/data/promos_vs_promofull_report.json
 data/test_feeds
+data/cache
+data/feedsOLD

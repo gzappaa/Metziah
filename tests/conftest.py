@@ -30,11 +30,19 @@ def test_store(conn):
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chains (chain_id)
-            VALUES (%s)
-            ON CONFLICT DO NOTHING
+            INSERT INTO chains (
+                chain_id,
+                name_he_normalized,
+                name_en_normalized
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT (chain_id) DO NOTHING
             """,
-            (chain_id,),
+            (
+                chain_id,
+                "test chain",
+                "test chain",
+            ),
         )
 
         cur.execute(
@@ -60,3 +68,50 @@ def test_store(conn):
         "chain_id": chain_id,
         "store_id_text": store_id,
     }
+
+
+@pytest.fixture
+def create_store(conn):
+    def _create_store(
+        chain_id,
+        store_id,
+        sub_chain_id="TEST_SUBCHAIN",
+    ):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chains (
+                    chain_id,
+                    name_he_normalized,
+                    name_en_normalized
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chain_id) DO NOTHING
+                """,
+                (
+                    chain_id,
+                    "test chain",
+                    "test chain",
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO stores (
+                    chain_id,
+                    sub_chain_id,
+                    store_id,
+                    store_name
+                )
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (chain_id, store_id) DO NOTHING
+                """,
+                (
+                    chain_id,
+                    sub_chain_id,
+                    store_id,
+                    "Test Store",
+                ),
+            )
+
+    return _create_store

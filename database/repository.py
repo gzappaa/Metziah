@@ -1160,6 +1160,71 @@ def get_downloaded_unloaded_promo_files(conn):
         return cur.fetchall()
 
 
+def get_downloaded_pricefull_files(conn):
+    """
+    Return downloaded but not yet loaded PriceFull files.
+
+    Column order matches scheduler.py:
+        chain_id,
+        sub_chain_id,
+        store_id,
+        file_type,
+        filename,
+        file_date
+    """
+
+    query = """
+        SELECT
+            chain_id,
+            sub_chain_id,
+            store_id,
+            file_type,
+            filename,
+            file_date
+        FROM file_tracking
+        WHERE file_type = 'PriceFull'
+          AND downloaded = true
+          AND loaded = false
+        ORDER BY file_date, filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+
+def get_downloaded_unloaded_price_files(conn):
+    query = """
+        SELECT
+            p.chain_id,
+            p.sub_chain_id,
+            p.store_id,
+            p.file_type,
+            p.filename,
+            p.file_date
+        FROM file_tracking p
+        WHERE p.file_type = 'Price'
+          AND p.downloaded = true
+          AND p.loaded = false
+
+          AND EXISTS (
+              SELECT 1
+              FROM file_tracking pf
+              WHERE pf.chain_id = p.chain_id
+                AND pf.store_id = p.store_id
+                AND pf.file_date = p.file_date
+                AND pf.file_type = 'PriceFull'
+                AND pf.loaded = true
+          )
+
+        ORDER BY p.file_date, p.filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+
 # --- email ---
 
 def get_nearby_store_ids(

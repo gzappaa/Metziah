@@ -266,3 +266,104 @@ The current approach should remain in place as long as:
 - and the Yellow website spreadsheet remains the available metadata source.
 
 ``` ```
+
+
+# Update — 2026-09-20
+
+On ****2026**-09-20**, Yellow/Paz began publishing a `Stores` **XML** file through its `publishedprices` account.
+
+This provides a direct first-party source for Yellow store IDs and store metadata.
+
+The newly available `Stores` **XML** is therefore now the preferred source for the Yellow store registry.
+
+## Validation of the Previous Approach
+
+The newly available **XML** also provided an opportunity to validate the previous **CSV**-based solution against the new first-party source.
+
+The previous Yellow registry was compared against the newly obtained `Stores` **XML**.
+
+Store IDs were normalized for matching so that different zero-padding representations were treated as the same store.
+
+Address and city values were normalized before comparison to account for formatting differences such as whitespace, punctuation, and spacing around hyphens.
+
+The comparison produced:
+
+```text **XML** stores:              **242** Previous registry:       **242** Stores in both:          **237** **XML**-only:                  5 Previous-only:             5
+
+For the **237** stores present in both registries:
+
+**EXACT** / **NEAR**-**EXACT**       **173** / **237**  (73.00%) **VERY** **CLOSE**                17 / **237**  ( 7.17%) **CLOSE**                     37 / **237**  (15.61%) **PARTIAL**                    6 / **237**  ( 2.53%) **DIFFERENT**                  4 / **237**  ( 1.69%)
+
+Overall:
+
+>= 80% similarity:       **227** / **237**  (95.78%) >= 90% similarity:       **190** / **237**  (80.17%)
+
+Most differences were formatting or representation differences rather than incorrect locality identification.
+
+For example:
+
+**XML**:        תל אביב -יפו Previous:   תל אביב - יפו
+
+and:
+
+**XML**:        **188** הרצל Previous:   הרצל  **188**
+
+The five stores present only in the new **XML** were:
+
+**213** **221** **248** **249** **618**
+
+The five stores present only in the previous registry were:
+
+**127** **197** **427** **6108** **6109**
+
+The comparison therefore provides evidence that the previous **CSV**-based approach produced broadly similar address/city metadata, while also showing that the newly available **XML** should replace it as the authoritative source.
+
+The comparison script was used only for validation and is not part of the production Yellow store pipeline.
+
+### New Decision
+
+The Yellow Stores **XML** is now the source of truth for the Yellow store registry.
+
+The production flow is now:
+
+Yellow/Paz publishedprices
+        ↓
+Stores **XML**
+        ↓
+data/stores/yellow.json
+
+The previous architecture:
+
+Published PriceFull files → store existence yellow_stations.csv       → metadata AI normalization          → address/city separation
+
+is retired.
+
+PriceFull files may still be used to independently verify published price-data coverage, but they are no longer required as the primary source for constructing the Yellow store registry.
+
+### Archived Previous Implementation
+
+The previous Yellow-specific implementation is no longer part of the production pipeline.
+
+It is archived together with the source **CSV**:
+
+data/archive/yellow/ ├── yellow_stores.py.txt └── yellow_stations_2026-09-06.csv
+
+The archived script documents the exact implementation used when Yellow did not provide a Stores **XML** file.
+
+It may be restored if Yellow/Paz stops publishing the Stores **XML** or if the **XML** becomes unusable.
+
+### Updated Future Considerations
+
+The Yellow Stores **XML** is now the preferred source for the Yellow store registry.
+
+The previous **CSV**-based implementation should only be reconsidered if:
+
+Yellow/Paz stops publishing the Stores **XML**, the **XML** becomes unavailable for an extended period, or the **XML** no longer provides sufficient store metadata.
+
+If this happens, the archived **CSV** and previous yellow_stores.py implementation can be used as a fallback, subject to revalidation against the currently published PriceFull files.
+
+So the chronology stays clean:
+
+****2026**-09-06:** no **XML** → **CSV** + PriceFull solution → **242** stores.
+
+****2026**-09-20:** **XML** appears → compare old solution against it → retire old production approach → archive it → use **XML** going forward.

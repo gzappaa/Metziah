@@ -1,3 +1,45 @@
+ARCHIVED — Yellow Store Registry — 2026-09-20
+
+Original location:
+    utils/stores/data_enrichment/yellow_stores.py
+    data/reference/yellow_stations.csv
+
+Original purpose:
+    Build data/stores/yellow.json for Yellow/Paz.
+
+Original sources:
+    data/reference/yellow_stations.csv
+    Yellow/Paz publishedprices account
+
+Original logic:
+    - Store existence was determined from published PriceFull files.
+    - Store metadata came from yellow_stations.csv.
+    - CSV-only stations were ignored.
+    - Published PriceFull stores missing from the CSV were included with
+      unknown metadata.
+
+Reason for archival:
+    On 2026-09-20, Yellow/Paz began publishing a Stores XML file through
+    its publishedprices account.
+
+    The Stores XML now provides an authoritative source for Yellow store
+    IDs and store metadata, so the CSV-based implementation is no longer
+    used to generate data/stores/yellow.json.
+
+    The script is retained as a historical/fallback artifact in case
+    Yellow stops publishing the Stores XML or changes/removes the source.
+
+Validation:
+    Before retiring this implementation, its resulting store metadata
+    was compared against the newly available Stores XML to evaluate the
+    accuracy of the previous CSV + normalization approach.
+
+
+
+
+
+
+
 # yellow_stores.py
 #
 # Run from the Metziah project root:

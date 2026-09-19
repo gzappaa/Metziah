@@ -1,8 +1,7 @@
-# utils/file_tracking/load_file_tracking.py
-
 import argparse
 import asyncio
 import csv
+import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -16,10 +15,19 @@ from clients.publishedprices import PublishedPricesClient
 from clients.binaprojects import BinaProjectsClient
 from clients.laibcatalog import LaibcatalogClient
 from clients.carrefour import CarrefourClient
-from clients.html_client import HtmlFileLinkClient
+from clients.html_client import (
+    Candidate,
+    HtmlFileLinkClient,
+)
 from clients.html_config import SOURCES as HTML_SOURCES
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
+
+from downloaders.common import (
+    get_all_html_candidates,
+    list_publishedprices_entries_recursive,
+    _normalize_store_id,
+)
 
 from .parser_file_tracking import parse_filename, normalize_file
 from .add_sizes_file_tracking import (
@@ -28,97 +36,41 @@ from .add_sizes_file_tracking import (
     parse_file_size,
 )
 
-
 setup_general_logging()
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
-FEEDS_DIR = BASE_DIR / "data" / "feeds"
+FEEDS_DIR = (
+    BASE_DIR / "data" / "test_feeds"
+    if settings.ENV == "test"
+    else BASE_DIR / "data" / "feeds"
+)
+
 REPORTS_DIR = BASE_DIR / "data" / "reference"
+
+CACHE_DIR = BASE_DIR / "data" / "cache"
+SHUFERSAL_CACHE = CACHE_DIR / "shufersal.json"
 
 SIZE_CONCURRENCY = 20
 
 
-def _publishedprices_is_folder(entry: dict) -> bool:
-    filename = entry.get("fname")
-
-    if not filename:
-        return False
-
-    return "." not in filename
-
-
-def get_publishedprices_files_recursive(
-    client: PublishedPricesClient,
-    cd: str = "/",
-    depth: int = 0,
-    max_depth: int = 2,
-) -> list[dict]:
-    try:
-        response = client.get_files(
-            cd=cd
-        )
-    except Exception:
-        logger.exception(
-            "PublishedPrices: failed listing %s",
-            cd,
-        )
-        return []
-
-    records = []
-
-    logger.info(
-        "PublishedPrices: received %d entries in %s",
-        len(response.get("aaData", [])),
-        cd,
+def _add_record(
+    records: list[dict],
+    filename: str,
+    source: str,
+    size=None,
+    **extra,
+) -> None:
+    record = normalize_file(
+        filename,
+        size,
     )
 
-    for entry in response.get("aaData", []):
-        filename = entry.get("fname")
-
-        if not filename:
-            continue
-
-        # Entries without an extension are folders.
-        if _publishedprices_is_folder(entry):
-            if depth >= max_depth:
-                logger.warning(
-                    "PublishedPrices: max recursion depth reached at %s/%s",
-                    cd.rstrip("/"),
-                    filename,
-                )
-                continue
-
-            sub_cd = f"{cd.rstrip('/')}/{filename}"
-
-            logger.info(
-                "PublishedPrices: '%s' looks like a folder — recursing",
-                filename,
-            )
-
-            records.extend(
-                get_publishedprices_files_recursive(
-                    client,
-                    cd=sub_cd,
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                )
-            )
-
-            continue
-
-        size = entry.get("size")
-
-        record = normalize_file(
-            filename,
-            size,
-        )
-
-        if record:
-            records.append(record)
-
-    return records
+    if record:
+        record["source"] = source
+        record.update(extra)
+        records.append(record)
 
 
 async def get_publishedprices_files(
@@ -159,20 +111,27 @@ async def get_publishedprices_files(
         try:
             client.login()
 
-            files = get_publishedprices_files_recursive(
+            files = list_publishedprices_entries_recursive(
                 client
             )
 
+            source_records = []
+
             for file in files:
-                file["source"] = source_label
+                _add_record(
+                    source_records,
+                    file["fname"],
+                    source_label,
+                    file.get("size"),
+                )
 
             logger.info(
                 "%s: found %d today's file(s)",
                 source_label,
-                len(files),
+                len(source_records),
             )
 
-            records.extend(files)
+            records.extend(source_records)
 
         except Exception:
             logger.exception(
@@ -229,18 +188,21 @@ async def get_binaprojects_files(
                 if not filename:
                     continue
 
-                download_url = client.get_download_url(
-                    filename
-                )
-
                 record = normalize_file(
                     filename,
                     None,
                 )
 
                 if record:
-                    record["_download_url"] = download_url
                     record["source"] = source_label
+
+                    if slow:
+                        record["_download_url"] = (
+                            client.get_download_url(
+                                filename
+                            )
+                        )
+
                     source_records.append(record)
 
             if slow:
@@ -258,10 +220,6 @@ async def get_binaprojects_files(
                     sizes,
                 ):
                     record["file_size"] = size
-                    del record["_download_url"]
-
-            else:
-                for record in source_records:
                     del record["_download_url"]
 
             logger.info(
@@ -313,14 +271,12 @@ async def get_laibcatalog_files(
                     file.get("fileSize") or file.get("גודל")
                 )
 
-                record = normalize_file(
+                _add_record(
+                    source_records,
                     filename,
+                    source_label,
                     size,
                 )
-
-                if record:
-                    record["source"] = source_label
-                    source_records.append(record)
 
             logger.info(
                 "%s: found %d today's file(s)",
@@ -369,201 +325,20 @@ async def get_carrefour_files(
         if not filename:
             continue
 
-        record = normalize_file(
+        _add_record(
+            records,
             filename,
+            source_label,
             size,
         )
 
-        if record:
-            record["source"] = source_label
-            records.append(record)
-
     logger.info(
-        "%s: found %d today's file(s)",
+        "%s: found %d file(s)",
         source_label,
         len(records),
     )
 
     return records
-
-
-def _candidate_filename(candidate) -> str | None:
-    filename = getattr(candidate, "filename", None)
-
-    if filename:
-        return filename
-
-    return None
-
-
-async def get_html_page(
-    client: HtmlFileLinkClient,
-    page: int,
-    page_param: str,
-):
-    return await client.get_candidates(
-        params={
-            page_param: page,
-        }
-    )
-
-
-def _page_fingerprint(candidates) -> tuple:
-    """
-    Create a stable fingerprint for an HTML page.
-
-    Some sites return the same final page for arbitrary
-    page numbers beyond the real last page.
-    """
-    return tuple(
-        (
-            getattr(candidate, "filename", None),
-            getattr(candidate, "href", None),
-            getattr(candidate, "text", None),
-        )
-        for candidate in candidates
-    )
-
-
-async def get_all_html_candidates(
-    client: HtmlFileLinkClient,
-    listing_config: dict,
-) -> list:
-    pagination = listing_config.get("pagination")
-
-    if pagination is None:
-        return await client.get_candidates()
-
-    if pagination != "numeric":
-        raise ValueError(
-            f"Unsupported pagination type for "
-            f"{client.name}: {pagination!r}"
-        )
-
-    page_param = listing_config["page_param"]
-
-    page_batch_size = listing_config.get(
-        "concurrency",
-        10,
-    )
-
-    all_candidates = []
-
-    seen_pages = set()
-
-    page = 1
-
-    while True:
-        pages = list(
-            range(
-                page,
-                page + page_batch_size,
-            )
-        )
-
-        logger.info(
-            "%s: requesting pages %d-%d",
-            client.name,
-            pages[0],
-            pages[-1],
-        )
-
-        results = await asyncio.gather(
-            *(
-                get_html_page(
-                    client,
-                    current_page,
-                    page_param,
-                )
-                for current_page in pages
-            ),
-            return_exceptions=True,
-        )
-
-        stop_after_batch = False
-
-        for current_page, candidates in zip(
-            pages,
-            results,
-        ):
-            if isinstance(candidates, Exception):
-                logger.error(
-                    "%s: page %d failed: %s",
-                    client.name,
-                    current_page,
-                    candidates,
-                )
-                continue
-
-            if not candidates:
-                logger.info(
-                    "%s: page %d is empty",
-                    client.name,
-                    current_page,
-                )
-
-                stop_after_batch = True
-                continue
-
-            fingerprint = _page_fingerprint(
-                candidates
-            )
-
-            if fingerprint in seen_pages:
-                logger.info(
-                    "%s: page %d repeats a previous page",
-                    client.name,
-                    current_page,
-                )
-
-                stop_after_batch = True
-                continue
-
-            seen_pages.add(fingerprint)
-
-            today_count = 0
-            recognized_count = 0
-            older_count = 0
-
-            for candidate in candidates:
-                filename = _candidate_filename(
-                    candidate
-                )
-
-                if not filename:
-                    continue
-
-                try:
-                    record = parse_filename(filename)
-                except ValueError:
-                    continue
-
-                recognized_count += 1
-
-                if record["file_date"] == date.today():
-                    today_count += 1
-                    all_candidates.append(candidate)
-
-                elif record["file_date"] < date.today():
-                    older_count += 1
-
-            logger.info(
-                "%s: page %d -> %d candidates, "
-                "%d recognized, %d today, %d older",
-                client.name,
-                current_page,
-                len(candidates),
-                recognized_count,
-                today_count,
-                older_count,
-            )
-
-        if stop_after_batch:
-            break
-
-        page += page_batch_size
-
-    return all_candidates
 
 
 HEAD_SIZE_SOURCES = {
@@ -574,6 +349,65 @@ HEAD_SIZE_SOURCES = {
 GET_SIZE_SOURCES = {
     "city market",
 }
+
+
+def _html_cache_path(source_name: str) -> Path:
+    return CACHE_DIR / f"{source_name}.json"
+
+
+def _save_html_cache(
+    source_name: str,
+    candidates: list,
+) -> None:
+    CACHE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    cache = {
+        "files": [
+            {
+                "text": candidate.text,
+                "url": candidate.href,
+                "filename": candidate.filename,
+                "file_size": candidate.file_size,
+            }
+            for candidate in candidates
+            if candidate.filename and candidate.href
+        ],
+    }
+
+    cache_path = _html_cache_path(source_name)
+    temp_path = cache_path.with_suffix(".tmp")
+
+    try:
+        with temp_path.open(
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                cache,
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        temp_path.replace(cache_path)
+
+        logger.info(
+            "%s cache saved: %d file(s)",
+            source_name,
+            len(cache["files"]),
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed saving %s cache",
+            source_name,
+        )
+
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 async def get_html_files(
@@ -612,7 +446,11 @@ async def get_html_files(
             listing,
         )
 
-        source_label = source_name
+        _save_html_cache(
+            source_name,
+            candidates,
+        )
+
         source_records = []
 
         for candidate in candidates:
@@ -638,19 +476,17 @@ async def get_html_files(
                         slow=True,
                     )
 
-            record = normalize_file(
+            _add_record(
+                source_records,
                 filename,
+                source_name,
                 size,
+                url=candidate.href,
             )
 
-            if record:
-                record["source"] = source_label
-                record["url"] = candidate.href
-                source_records.append(record)
-
         logger.info(
-            "%s: found %d today's file(s)",
-            source_label,
+            "%s: found %d file(s)",
+            source_name,
             len(source_records),
         )
 
@@ -700,14 +536,12 @@ async def get_mishnatyosef_files(
         if not filename:
             continue
 
-        record = normalize_file(
+        _add_record(
+            records,
             filename,
+            source_label,
             size,
         )
-
-        if record:
-            record["source"] = source_label
-            records.append(record)
 
     logger.info(
         "%s: found %d today's file(s)",
@@ -727,13 +561,10 @@ async def get_wolt_files(
 
     source_label = "wolt"
 
-    today = date.today()
-    today_str = today.isoformat()
-
     date_pages = await client.get_date_pages()
 
     for date_page in date_pages:
-        if today_str not in date_page:
+        if date.today().isoformat() not in date_page:
             continue
 
         logger.info(
@@ -755,12 +586,12 @@ async def get_wolt_files(
                 .split("/")[-1]
             )
 
-            record = normalize_file(filename)
-
-            if record:
-                record["source"] = source_label
-                record["url"] = url
-                records.append(record)
+            _add_record(
+                records,
+                filename,
+                source_label,
+                url=url,
+            )
 
     logger.info(
         "%s: found %d today's file(s)",
@@ -769,65 +600,6 @@ async def get_wolt_files(
     )
 
     return records
-
-
-async def collect_all_files(
-    slow: bool = False,
-) -> list[dict]:
-    all_records = []
-
-    collectors = [
-        (
-            "PublishedPrices",
-            get_publishedprices_files,
-        ),
-        (
-            "BinaProjects",
-            get_binaprojects_files,
-        ),
-        (
-            "Laibcatalog",
-            get_laibcatalog_files,
-        ),
-        (
-            "Carrefour",
-            get_carrefour_files,
-        ),
-        (
-            "HTML",
-            get_html_files,
-        ),
-        (
-            "MishnatYosef",
-            get_mishnatyosef_files,
-        ),
-        (
-            "Wolt",
-            get_wolt_files,
-        ),
-    ]
-
-    for name, collector in collectors:
-        try:
-            records = await collector(
-                slow=slow,
-            )
-
-            logger.info(
-                "%s: %d today's file(s) total",
-                name,
-                len(records),
-            )
-
-            all_records.extend(records)
-
-        except Exception:
-            logger.exception(
-                "Failed collecting files from %s",
-                name,
-            )
-
-    return all_records
 
 
 def _local_feed_directory(file_type: str) -> str | None:
@@ -848,10 +620,10 @@ def _is_downloaded_locally(record: dict) -> bool:
     Check whether the discovered file exists locally.
 
     Normal feed files:
-        data/feeds/{chain_id}/{store_id}/{feed_type}/{filename}
+        data/{feeds_dir}/{chain_id}/{normalized_store_id}/{feed_type}/{filename}
 
     Stores registry files:
-        data/feeds/{chain_id}/stores/{filename}
+        data/{feeds_dir}/{chain_id}/stores/{filename}
     """
 
     directory = _local_feed_directory(
@@ -861,7 +633,6 @@ def _is_downloaded_locally(record: dict) -> bool:
     chain_id = str(record["chain_id"])
     filename = record["filename"]
 
-    # Store registry files live directly under /stores.
     if record["file_type"] == "Stores":
         stores_path = (
             FEEDS_DIR
@@ -875,7 +646,9 @@ def _is_downloaded_locally(record: dict) -> bool:
     if directory is None:
         return False
 
-    store_id = str(record["store_id"])
+    store_id = _normalize_store_id(
+        record["store_id"]
+    )
 
     feed_path = (
         FEEDS_DIR
@@ -893,7 +666,7 @@ def _set_downloaded_status(
 ) -> None:
     """
     Set downloaded=True when the corresponding file exists
-    in data/feeds.
+    in the configured feed directory.
     """
 
     for record in records:
@@ -956,6 +729,44 @@ def generate_report(
     return report_path
 
 
+async def collect_all_files(
+    slow: bool = False,
+) -> list[dict]:
+    all_records = []
+
+    collectors = [
+        ("PublishedPrices", get_publishedprices_files),
+        ("BinaProjects", get_binaprojects_files),
+        ("Laibcatalog", get_laibcatalog_files),
+        ("Carrefour", get_carrefour_files),
+        ("HTML", get_html_files),
+        ("MishnatYosef", get_mishnatyosef_files),
+        ("Wolt", get_wolt_files),
+    ]
+
+    for name, collector in collectors:
+        try:
+            records = await collector(
+                slow=slow,
+            )
+
+            logger.info(
+                "%s: %d today's file(s) total",
+                name,
+                len(records),
+            )
+
+            all_records.extend(records)
+
+        except Exception:
+            logger.exception(
+                "Failed collecting files from %s",
+                name,
+            )
+
+    return all_records
+
+
 async def update_file_tracking(
     generate_report_file: bool = False,
     slow: bool = False,
@@ -981,7 +792,6 @@ async def update_file_tracking(
         unique_records.values()
     )
 
-    # Determine downloaded status from the local filesystem.
     _set_downloaded_status(records)
 
     downloaded_count = sum(

@@ -12,6 +12,8 @@ from clients.html_client import HtmlFileLinkClient
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
 
+from downloaders.runner import run_all_sources, run_cli
+
 from utils.file_tracking.parser_file_tracking import parse_filename
 
 from downloaders.common import (
@@ -22,14 +24,14 @@ from downloaders.common import (
     normalize_carrefour_listing,
     normalize_wolt_file_urls,
     normalize_mishnatyosef_listing,
-    get_all_html_candidates,
+    _load_html_cache,
 )
+
 from downloaders.delta_family import (
     find_delta_files,
     save_delta_file,
     save_delta_file_async,
 )
-from downloaders.runner import run
 
 
 setup_general_logging()
@@ -121,7 +123,7 @@ def download_promo_binaprojects(
     promo_files = find_delta_files(files, FILE_TYPE, filename_key="FileNm")
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
         logger.warning("No %s files found for %s", FILE_TYPE, name)
@@ -132,8 +134,7 @@ def download_promo_binaprojects(
     for promo_file in promo_files:
 
         def fetch_content(promo_file=promo_file) -> bytes:
-            download_url = client.get_download_url(promo_file["filename"])
-            return client.download_file(download_url)
+            return client.download_file(promo_file["filename"])
 
         result = save_delta_file(
             chain_id=promo_file["chain_id"],
@@ -173,7 +174,7 @@ async def download_promo_laibcatalog(
     promo_files = find_delta_files(files, FILE_TYPE, filename_key="fileName")
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
         logger.warning("No %s files found for %s", FILE_TYPE, name)
@@ -222,10 +223,14 @@ async def download_promo_carrefour(test: bool = False) -> list:
     path = listing["path"]
     normalized = normalize_carrefour_listing(listing["files"])
 
-    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+    promo_files = find_delta_files(
+        normalized,
+        FILE_TYPE,
+        filename_key="filename",
+    )
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
         logger.warning("No %s files found for Carrefour", FILE_TYPE)
@@ -238,7 +243,8 @@ async def download_promo_carrefour(test: bool = False) -> list:
         filename = promo_file["filename"]
 
         download_url = urljoin(
-            f"{client.base_url}/", f"{path.strip('/')}/{filename}",
+            f"{client.base_url}/",
+            f"{path.strip('/')}/{filename}",
         )
 
         async def fetch_content(download_url=download_url) -> bytes:
@@ -261,61 +267,66 @@ async def download_promo_carrefour(test: bool = False) -> list:
     return downloaded_files
 
 
-async def download_promo_html(source: dict, test: bool = False) -> list:
+async def download_promo_html(
+    source: dict,
+    test: bool = False,
+) -> list:
 
     data_dir = get_data_dir(test)
-
     name = source["name"]
-    listing = source["listing"]
-    categories = source["categories"]
-
-    promo_params = categories.get("file_types", {}).get(FILE_TYPE)
-
-    if promo_params is None:
-        logger.warning("No '%s' file_type configured for %s", FILE_TYPE, name)
-        return []
-
-    base_url = categories.get("endpoint", listing["base_url"])
 
     client = HtmlFileLinkClient(
         name=name,
-        base_url=base_url,
+        base_url=source["listing"]["base_url"],
         extraction_mode=source["extraction_mode"],
         filename_column=source.get("filename_column"),
         filename_source=source["filename_source"],
         filename_param=source.get("filename_param"),
     )
 
-    logger.info("Listing files for %s (HTML)...", name)
+    logger.info(
+        "Loading HTML cache for %s...",
+        name,
+    )
 
-    try:
-        candidates = await get_all_html_candidates(
-            client,
-            {**listing, "file_type_params": promo_params},
-            "file_type_params",
-            parse_filename,
-        )
-    except Exception:
-        logger.exception("Failed getting file list for %s", name)
-        return []
+    candidates = _load_html_cache(name)
 
-    href_by_filename = {
-        candidate.filename: candidate.href
-        for candidate in candidates
-        if candidate.filename
-    }
+    href_by_filename = {}
+
+    for candidate in candidates:
+        filename = candidate.filename
+
+        if not filename:
+            continue
+
+        try:
+            record = parse_filename(filename)
+        except ValueError:
+            continue
+
+        if record["file_type"] != FILE_TYPE:
+            continue
+
+        href_by_filename[filename] = candidate.href
 
     promo_files = find_delta_files(
-        [{"filename": filename} for filename in href_by_filename],
+        [
+            {"filename": filename}
+            for filename in href_by_filename
+        ],
         FILE_TYPE,
         filename_key="filename",
     )
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning("No %s files found for %s", FILE_TYPE, name)
+        logger.warning(
+            "No %s files found for %s",
+            FILE_TYPE,
+            name,
+        )
         return []
 
     downloaded_files = []
@@ -346,7 +357,9 @@ async def download_promo_html(source: dict, test: bool = False) -> list:
     return downloaded_files
 
 
-async def download_promo_mishnatyosef(test: bool = False) -> list:
+async def download_promo_mishnatyosef(
+    test: bool = False,
+) -> list:
 
     data_dir = get_data_dir(test)
     client = MishnatYosefClient()
@@ -360,16 +373,24 @@ async def download_promo_mishnatyosef(test: bool = False) -> list:
         return []
 
     normalized, href_by_filename = normalize_mishnatyosef_listing(
-        files, FILE_TYPE,
+        files,
+        FILE_TYPE,
     )
 
-    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+    promo_files = find_delta_files(
+        normalized,
+        FILE_TYPE,
+        filename_key="filename",
+    )
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning("No %s files found for Mishnat Yosef", FILE_TYPE)
+        logger.warning(
+            "No %s files found for Mishnat Yosef",
+            FILE_TYPE,
+        )
         return []
 
     downloaded_files = []
@@ -424,13 +445,20 @@ async def download_promo_wolt(test: bool = False) -> list:
 
     normalized, href_by_filename = normalize_wolt_file_urls(file_urls)
 
-    promo_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+    promo_files = find_delta_files(
+        normalized,
+        FILE_TYPE,
+        filename_key="filename",
+    )
 
     if test:
-       promo_files = filter_test_store_files(promo_files)
+        promo_files = filter_test_store_files(promo_files)
 
     if not promo_files:
-        logger.warning("No %s files found for Wolt", FILE_TYPE)
+        logger.warning(
+            "No %s files found for Wolt",
+            FILE_TYPE,
+        )
         return []
 
     downloaded_files = []
@@ -460,8 +488,23 @@ async def download_promo_wolt(test: bool = False) -> list:
     return downloaded_files
 
 
+async def download_promos(test: bool = False) -> list:
+    """Awaitable entry point for the scheduler (no argparse/sys.argv)."""
+    return await run_all_sources(
+        FILE_TYPE,
+        download_promo_publishedprices,
+        download_promo_binaprojects,
+        download_promo_laibcatalog,
+        download_promo_html,
+        download_promo_carrefour,
+        download_promo_mishnatyosef,
+        download_promo_wolt,
+        test=test,
+    )
+
+
 if __name__ == "__main__":
-    run(
+    run_cli(
         FILE_TYPE,
         download_promo_publishedprices,
         download_promo_binaprojects,

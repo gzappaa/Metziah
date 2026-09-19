@@ -51,6 +51,22 @@ CHAINS_EXTRA_FILE = (
     BASE_DIR / "data" / "reference" / "chains_extra.json"
 )
 
+UNKNOWN_METADATA_VALUES = {
+    "לא יודע",
+}
+
+
+def normalize_metadata_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    if value in UNKNOWN_METADATA_VALUES:
+        return None
+
+    return value
+
 
 def _load_chain_metadata():
     """
@@ -336,11 +352,26 @@ def load_files(
                 )
 
                 for product in products:
+                    # Treat empty/unknown metadata as missing so that
+                    # existing real metadata is never overwritten.
+                    product.manufacturer = normalize_metadata_value(
+                        product.manufacturer
+                    )
+                    product.manufacturer_country = (
+                        normalize_metadata_value(
+                            product.manufacturer_country
+                        )
+                    )
+
                     (
                         product_record,
                         store_product_record,
                         _price_record,
-                    ) = split_product(product)
+                    ) = split_product(
+                        product,
+                        chain_id,
+                        store_id_text,
+                    )
 
                     if product_record is not None:
                         item_code = product_record.item_code
@@ -462,3 +493,135 @@ def load_files(
     )
 
     return successful_files
+
+
+# ---------------------------------------------------------------------------
+# Real-time new-product discovery (no canonical resolution)
+# ---------------------------------------------------------------------------
+
+
+def discover_new_products(
+    conn,
+    filepaths: list[Path],
+    feeds_dir: Path,
+) -> None:
+    """
+    Insert-only discovery for products/store_products.
+
+    Runs on every Price and PriceFull load throughout the day, so a
+    brand-new item_code is visible immediately instead of waiting for
+    the once-daily full canonical-name resolution (load_products.py).
+
+    - products: whatever name this batch has is used as-is (messy,
+      temporary). Only item_codes not already in the table are
+      inserted -- existing rows, including anything the canonical
+      resolver decided, are never touched.
+    - store_products: no canonical concept exists for this table, so
+      every record is upserted normally via the existing
+      upsert_store_products() -- last file wins, as usual.
+    """
+    parser = StoreXmlParser()
+
+    candidate_products = {}
+    store_product_records = []
+
+    for filepath in filepaths:
+        try:
+            relative_parts = filepath.relative_to(feeds_dir).parts
+
+            if len(relative_parts) < 2:
+                raise ValueError(
+                    f"Unexpected feed path structure: {filepath}"
+                )
+
+            path_chain_id = relative_parts[0]
+            store_id_text = relative_parts[1].strip()
+
+            for xml_content in iter_xml_from_path(filepath):
+                products = parser.parse_price_file(xml_content)
+
+                if not products:
+                    continue
+
+                xml_chain_id = products[0].chain_id
+                xml_chain_id = xml_chain_id.strip() if xml_chain_id else None
+                chain_id = xml_chain_id or path_chain_id
+
+                for product in products:
+                    product.manufacturer = normalize_metadata_value(
+                        product.manufacturer
+                    )
+                    product.manufacturer_country = normalize_metadata_value(
+                        product.manufacturer_country
+                    )
+
+                    (
+                        product_record,
+                        store_product_record,
+                        _price_record,
+                    ) = split_product(
+                        product,
+                        chain_id,
+                        store_id_text,
+                    )
+
+                    if (
+                        product_record is not None
+                        and product_record.item_code not in candidate_products
+                    ):
+                        candidate_products[product_record.item_code] = (
+                            product_record
+                        )
+
+                    if store_product_record is not None:
+                        store_product_records.append(store_product_record)
+
+        except Exception:
+            logger.exception(
+                "Failed scanning %s for new-product discovery",
+                filepath,
+            )
+
+    # -----------------------------------------------------------------
+    # products: filter to item_codes not already present, then insert
+    # via the existing upsert_products() -- ON CONFLICT can't fire for
+    # these since nothing to conflict with exists yet.
+    # -----------------------------------------------------------------
+
+    new_products = []
+
+    if candidate_products:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT item_code FROM products WHERE item_code = ANY(%s)",
+                (list(candidate_products.keys()),),
+            )
+            existing_codes = {row[0] for row in cur.fetchall()}
+
+        new_products = [
+            record
+            for item_code, record in candidate_products.items()
+            if item_code not in existing_codes
+        ]
+
+    if new_products:
+        upsert_products(conn, new_products)
+
+    # -----------------------------------------------------------------
+    # store_products: no canonical concept -- upsert normally.
+    # -----------------------------------------------------------------
+
+    if store_product_records:
+        upsert_store_products(conn, store_product_records)
+
+    conn.commit()
+
+    logger.info(
+        "New-product discovery: %d new product(s), %d store_product "
+        "record(s) from %d file(s) (%d candidate item_code(s) already "
+        "existed)",
+        len(new_products),
+        len(store_product_records),
+        len(filepaths),
+        len(candidate_products) - len(new_products),
+    )

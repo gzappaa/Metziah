@@ -231,13 +231,7 @@ def main():
         logger.info("No stores to seed.")
         return
 
-    chain_ids = {
-        store.chain_id
-        for store in all_stores
-    }
-
-    if args.test:
-        chain_ids.update(chains_extra)
+    chain_ids = set(chains.keys())
 
     with get_connection() as conn:
         for chain_id in chain_ids:

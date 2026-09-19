@@ -107,7 +107,7 @@ def find_pricefull_files(feeds_dir: Path):
             )
 
     yield from (
-        filepath
+        (filepath, "PriceFull", True)
         for _, filepath in latest.values()
     )
 

@@ -1,6 +1,7 @@
 # scheduler.py
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -14,9 +15,10 @@ from logging_config import setup_logging
 from db import get_connection
 from database.repository import (
     mark_files_downloaded,
-    get_latest_downloaded_price_files,
     get_downloaded_promofull_files,
     get_downloaded_unloaded_promo_files,
+    get_downloaded_pricefull_files,
+    get_downloaded_unloaded_price_files,
 )
 from utils.update_prices import load_files as load_price_files
 from utils.update_promos import load_files as load_promo_files
@@ -26,7 +28,8 @@ from downloaders.pricesfull import download_pricefull
 from downloaders.promos import download_promos
 from downloaders.promosfull import download_promofull
 from utils.file_tracking.load_file_tracking import update_file_tracking
-
+from downloaders.common import _normalize_store_id
+from utils.update_products import discover_new_products
 
 FEEDS_DIR = (
     PROJECT_DIR / "data" / "test_feeds"
@@ -34,7 +37,75 @@ FEEDS_DIR = (
     else PROJECT_DIR / "data" / "feeds"
 )
 
+CHAINS_FILE = PROJECT_DIR / "data" / "reference" / "chains.json"
+CHAINS_EXTRA_FILE = PROJECT_DIR / "data" / "reference" / "chains_extra.json"
+IGNORED_STORES_FILE = PROJECT_DIR / "data" / "reference" / "ignored_stores.json"
+
 logger = setup_logging("scheduler")
+
+
+# ---------------------------------------------------------------------------
+# Price snapshot/skip rules
+#
+# Two independent, evidence-driven exceptions to "Price is a delta":
+#
+#   1. Every chain published via LaibcatalogClient is known to publish
+#      Price as a full snapshot, not a delta -- so it must reconcile
+#      removed items the same way PriceFull does.
+#
+#   2. A handful of specific stores in a few chains have Price files
+#      whose delta/snapshot behavior is not yet confirmed. Rather than
+#      risk silently wrong reconciliation, they're skipped entirely
+#      (loaded=false stays forever, same as any other failed file)
+#      until someone confirms how they behave. This list lives in
+#      data/reference/ignored_stores.json:
+#
+#          [{"chain": "<chain_id>", "stores": ["<store_id>", ...]}, ...]
+# ---------------------------------------------------------------------------
+
+def _load_chain_metadata() -> dict:
+    """
+    Same convention as update_prices._load_chain_metadata(): kept as a
+    separate copy so scheduler.py has no import-time dependency on it.
+    chains_extra.json entries take precedence over chains.json.
+    """
+    with CHAINS_FILE.open("r", encoding="utf-8") as f:
+        chains = json.load(f)
+
+    if CHAINS_EXTRA_FILE.exists():
+        with CHAINS_EXTRA_FILE.open("r", encoding="utf-8") as f:
+            chains.update(json.load(f))
+
+    return chains
+
+
+
+
+def _is_laibcatalog_chain(chain_id, chain_metadata: dict) -> bool:
+    chain = chain_metadata.get(str(chain_id))
+    return bool(chain and chain.get("client") == "LaibcatalogClient")
+
+
+def _load_ignored_price_stores() -> set:
+    """
+    Returns a set of (chain_id, normalized_store_id) pairs whose Price
+    (delta/snapshot) files should not be loaded at all, for now.
+    """
+    if not IGNORED_STORES_FILE.exists():
+        return set()
+
+    with IGNORED_STORES_FILE.open("r", encoding="utf-8") as f:
+        entries = json.load(f)
+
+    ignored = set()
+
+    for entry in entries:
+        chain_id = str(entry["chain"])
+
+        for store_id in entry.get("stores", []):
+            ignored.add((chain_id, _normalize_store_id(store_id)))
+
+    return ignored
 
 
 def mark_downloaded(downloaded_files):
@@ -59,24 +130,23 @@ def mark_downloaded(downloaded_files):
     )
 
 
-# Price files are temporary snapshots: keep only the successfully loaded
-# latest Price file per store. PriceFull snapshots are historical and are
-# never deleted. Cleanup happens only after loading succeeds, so a failed
-# load leaves the previous Price file available as a fallback.
+# Price files from snapshot sources are temporary snapshots: after a
+# successful load, older Price files for that store are removed.
+# Price delta files and PriceFull files are historical and are never
+# deleted. Cleanup happens only after loading succeeds.
 
 def cleanup_old_price_files(loaded_files):
     """
-    Delete older Price snapshot files after the newest Price file
-    has been successfully loaded.
+    Delete older Price snapshot files after the newest snapshot
+    Price file has been successfully loaded.
 
-    PriceFull files are never touched.
-    If loading fails, this function is never called, so the old
-    Price file remains available as a fallback.
+    Only Price files loaded with snapshot=True are cleaned up.
+    PriceFull files and normal Price delta files are never deleted.
     """
-    for filepath in loaded_files:
+    for filepath, snapshot in loaded_files:
         filepath = Path(filepath)
 
-        if filepath.parent.name != "prices":
+        if not snapshot or filepath.parent.name != "prices":
             continue
 
         for old_file in filepath.parent.glob("Price*.gz"):
@@ -87,13 +157,13 @@ def cleanup_old_price_files(loaded_files):
                 old_file.unlink()
 
                 logger.info(
-                    "Deleted old Price file: %s",
+                    "Deleted old Price snapshot file: %s",
                     old_file.name,
                 )
 
             except Exception:
                 logger.exception(
-                    "Failed deleting old Price file: %s",
+                    "Failed deleting old Price snapshot file: %s",
                     old_file.name,
                 )
 
@@ -139,56 +209,159 @@ def run_prices_and_load():
     if downloaded_files:
         mark_downloaded(downloaded_files)
 
-    with get_connection() as conn:
-        latest_files = get_latest_downloaded_price_files(conn)
+    chain_metadata = _load_chain_metadata()
+    ignored_price_stores = _load_ignored_price_stores()
 
-        logger.info("Latest price files selected:")
-        for row in latest_files:
+    with get_connection() as conn:
+
+        # ---------------------------------------------------------
+        # 1. Load pending PriceFull snapshots.
+        #
+        # Price deltas are only eligible after their same-day
+        # PriceFull baseline has loaded successfully.
+        # ---------------------------------------------------------
+
+        pricefull_files = get_downloaded_pricefull_files(conn)
+
+        if pricefull_files:
+            filepaths = [
+                (
+                    FEEDS_DIR
+                    / str(row[0])
+                    / _normalize_store_id(row[2])
+                    / "pricesfull"
+                    / row[4],
+                    row[3],
+                    True,
+                )
+                for row in pricefull_files
+            ]
+
             logger.info(
-                "SELECTED: chain=%s store=%s type=%s filename=%s",
-                row[0],
-                row[2],
-                row[3],
-                row[4],
+                "Loading %d pending PriceFull file(s)",
+                len(filepaths),
             )
 
-        if not latest_files:
+            loaded_pricefull = load_price_files(
+                conn,
+                filepaths,
+                FEEDS_DIR,
+            )
+
+
+            if loaded_pricefull:
+                discover_new_products(
+                    conn,
+                    loaded_pricefull,
+                    FEEDS_DIR,
+                )
+
+        else:
+            loaded_pricefull = []
+
             logger.info(
-                "No downloaded Price/PriceFull files to load"
+                "No pending PriceFull files to load"
+            )
+
+        logger.info(
+            "Successfully loaded %d PriceFull file(s)",
+            len(loaded_pricefull),
+        )
+
+        # ---------------------------------------------------------
+        # 2. Load eligible Price deltas.
+        #
+        # get_downloaded_unloaded_price_files() only returns a
+        # Price file when the same chain/store/date has a loaded
+        # PriceFull file.
+        # ---------------------------------------------------------
+
+        price_files = get_downloaded_unloaded_price_files(conn)
+
+        if not price_files:
+            logger.info(
+                "No eligible Price files to load"
             )
             return
 
-        filepaths = [
-            FEEDS_DIR
-            / str(row[0])
-            / str(row[1])
-            / str(row[2])
-            / (
-                "pricesfull"
-                if row[3] == "PriceFull"
-                else "prices"
+        files_to_load = []
+
+        for row in price_files:
+            chain_id, _sub_chain_id, store_id, file_type, filename, _file_date = row
+
+            if (
+                str(chain_id),
+                _normalize_store_id(store_id),
+            ) in ignored_price_stores:
+                logger.info(
+                    "IGNORING Price file (in ignored_stores.json): "
+                    "chain=%s store=%s filename=%s",
+                    chain_id,
+                    store_id,
+                    filename,
+                )
+                continue
+
+            filepath = (
+                FEEDS_DIR
+                / str(chain_id)
+                / str(store_id)
+                / "prices"
+                / filename
             )
-            / row[4]
-            for row in latest_files
-        ]
+
+            snapshot = _is_laibcatalog_chain(
+                chain_id,
+                chain_metadata,
+            )
+
+            files_to_load.append(
+                (filepath, file_type, snapshot)
+            )
+
+        if not files_to_load:
+            logger.info(
+                "No eligible Price files to load after filtering"
+            )
+            return
 
         logger.info(
-            "Loading %d latest Price/PriceFull file(s)",
-            len(filepaths),
+            "Loading %d eligible Price file(s)",
+            len(files_to_load),
         )
 
         loaded_files = load_price_files(
             conn,
-            filepaths,
+            files_to_load,
             FEEDS_DIR,
         )
 
-    logger.info(
-        "Successfully loaded %d price file(s)",
-        len(loaded_files),
-    )
+        if loaded_files:
+            discover_new_products(
+                conn,
+                loaded_files,
+                FEEDS_DIR,
+            )
 
-    cleanup_old_price_files(loaded_files)
+        logger.info(
+            "Successfully loaded %d Price file(s)",
+            len(loaded_files),
+        )
+
+        snapshot_by_path = {
+            Path(filepath): snapshot
+            for filepath, _file_type, snapshot in files_to_load
+        }
+
+        loaded_snapshot_files = [
+            (
+                Path(filepath),
+                snapshot_by_path.get(Path(filepath), False),
+            )
+            for filepath in loaded_files
+        ]
+
+        cleanup_old_price_files(loaded_snapshot_files)
 
 
 def run_promos_and_load():
@@ -273,7 +446,6 @@ def run_promos_and_load():
                 (
                     FEEDS_DIR
                     / str(row[0])
-                    / str(row[1])
                     / str(row[2])
                     / "promosfull"
                     / row[4],
@@ -300,12 +472,6 @@ def run_promos_and_load():
                 "No pending PromoFull files to load"
             )
 
-    # IMPORTANT:
-    # This must happen BEFORE get_pending_promo_files().
-    #
-    # A Promo delta is only eligible after its required
-    # PromoFull baseline has loaded=True.
-
     logger.info(
         "Successfully loaded %d PromoFull file(s)",
         len(loaded_promofull),
@@ -314,8 +480,9 @@ def run_promos_and_load():
     # ---------------------------------------------------------
     # 4. Load eligible Promo deltas.
     #
-    # get_pending_promo_files() is responsible for checking
-    # that the required PromoFull baseline has loaded=True.
+    # get_downloaded_unloaded_promo_files() is responsible for
+    # checking that the required same-day PromoFull baseline
+    # has loaded=True.
     #
     # Promo files never perform reconciliation.
     # ---------------------------------------------------------
@@ -333,7 +500,6 @@ def run_promos_and_load():
             (
                 FEEDS_DIR
                 / str(row[0])
-                / str(row[1])
                 / str(row[2])
                 / "promos"
                 / row[4],
@@ -343,7 +509,7 @@ def run_promos_and_load():
         ]
 
         logger.info(
-            "Loading %d eligible Promo file(s)",
+            "Loading %d eligible Promo files",
             len(filepaths),
         )
 
@@ -399,58 +565,56 @@ def run_all():
 
 
 def main():
-    logger.info(
-        "Scheduler started | ENV=%s | FEEDS_DIR=%s",
-        settings.ENV,
-        FEEDS_DIR,
-    )
+    logger.info("Starting scheduler")
+    logger.info("ENV=%s", settings.ENV)
+    logger.info("FEEDS_DIR=%s", FEEDS_DIR)
+
+    test_mode = settings.ENV == "test"
+    test_flag = "--test" in sys.argv[1:]
+
+    if test_mode and not test_flag:
+        logger.error(
+            "ENV=test detected, but --test was not provided. "
+            "Refusing to run."
+        )
+        return
+
+    if test_flag and not test_mode:
+        logger.error(
+            "--test was provided, but ENV is not 'test'. "
+            "Refusing to run."
+        )
+        return
 
     if len(sys.argv) > 1:
         command = sys.argv[1]
 
+        if command == "--test":
+            command = "all"
+
         if command == "prices":
-            if run_file_tracking():
-                run_prices_and_load()
+            run_file_tracking()
+            run_prices_and_load()
 
         elif command == "pricesfull":
-            if run_file_tracking():
-                run_pricesfull()
+            run_file_tracking()
+            run_pricesfull()
 
         elif command == "promos":
-            if run_file_tracking():
-                run_promos_and_load()
+            run_file_tracking()
+            run_promos_and_load()
 
         elif command == "promosfull":
-            if run_file_tracking():
-                # Download only; loading is handled by
-                # run_promos_and_load().
-                logger.info(
-                    "Starting standalone promosfull download"
+            run_file_tracking()
+            asyncio.run(
+                download_promofull(
+                    test=settings.ENV == "test"
                 )
-
-                try:
-                    downloaded_files = asyncio.run(
-                        download_promofull(
-                            test=settings.ENV == "test"
-                        )
-                    )
-
-                except Exception:
-                    logger.exception(
-                        "PromoFull download failed"
-                    )
-                    return
-
-                mark_downloaded(downloaded_files)
-
-                logger.info(
-                    "PromoFull download finished: %d new file(s)",
-                    len(downloaded_files),
-                )
+            )
 
         elif command == "all":
-            if run_file_tracking():
-                run_all()
+            run_file_tracking()
+            run_all()
 
         else:
             logger.error(
@@ -460,9 +624,8 @@ def main():
 
         return
 
-    # Normal scheduler execution.
-    if run_file_tracking():
-        run_all()
+    run_file_tracking()
+    run_all()
 
 
 if __name__ == "__main__":
