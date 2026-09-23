@@ -241,6 +241,8 @@ def load_files(
     product_metadata = {}
     store_product_records = []
     successful_files = []
+    scanned_files = 0
+
 
     for filepath in filepaths:
         file_had_products = False
@@ -425,7 +427,7 @@ def load_files(
                             store_product_record
                         )
 
-                logger.info(
+                logger.debug(
                     "Scanned products: %s chain_id=%s store_id=%s items=%d",
                     filepath.name,
                     chain_id,
@@ -455,6 +457,15 @@ def load_files(
                 filepath,
             )
             conn.rollback()
+
+        scanned_files += 1
+
+        if scanned_files % 50 == 0 or scanned_files == len(filepaths):
+            logger.info(
+                "Product loading progress: %d/%d files scanned",
+                scanned_files,
+                len(filepaths),
+            )
 
     logger.info(
         "Resolving canonical names for %d barcode products",

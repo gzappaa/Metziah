@@ -51,7 +51,7 @@ class PublishedPricesClient:
 
                 response.raise_for_status()
 
-                logger.info(
+                logger.debug(
                     "GET %s -> HTTP %d",
                     response.url,
                     response.status_code,
@@ -153,7 +153,7 @@ class PublishedPricesClient:
 
                 if idx != -1:
                     logger.warning(
-                        "DEBUG found '%s' near: %s",
+                        "Login response contains '%s' near: %s",
                         keyword,
                         response.text[
                             max(0, idx - 100):

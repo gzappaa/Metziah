@@ -101,7 +101,7 @@ class HtmlFileLinkClient:
 
                     response.raise_for_status()
 
-                    logger.info(
+                    logger.debug(
                         "GET %s -> HTTP %d",
                         response.url,
                         response.status_code,
@@ -389,7 +389,7 @@ class HtmlFileLinkClient:
                 f"Expected 'anchor' or 'row'."
             )
 
-        logger.info(
+        logger.debug(
             "%s: %d candidates on %s",
             self.name,
             len(candidates),

@@ -411,7 +411,7 @@ async def download_pricefull_mishnatyosef(test: bool = False) -> list:
         if result:
             downloaded_files.append(result)
 
-        return downloaded_files
+    return downloaded_files
 
 
 async def download_pricefull_wolt(test: bool = False) -> list:

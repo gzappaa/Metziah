@@ -28,9 +28,7 @@ geocode_google.py, etc. -- should just do
 point already configured root.
 """
 
-# logging_config.py
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -42,8 +40,8 @@ LOG_DIR.mkdir(exist_ok=True)
 ENV = settings.ENV  # dev | test | prod -- now reads from config.py / .env.test
 
 _ENV_LEVELS = {
-    "dev": logging.INFO,    ## CHANGE IT LATER
-    "test": logging.INFO, ## CHANGE IT LATER
+    "dev": logging.INFO,
+    "test": logging.DEBUG,
     "prod": logging.INFO,
 }
 
@@ -90,6 +88,10 @@ def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logg
         handler.close()
 
     root_logger.setLevel(_ENV_LEVELS.get(ENV, logging.INFO))
+
+    # Keep third-party HTTP request logs out of the main pipeline logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     if ENV == "test":
         filename = f"{name}.test.log"

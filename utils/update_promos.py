@@ -42,7 +42,7 @@ from database.repository import (
 from parsers.xml import StoreXmlParser
 from logging_config import setup_isolated_logging
 from utils.file_tracking.parser_file_tracking import parse_filename
-
+from utils.xml_source import iter_xml_from_path
 
 logger = logging.getLogger(__name__)
 change_logger = setup_isolated_logging("promo_changes")
@@ -343,12 +343,14 @@ def load_one_file(
             f"Unsupported promo file type: {file_type}"
         )
 
-    with gzip.open(filepath, "rb") as f:
-        xml_content = f.read()
+    xml_documents = list(iter_xml_from_path(filepath))
 
-    promotions = parser.parse_promo_file(
-        xml_content
-    )
+    promotions = []
+
+    for xml_content in xml_documents:
+        promotions.extend(
+            parser.parse_promo_file(xml_content)
+        )
 
     if not promotions:
         logger.warning(

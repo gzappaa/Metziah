@@ -1,3 +1,5 @@
+# clients/laibcatalog.py
+
 import asyncio
 import logging
 
@@ -9,19 +11,22 @@ logger = logging.getLogger(__name__)
 
 class LaibcatalogClient:
 
-    BASE_URL = "https://laibcatalog.co.il"
-
-    TIMEOUT = httpx.Timeout(30.0)
-
     MAX_RETRIES = 3
     BACKOFF_SECONDS = [2, 4, 8]
+    TIMEOUT = httpx.Timeout(30.0)
 
-
-    def __init__(self, chain_id):
+    def __init__(
+        self,
+        chain_id: str,
+    ):
         self.chain_id = chain_id
+        self.source_url = "https://laibcatalog.co.il"
 
-
-    async def _get_with_retry(self, url, params=None):
+    async def _get_with_retry(
+        self,
+        url: str,
+        params=None,
+    ) -> httpx.Response:
 
         last_exc = None
 
@@ -29,36 +34,46 @@ class LaibcatalogClient:
 
             try:
 
-                async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                async with httpx.AsyncClient(
+                    timeout=self.TIMEOUT
+                ) as client:
 
-                    response = await client.get(url, params=params)
+                    response = await client.get(
+                        url,
+                        params=params,
+                    )
 
                     response.raise_for_status()
 
+                    logger.debug(
+                        "GET %s -> HTTP %d",
+                        response.url,
+                        response.status_code,
+                    )
+
                     return response
 
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
+            except (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+            ) as exc:
 
-                last_exc = e
+                last_exc = exc
 
                 logger.warning(
                     "Attempt %d/%d failed for %s: %s",
                     attempt + 1,
                     self.MAX_RETRIES,
                     url,
-                    e,
+                    exc,
                 )
 
                 if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.BACKOFF_SECONDS[attempt])
+                    await asyncio.sleep(
+                        self.BACKOFF_SECONDS[attempt]
+                    )
 
-            except httpx.HTTPStatusError as e:
-
-                logger.error(
-                    "HTTP error for %s: %s",
-                    url,
-                    e,
-                )
+            except httpx.HTTPStatusError:
 
                 raise
 
@@ -70,39 +85,57 @@ class LaibcatalogClient:
 
         raise last_exc
 
-
-    async def get_files(self, branch_number=None):
+    async def get_files(
+        self,
+        branch_number=None,
+    ) -> list[dict]:
 
         params = {
-            "edi": self.chain_id
+            "edi": self.chain_id,
         }
 
         if branch_number:
             params["branchNumber"] = branch_number
 
         logger.info(
-            "Requesting file list (branch=%s)",
+            "Requesting file list for chain %s (branch=%s)",
+            self.chain_id,
             branch_number or "all",
         )
 
         response = await self._get_with_retry(
-            f"{self.BASE_URL}/webapi/api/getfiles",
-            params=params
+            f"{self.source_url}/webapi/api/getfiles",
+            params=params,
         )
 
         return response.json()
 
-
-    def build_download_url(self, filename):
+    def build_download_url(
+        self,
+        filename: str,
+    ) -> str:
 
         return (
-            f"{self.BASE_URL}"
+            f"{self.source_url}"
             f"/webapi/{self.chain_id}/{filename}"
         )
 
-
-    async def download_file(self, url):
+    async def download_file(
+        self,
+        url: str,
+    ) -> bytes:
 
         response = await self._get_with_retry(url)
 
         return response.content
+
+    async def check(self) -> dict:
+
+        files = await self.get_files()
+
+        return {
+            "chain_id": self.chain_id,
+            "url": self.source_url,
+            "files": files,
+        }
+

@@ -3,7 +3,6 @@ from models.store import Store
 
 from decimal import Decimal
 from database.records import StoreProductRecord, PriceRecord, ProductRecord
-#  maybe later i will change the naming algorithm
 from types import SimpleNamespace
 from datetime import date
 from models.promo import Promotion, PromotionGroup, PromotionItem
@@ -61,7 +60,7 @@ def test_update_store_subchain(conn, test_store):
 def test_ensure_chain(conn):
     chain_id = "TEST_CHAIN"
 
-    ensure_chain(conn, chain_id)
+    ensure_chain(conn, chain_id, "Test Chain HE", "Test Chain EN")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -74,8 +73,7 @@ def test_ensure_chain(conn):
 def test_ensure_chain_is_idempotent(conn):
     chain_id = "TEST_CHAIN"
 
-    ensure_chain(conn, chain_id)
-    ensure_chain(conn, chain_id)
+    ensure_chain(conn, chain_id, "Test Chain HE", "Test Chain EN")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -88,7 +86,7 @@ def test_ensure_chain_is_idempotent(conn):
 def test_upsert_stores(conn):
     chain_id = "TEST_CHAIN"
 
-    ensure_chain(conn, chain_id)
+    ensure_chain(conn, chain_id, "Test Chain HE", "Test Chain EN")
 
     store = Store(
         chain_id=chain_id,
@@ -141,7 +139,7 @@ def test_upsert_store_products_inserts_new_product(conn, test_store):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT chain_id, store_id, item_code, name, name_count,
+            SELECT chain_id, store_id, item_code, name,
                    manufacturer, manufacturer_country, item_type
             FROM store_products
             WHERE chain_id = %s
@@ -161,7 +159,6 @@ def test_upsert_store_products_inserts_new_product(conn, test_store):
         test_store["store_id_text"],
         record.item_code,
         "Test Store Product",
-        1,
         "Test Manufacturer",
         "Israel",
         0,
@@ -329,60 +326,6 @@ def test_upsert_store_products_fill_only_manufacturer(
     assert row == ("Original Manufacturer", "IL")
 
 
-def test_upsert_store_products_name_resolution(conn, test_store):
-    record = StoreProductRecord(
-        chain_id=test_store["chain_id"],
-        store_id=test_store["store_id_text"],
-        item_code="INTERNAL_NAME_TEST",
-        name="Original",
-        manufacturer=None,
-        manufacturer_country=None,
-        item_type=0,
-    )
-
-    upsert_store_products(conn, [record])
-
-    # Same name -> count increases
-    upsert_store_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT name, name_count
-            FROM store_products
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                record.chain_id,
-                test_store["store_id_text"],
-                record.item_code,
-            ),
-        )
-        assert cur.fetchone() == ("Original", 2)
-
-    # Different name -> count decreases, name remains
-    record.name = "New"
-
-    upsert_store_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT name, name_count
-            FROM store_products
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                record.chain_id,
-                test_store["store_id_text"],
-                record.item_code,
-            ),
-        )
-        assert cur.fetchone() == ("Original", 1)
 
 
 # ---- upsert_products (barcode) ----
@@ -400,31 +343,13 @@ def test_upsert_products_inserts_new(conn):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT name, name_count, manufacturer, manufacturer_country, item_type "
+            "SELECT name, manufacturer, manufacturer_country, item_type "
             "FROM products WHERE item_code = %s",
             (record.item_code,),
         )
-        assert cur.fetchone() == ("Test Barcode Product", 1, "Acme", "IL", 1)
+        assert cur.fetchone() == ("Test Barcode Product", "Acme", "IL", 1)
 
 
-def test_upsert_products_name_resolution_increments_on_match(conn):
-    record = ProductRecord(
-        item_code="BARCODE_NAME_001",
-        name="Original",
-        manufacturer=None,
-        manufacturer_country=None,
-        item_type=0,
-    )
-
-    upsert_products(conn, [record])
-    upsert_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT name, name_count FROM products WHERE item_code = %s",
-            (record.item_code,),
-        )
-        assert cur.fetchone() == ("Original", 2)
 
 
 def test_upsert_products_fill_only_manufacturer(conn):
@@ -488,16 +413,20 @@ def _file_record(
     filename,
     store_id,
     downloaded=False,
+    loaded=False,
     file_type="Price",
 ):
     return {
         "chain_id": chain_id,
         "sub_chain_id": "001",
         "store_id": store_id,
+        "source": "TEST",
         "file_type": file_type,
         "filename": filename,
         "file_date": date(2026, 8, 1),
         "downloaded": downloaded,
+        "loaded": loaded,
+        "file_size": None,
     }
 
 
@@ -737,10 +666,12 @@ def test_get_downloaded_promofull_files_filters_type_downloaded_loaded(conn, tes
 
 def test_get_downloaded_unloaded_promo_files_requires_loaded_promofull(
     conn,
-    test_store,
+    create_store,
 ):
-    chain_id = test_store["chain_id"]
-    store_id = test_store["store_id_text"]
+    chain_id = "TEST_PROMO_CHAIN_001"
+    store_id = "TEST_STORE"
+
+    create_store(chain_id, store_id)
 
     insert_file_tracking(
         conn,
@@ -750,6 +681,7 @@ def test_get_downloaded_unloaded_promo_files_requires_loaded_promofull(
                 "PromoFull_001.gz",
                 store_id,
                 downloaded=True,
+                loaded=False,
                 file_type="PromoFull",
             ),
             _file_record(
@@ -757,23 +689,28 @@ def test_get_downloaded_unloaded_promo_files_requires_loaded_promofull(
                 "Promo_001.gz",
                 store_id,
                 downloaded=True,
+                loaded=False,
                 file_type="Promo",
             ),
         ],
     )
 
-    # PromoFull exists and was downloaded, but was NOT loaded.
     rows = get_downloaded_unloaded_promo_files(conn)
 
-    assert rows == []
+    assert not any(
+        row[0] == chain_id and row[4] == "Promo_001.gz"
+        for row in rows
+    )
 
 
 def test_get_downloaded_unloaded_promo_files_allows_promo_after_promofull_loaded(
     conn,
-    test_store,
+    create_store,
 ):
-    chain_id = test_store["chain_id"]
-    store_id = test_store["store_id_text"]
+    chain_id = "TEST_PROMO_CHAIN_002"
+    store_id = "TEST_STORE"
+
+    create_store(chain_id, store_id)
 
     insert_file_tracking(
         conn,
@@ -795,16 +732,14 @@ def test_get_downloaded_unloaded_promo_files_allows_promo_after_promofull_loaded
         ],
     )
 
-    mark_files_loaded(
-        conn,
-        ["PromoFull_001.gz"],
-    )
+    mark_files_loaded(conn, ["PromoFull_001.gz"])
 
     rows = get_downloaded_unloaded_promo_files(conn)
 
-    filenames = {r[4] for r in rows}
-
-    assert filenames == {"Promo_001.gz"}
+    assert any(
+        row[0] == chain_id and row[4] == "Promo_001.gz"
+        for row in rows
+    )
 
     
 

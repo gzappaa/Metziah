@@ -56,6 +56,8 @@ from utils.xml_source import iter_xml_from_path
 from logging_config import setup_isolated_logging
 from database.records import split_product
 
+from decimal import Decimal, ROUND_HALF_UP
+
 logger = logging.getLogger(__name__)
 
 change_logger = setup_isolated_logging(
@@ -220,7 +222,8 @@ def _log_price_changes(
 
         elif (
             old[0] != record.price
-            or old[1] != record.unit_price
+            or old[1].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            != record.unit_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         ):
             change_logger.info(
                 "PRICE CHANGED "

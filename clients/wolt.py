@@ -43,7 +43,7 @@ class WoltClient:
 
                     response.raise_for_status()
 
-                    logger.info(
+                    logger.debug(
                         "GET %s -> HTTP %d",
                         response.url,
                         response.status_code,

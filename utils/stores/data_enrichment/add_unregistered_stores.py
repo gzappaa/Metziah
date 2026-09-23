@@ -22,7 +22,7 @@ from db import get_connection
 from models.store import Store
 
 from logging_config import setup_general_logging
-
+from downloaders.common import normalize_store_id
 
 setup_general_logging()
 logger = logging.getLogger(__name__)
@@ -78,6 +78,8 @@ def main():
             )
 
         for store_id in data["store_ids"]:
+            store_id = normalize_store_id(store_id)
+
             store = Store(
                 chain_id=chain_id,
                 store_id=store_id,

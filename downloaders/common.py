@@ -32,12 +32,11 @@ IGNORED_BINA_STORES = {
     ("7290058156016", "017", "396"),
 }
 
-
-def _normalize_store_id(store_id) -> str:
+def normalize_store_id(store_id) -> str:
     try:
         return str(int(store_id))
     except (TypeError, ValueError):
-        return str(store_id)
+        return str(store_id).strip()
 
 
 
@@ -107,10 +106,10 @@ def save_file(
     destination = folder / filename
 
     if destination.exists():
-        logger.info("UP TO DATE: %s", filename)
+        logger.debug("UP TO DATE: %s", filename)
         return destination
 
-    logger.info("DOWNLOAD: %s", filename)
+    logger.debug("DOWNLOADING: %s", filename)
 
     try:
         content = fetch_content()
@@ -153,10 +152,10 @@ async def save_file_async(
     destination = folder / filename
 
     if destination.exists():
-        logger.info("UP TO DATE: %s", filename)
+        logger.debug("UP TO DATE: %s", filename)
         return destination
 
-    logger.info("DOWNLOAD: %s", filename)
+    logger.debug("DOWNLOAD: %s", filename)
 
     try:
         content = await fetch_content()
@@ -466,7 +465,7 @@ async def get_all_html_candidates(
             )
         )
 
-        logger.info(
+        logger.debug(
             "%s: requesting pages %d-%d",
             client.name,
             pages[0],
@@ -516,7 +515,7 @@ async def get_all_html_candidates(
             if fingerprint in seen_pages:
                 previous_page = seen_pages[fingerprint]
 
-                logger.info(
+                logger.debug(
                     "%s: page %d repeats page %d",
                     client.name,
                     current_page,
@@ -544,7 +543,7 @@ async def get_all_html_candidates(
 
             all_candidates.extend(candidates)
 
-            logger.info(
+            logger.debug(
                 "%s: page %d -> %d candidates",
                 client.name,
                 current_page,

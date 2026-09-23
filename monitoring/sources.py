@@ -1,4 +1,14 @@
 # monitoring/sources.py
+"""
+Monitor the Israeli government supermarket registry and detect changes
+that could affect Metziah's data sources.
+
+The module compares the current government data with the previous scrape,
+checks government chain names and credentials against the manually
+maintained chains.json registry, and logs detected changes for review.
+"""
+
+
 
 import json
 import logging

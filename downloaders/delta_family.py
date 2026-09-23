@@ -64,7 +64,7 @@ def find_delta_files(
 
     return delta_files
 
-
+# used to download snapshots price files
 def keep_latest_file_per_store(files: list[dict]) -> list[dict]:
     """Keep only the latest file published today for each chain/store."""
 

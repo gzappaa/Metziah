@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import csv
-import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -15,18 +14,12 @@ from clients.publishedprices import PublishedPricesClient
 from clients.binaprojects import BinaProjectsClient
 from clients.laibcatalog import LaibcatalogClient
 from clients.carrefour import CarrefourClient
-from clients.html_client import (
-    Candidate,
-    HtmlFileLinkClient,
-)
-from clients.html_config import SOURCES as HTML_SOURCES
 from clients.mishnatyosef import MishnatYosefClient
 from clients.wolt import WoltClient
 
 from downloaders.common import (
-    get_all_html_candidates,
     list_publishedprices_entries_recursive,
-    _normalize_store_id,
+    normalize_store_id,
 )
 
 from .parser_file_tracking import parse_filename, normalize_file
@@ -35,6 +28,7 @@ from .add_sizes_file_tracking import (
     get_file_size_get,
     parse_file_size,
 )
+from .cache import refresh_html_caches
 
 setup_general_logging()
 logger = logging.getLogger(__name__)
@@ -48,9 +42,6 @@ FEEDS_DIR = (
 )
 
 REPORTS_DIR = BASE_DIR / "data" / "reference"
-
-CACHE_DIR = BASE_DIR / "data" / "cache"
-SHUFERSAL_CACHE = CACHE_DIR / "shufersal.json"
 
 SIZE_CONCURRENCY = 20
 
@@ -69,6 +60,12 @@ def _add_record(
 
     if record:
         record["source"] = source
+
+        if record.get("store_id") is not None:
+            record["store_id"] = normalize_store_id(
+                record["store_id"]
+            )
+
         record.update(extra)
         records.append(record)
 
@@ -195,6 +192,11 @@ async def get_binaprojects_files(
 
                 if record:
                     record["source"] = source_label
+
+                    if record.get("store_id") is not None:
+                        record["store_id"] = normalize_store_id(
+                            record["store_id"]
+                        )
 
                     if slow:
                         record["_download_url"] = (
@@ -351,106 +353,18 @@ GET_SIZE_SOURCES = {
 }
 
 
-def _html_cache_path(source_name: str) -> Path:
-    return CACHE_DIR / f"{source_name}.json"
-
-
-def _save_html_cache(
-    source_name: str,
-    candidates: list,
-) -> None:
-    CACHE_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    cache = {
-        "files": [
-            {
-                "text": candidate.text,
-                "url": candidate.href,
-                "filename": candidate.filename,
-                "file_size": candidate.file_size,
-            }
-            for candidate in candidates
-            if candidate.filename and candidate.href
-        ],
-    }
-
-    cache_path = _html_cache_path(source_name)
-    temp_path = cache_path.with_suffix(".tmp")
-
-    try:
-        with temp_path.open(
-            "w",
-            encoding="utf-8",
-        ) as file:
-            json.dump(
-                cache,
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
-
-        temp_path.replace(cache_path)
-
-        logger.info(
-            "%s cache saved: %d file(s)",
-            source_name,
-            len(cache["files"]),
-        )
-
-    except Exception:
-        logger.exception(
-            "Failed saving %s cache",
-            source_name,
-        )
-
-        if temp_path.exists():
-            temp_path.unlink()
-
-
 async def get_html_files(
     slow: bool = False,
 ) -> list[dict]:
     records = []
 
-    for source in HTML_SOURCES:
-        source_name = source["name"]
+    # Cache logic (fetching + persisting the HTML source listings) lives
+    # in cache_file_tracking.py so it can be run on its own. We still
+    # call it here so file_tracking is built from the same run, and the
+    # cache files on disk stay up to date either way.
+    html_candidates = await refresh_html_caches()
 
-        logger.info(
-            "HTML source: %s",
-            source_name,
-        )
-
-        listing = source["listing"]
-
-        client = HtmlFileLinkClient(
-            name=source_name,
-            base_url=listing["base_url"],
-            extraction_mode=source["extraction_mode"],
-            filename_column=source.get(
-                "filename_column"
-            ),
-            filename_source=source["filename_source"],
-            filename_param=source.get(
-                "filename_param"
-            ),
-            file_size_column=source.get(
-                "file_size_column"
-            ),
-        )
-
-        candidates = await get_all_html_candidates(
-            client,
-            listing,
-        )
-
-        _save_html_cache(
-            source_name,
-            candidates,
-        )
-
+    for source_name, candidates in html_candidates.items():
         source_records = []
 
         for candidate in candidates:
@@ -646,7 +560,7 @@ def _is_downloaded_locally(record: dict) -> bool:
     if directory is None:
         return False
 
-    store_id = _normalize_store_id(
+    store_id = normalize_store_id(
         record["store_id"]
     )
 

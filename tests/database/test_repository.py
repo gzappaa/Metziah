@@ -1,43 +1,50 @@
-from database.repository import (
-    _resolve_fill_only,
-    _resolve_name,
-)
+import json
+
+from database.repository import CHAINS_FILE, get_publishing_sources
 
 
-def test_resolve_name_blank_incoming():
-    assert _resolve_name("Original", 3, "") == ("Original", 3)
-    assert _resolve_name("Original", 3, None) == ("Original", 3)
+def test_get_publishing_sources_filters_by_client():
+    sources = get_publishing_sources("PublishedPricesClient")
+
+    assert sources
+    assert all(
+        set(source) >= {
+            "chain_id",
+            "name",
+            "name_normalized",
+            "url",
+            "credentials",
+        }
+        for source in sources
+    )
 
 
-def test_resolve_name_matching_incoming():
-    assert _resolve_name("Original", 3, "Original") == ("Original", 4)
+def test_get_publishing_sources_non_published_client_has_no_credentials():
+    sources = get_publishing_sources("BinaProjectsClient")
+
+    assert sources
+    assert all("credentials" not in source for source in sources)
 
 
-def test_resolve_name_different_incoming():
-    assert _resolve_name("Original", 3, "New") == ("Original", 2)
+def test_get_publishing_sources_unknown_client_returns_empty():
+    assert get_publishing_sources("DefinitelyNotARealClient") == []
 
 
-def test_resolve_name_switches_when_count_reaches_zero():
-    assert _resolve_name("Original", 1, "New") == ("New", 1)
+def test_get_publishing_sources_falls_back_to_chain_name():
+    with CHAINS_FILE.open(encoding="utf-8") as file:
+        chains = json.load(file)
 
+    expected = [
+        chain["Chain_name_store_file"]
+        for chain in chains.values()
+        if chain.get("client") == "BinaProjectsClient"
+        and "name_en_normalized" not in chain
+    ]
 
-def test_resolve_name_empty_existing():
-    assert _resolve_name(None, 0, "New") == ("New", 1)
+    sources = get_publishing_sources("BinaProjectsClient")
 
-
-def test_resolve_fill_only_keeps_existing_value():
-    assert _resolve_fill_only("Original", "New") == "Original"
-
-
-def test_resolve_fill_only_accepts_incoming_when_empty():
-    assert _resolve_fill_only(None, "New") == "New"
-
-
-def test_resolve_fill_only_ignores_blank_incoming():
-    assert _resolve_fill_only("Original", "") == "Original"
-    assert _resolve_fill_only(None, "") is None
-
-
-
-
-
+    if expected:
+        assert any(
+            source["name_normalized"] == source["name"]
+            for source in sources
+        )

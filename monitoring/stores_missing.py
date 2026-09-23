@@ -1,11 +1,14 @@
 import csv
 import json
 from pathlib import Path
-
+from downloaders.common import normalize_store_id
 
 TRACKING_FILE = Path("data/reference/file_tracking.csv")
 STORES_DIR = Path("data/stores")
-CHAINS_FILE = Path("data/reference/chains.json")
+CHAINS_FILES = [
+    Path("data/reference/chains.json"),
+    Path("data/reference/chains_extra.json"),
+]
 OUTPUT_FILE = Path("monitoring/data/stores_missing_from_registry.json")
 
 
@@ -36,38 +39,57 @@ def get_store_ids(stores_data) -> set[str]:
         return set()
 
     return {
-        str(store["store_id"]).strip()
+        normalize_store_id(store["store_id"]).strip()
         for store in stores
         if isinstance(store, dict) and "store_id" in store
     }
 
 
 def load_chains() -> dict:
-    with CHAINS_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    """Load and merge chains.json and chains_extra.json."""
+    chains = {}
+
+    for chains_file in CHAINS_FILES:
+        with chains_file.open("r", encoding="utf-8") as f:
+            chains.update(json.load(f))
+
+    return chains
 
 
 def main():
     chains = load_chains()
 
-    # source -> store IDs appearing in file_tracking
-    feed_store_ids: dict[str, set[str]] = {}
+    # chain_id -> {
+    #     "source": source name,
+    #     "store_ids": set(...)
+    # }
+    feed_data: dict[str, dict] = {}
 
     with TRACKING_FILE.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
 
         for row in reader:
+            chain_id = row["chain_id"].strip()
             source = row["source"].strip()
             store_id = row["store_id"].strip()
 
-            if not source or not store_id:
+            if not chain_id or not source or not store_id:
                 continue
 
-            feed_store_ids.setdefault(source, set()).add(store_id)
+            if chain_id not in feed_data:
+                feed_data[chain_id] = {
+                    "source": source,
+                    "store_ids": set(),
+                }
+
+            feed_data[chain_id]["store_ids"].add(store_id)
 
     missing = {}
 
-    for source, store_ids in sorted(feed_store_ids.items()):
+    for chain_id, data in sorted(feed_data.items()):
+        source = data["source"]
+        store_ids = data["store_ids"]
+
         stores_file = STORES_DIR / f"{source}.json"
 
         if not stores_file.exists():
@@ -87,27 +109,24 @@ def main():
                 if not any(candidate in registry_store_ids for candidate in candidates):
                     source_missing.append(store_id)
 
-        if not source_missing:
-            continue
-
-        # Find the chain ID from chains.json using the source name.
-        chain_id = None
-
-        for candidate_chain_id, chain in chains.items():
-            if chain.get("name_en_normalized") == source:
-                chain_id = candidate_chain_id
-                break
-
-        if chain_id is None:
+        if chain_id not in chains:
             print(
-                f"WARNING: No chain found in chains.json "
-                f"for source '{source}'"
+                f"WARNING: No chain found in chains.json or chains_extra.json "
+                f"for chain_id '{chain_id}'"
             )
+
+        # Normally only output missing stores.
+        # For chain 0000000000000, output ALL tracked stores.
+        if not source_missing and chain_id != "0000000000000":
             continue
 
         missing[source] = {
             "chain_id": chain_id,
-            "store_ids": source_missing,
+            "store_ids": (
+                sorted(store_ids)
+                if chain_id == "0000000000000"
+                else source_missing
+            ),
         }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +141,7 @@ def main():
     for source, data in missing.items():
         print(
             f"{source}: chain_id={data['chain_id']}, "
-            f"{len(data['store_ids'])} missing"
+            f"{len(data['store_ids'])} stores"
         )
         print("  " + ", ".join(data["store_ids"]))
 

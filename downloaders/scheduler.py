@@ -28,8 +28,10 @@ from downloaders.pricesfull import download_pricefull
 from downloaders.promos import download_promos
 from downloaders.promosfull import download_promofull
 from utils.file_tracking.load_file_tracking import update_file_tracking
-from downloaders.common import _normalize_store_id
+from downloaders.common import normalize_store_id
 from utils.update_products import discover_new_products
+from utils.file_tracking.cache import refresh_html_caches
+
 
 FEEDS_DIR = (
     PROJECT_DIR / "data" / "test_feeds"
@@ -103,7 +105,7 @@ def _load_ignored_price_stores() -> set:
         chain_id = str(entry["chain"])
 
         for store_id in entry.get("stores", []):
-            ignored.add((chain_id, _normalize_store_id(store_id)))
+            ignored.add((chain_id, normalize_store_id(store_id)))
 
     return ignored
 
@@ -228,7 +230,7 @@ def run_prices_and_load():
                 (
                     FEEDS_DIR
                     / str(row[0])
-                    / _normalize_store_id(row[2])
+                    / normalize_store_id(row[2])
                     / "pricesfull"
                     / row[4],
                     row[3],
@@ -291,7 +293,7 @@ def run_prices_and_load():
 
             if (
                 str(chain_id),
-                _normalize_store_id(store_id),
+                normalize_store_id(store_id),
             ) in ignored_price_stores:
                 logger.info(
                     "IGNORING Price file (in ignored_stores.json): "
@@ -305,7 +307,7 @@ def run_prices_and_load():
             filepath = (
                 FEEDS_DIR
                 / str(chain_id)
-                / str(store_id)
+                / normalize_store_id(row[2])
                 / "prices"
                 / filename
             )
@@ -446,7 +448,7 @@ def run_promos_and_load():
                 (
                     FEEDS_DIR
                     / str(row[0])
-                    / str(row[2])
+                    / normalize_store_id(row[2])
                     / "promosfull"
                     / row[4],
                     row[3],
@@ -500,7 +502,7 @@ def run_promos_and_load():
             (
                 FEEDS_DIR
                 / str(row[0])
-                / str(row[2])
+                / normalize_store_id(row[2])
                 / "promos"
                 / row[4],
                 row[3],
@@ -550,18 +552,15 @@ def run_pricesfull():
 
 
 def run_all():
-    if settings.ENV == "test":
-        logger.info(
-            "TEST ENV: skipping PriceFull"
-        )
+    # Refresh HTML caches before each stage; Shufersal listings expire after ~30 minutes.
 
-        run_promos_and_load()
-        run_prices_and_load()
+    run_pricesfull()
 
-    else:
-        run_pricesfull()
-        run_promos_and_load()
-        run_prices_and_load()
+    asyncio.run(refresh_html_caches())
+    run_prices_and_load()
+
+    asyncio.run(refresh_html_caches())
+    run_promos_and_load()
 
 
 def main():
