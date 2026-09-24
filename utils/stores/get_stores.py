@@ -39,7 +39,7 @@ STORE_ID_TAGS = ("StoreID", "StoreId")
 STORE_NAME_TAGS = ("StoreName",)
 ADDRESS_TAGS = ("Address",)
 CITY_TAGS = ("City",)
-ZIP_TAGS = ("ZipCode",)
+ZIP_TAGS = ("ZipCode", "ZIPCode")
 
 # Actual per-store records show up under either tag depending on feed.
 STORE_ELEMENT_TAGS = ("Store", "SubChainStoreXMLObject")

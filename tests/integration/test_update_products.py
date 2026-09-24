@@ -3,7 +3,7 @@
 import gzip
 from pathlib import Path
 
-from utils.update_products import load_files
+from utils.products.update_products import load_files
 
 
 def get_pricefull_file():

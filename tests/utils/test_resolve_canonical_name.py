@@ -125,3 +125,57 @@ def test_resolve_canonical_name_quality_gate_removes_bad_candidate():
     result = resolve_canonical_name(name_chain_counts)
 
     assert result == "קוקה קולה זירו 1.5 ליטר"
+
+
+def test_resolve_canonical_name_combines_chain_breadth_across_token_order_variants():
+    name_chain_counts = {
+        "קולה זירו 1.5 ליטר": {
+            "chain_1": 1,
+        },
+        "1.5 ליטר קולה זירו": {
+            "chain_2": 1,
+        },
+        "מוצר פשוט": {
+            "chain_3": 1,
+        },
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result in {
+        "קולה זירו 1.5 ליטר",
+        "1.5 ליטר קולה זירו",
+    }
+
+def test_resolve_canonical_name_token_multiplicity_matters():
+    name_chain_counts = {
+        "קולה קולה זירו 1.5 ליטר": {
+            "chain_1": 1,
+            "chain_2": 1,
+        },
+        "קולה זירו 1.5 ליטר": {
+            "chain_3": 1,
+        },
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result == "קולה קולה זירו 1.5 ליטר"
+
+
+
+def test_resolve_canonical_name_chain_breadth_beats_quality():
+    name_chain_counts = {
+        "קולה": {
+            "chain_1": 1,
+            "chain_2": 1,
+            "chain_3": 1,
+        },
+        "קוקה קולה זירו 1.5 ליטר": {
+            "chain_4": 1,
+        },
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result == "קולה"

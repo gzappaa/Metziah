@@ -4,7 +4,7 @@ import gzip
 from pathlib import Path
 
 from parsers.xml import MachseneiXmlParser
-from utils.update_prices import load_one_file
+from utils.prices.update_prices import load_one_file
 
 
 def test_load_one_file(conn):

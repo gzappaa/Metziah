@@ -681,6 +681,9 @@ async def collect_all_files(
     return all_records
 
 
+FILE_TRACKING_LOCK_ID = 847291
+
+
 async def update_file_tracking(
     generate_report_file: bool = False,
     slow: bool = False,
@@ -695,8 +698,6 @@ async def update_file_tracking(
         )
         return 0
 
-    # filename is globally unique according to the
-    # file_tracking database constraint.
     unique_records = {}
 
     for record in records:
@@ -725,11 +726,30 @@ async def update_file_tracking(
         return len(records)
 
     with get_connection() as conn:
-        inserted = insert_file_tracking(
-            conn,
-            records,
-        )
-        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (FILE_TRACKING_LOCK_ID,),
+            )
+
+            if not cur.fetchone()[0]:
+                logger.info(
+                    "File tracking is already running; skipping"
+                )
+                return 0
+
+            try:
+                inserted = insert_file_tracking(
+                    conn,
+                    records,
+                )
+                conn.commit()
+
+            finally:
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s)",
+                    (FILE_TRACKING_LOCK_ID,),
+                )
 
     logger.info(
         "Inserted %d new file(s) out of %d discovered",

@@ -20,8 +20,8 @@ from database.repository import (
     get_downloaded_pricefull_files,
     get_downloaded_unloaded_price_files,
 )
-from utils.update_prices import load_files as load_price_files
-from utils.update_promos import load_files as load_promo_files
+from utils.prices.update_prices import load_files as load_price_files
+from utils.promos.update_promos import load_files as load_promo_files
 
 from downloaders.prices import download_prices
 from downloaders.pricesfull import download_pricefull
@@ -29,9 +29,9 @@ from downloaders.promos import download_promos
 from downloaders.promosfull import download_promofull
 from utils.file_tracking.load_file_tracking import update_file_tracking
 from downloaders.common import normalize_store_id
-from utils.update_products import discover_new_products
+from utils.products.update_products import discover_new_products
 from utils.file_tracking.cache import refresh_html_caches
-
+from utils.file_tracking.data_enrichment.populate_file_sizes import main as populate_file_sizes
 
 FEEDS_DIR = (
     PROJECT_DIR / "data" / "test_feeds"
@@ -593,15 +593,19 @@ def main():
 
         if command == "prices":
             run_file_tracking()
+            run_pricesfull()
             run_prices_and_load()
+            populate_file_sizes()
 
         elif command == "pricesfull":
             run_file_tracking()
             run_pricesfull()
+            populate_file_sizes()
 
         elif command == "promos":
             run_file_tracking()
             run_promos_and_load()
+            populate_file_sizes()
 
         elif command == "promosfull":
             run_file_tracking()
@@ -610,10 +614,12 @@ def main():
                     test=settings.ENV == "test"
                 )
             )
+            populate_file_sizes()
 
         elif command == "all":
             run_file_tracking()
             run_all()
+            populate_file_sizes()
 
         else:
             logger.error(
@@ -625,6 +631,7 @@ def main():
 
     run_file_tracking()
     run_all()
+    populate_file_sizes()
 
 
 if __name__ == "__main__":

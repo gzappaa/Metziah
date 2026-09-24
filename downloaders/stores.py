@@ -11,7 +11,6 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 from urllib.parse import urljoin
 
 from logging_config import setup_general_logging

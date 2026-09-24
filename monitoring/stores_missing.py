@@ -1,3 +1,15 @@
+'''
+Some stores tracked in the feeds are not present in the Stores registry.
+Before adding those stores to the database, we first need to discover all
+filenames from all stores and generate file_tracking.csv:
+
+    python -m utils.file_tracking.load_file_tracking --report generate
+
+If file_tracking.csv does not exist, print a warning and generate it first.
+The store must exist in the database before loading products, promotions,
+or prices; otherwise those loaders will fail.
+'''
+
 import csv
 import json
 from pathlib import Path
@@ -57,6 +69,14 @@ def load_chains() -> dict:
 
 
 def main():
+    if not TRACKING_FILE.exists():
+        print(
+            f"WARNING: File tracking does not exist: {TRACKING_FILE}\n"
+            "Generate it first with:\n"
+            "  python -m utils.file_tracking.load_file_tracking --report generate"
+        )
+        return
+    
     chains = load_chains()
 
     # chain_id -> {
@@ -147,4 +167,5 @@ def main():
 
 
 if __name__ == "__main__":
+    
     main()

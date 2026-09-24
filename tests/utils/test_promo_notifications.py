@@ -3,8 +3,8 @@ from decimal import Decimal
 
 import pytest
 
-import utils.promo_notifications as promo_notifications
-from utils.promo_notifications import parse_added_line, build_digest_email
+import utils.notifications.promo_notifications as promo_notifications
+from utils.notifications.promo_notifications import parse_added_line, build_digest_email
 from database.repository import get_nearby_store_ids, get_promotion_details
 
 CHAIN_ID = "7290661400001"

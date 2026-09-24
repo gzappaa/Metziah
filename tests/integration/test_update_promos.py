@@ -2,7 +2,7 @@ import gzip
 from decimal import Decimal
 from pathlib import Path
 
-from utils.update_promos import load_files
+from utils.promos.update_promos import load_files
 
 
 CHAIN_ID = "7290661400001"

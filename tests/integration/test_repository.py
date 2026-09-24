@@ -1,3 +1,9 @@
+# These tests intentionally focus on basic repository behavior rather than
+# exhaustively testing every update/conflict branch. More advanced behavior
+# is covered by the higher-level update_products, update_prices, and
+# update_promos integration tests, so duplicating those cases here would
+# make the repository suite unnecessarily large and redundant.
+
 
 from models.store import Store
 
@@ -19,6 +25,7 @@ from database.repository import (
     insert_file_tracking,
     mark_files_downloaded,
     mark_files_loaded,
+    get_downloaded_pricefull_files,
     get_latest_downloaded_price_files,
     get_downloaded_promofull_files,
     get_downloaded_unloaded_promo_files,
@@ -28,6 +35,7 @@ from database.repository import (
     reconcile_removed_promotions,
     reconcile_removed_promotion_groups,
     reconcile_removed_promotion_items,
+    get_promotion_details,
 )
 
 
@@ -165,63 +173,7 @@ def test_upsert_store_products_inserts_new_product(conn, test_store):
     )
 
 
-def test_upsert_prices_unchanged_is_noop(conn, test_store):
-    record = PriceRecord(
-        chain_id=test_store["chain_id"],
-        store_id=test_store["store_id_text"],
-        item_code="NOOP_TEST_001",
-        price=Decimal("10.00"),
-        unit_price=Decimal("10.00"),
-        quantity=Decimal("1"),
-        unit_qty="יחידה",
-        unit_measure="",
-        weighted=False,
-        package_quantity=1,
-        allow_discount=True,
-        status="active",
-        price_update_time=None,
-        last_sale_datetime=None,
-    )
 
-    upsert_prices(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT updated_at
-            FROM prices
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                record.chain_id,
-                test_store["store_id_text"],
-                record.item_code,
-            ),
-        )
-        first_updated_at = cur.fetchone()[0]
-
-    upsert_prices(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT updated_at
-            FROM prices
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                record.chain_id,
-                test_store["store_id_text"],
-                record.item_code,
-            ),
-        )
-        second_updated_at = cur.fetchone()[0]
-
-    assert second_updated_at == first_updated_at
 
 
 
@@ -286,45 +238,6 @@ def test_reconcile_removed_items_only_removes_missing_item(
         assert cur.fetchone() is None
 
 
-def test_upsert_store_products_fill_only_manufacturer(
-    conn, test_store
-):
-    record = StoreProductRecord(
-        chain_id=test_store["chain_id"],
-        store_id=test_store["store_id_text"],
-        item_code="INTERNAL_MFR_TEST",
-        name="Test Product",
-        manufacturer="Original Manufacturer",
-        manufacturer_country="IL",
-        item_type=0,
-    )
-
-    upsert_store_products(conn, [record])
-
-    record.manufacturer = "Different Manufacturer"
-    record.manufacturer_country = "US"
-
-    upsert_store_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT manufacturer, manufacturer_country
-            FROM store_products
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = %s
-            """,
-            (
-                record.chain_id,
-                test_store["store_id_text"],
-                record.item_code,
-            ),
-        )
-        row = cur.fetchone()
-
-    assert row == ("Original Manufacturer", "IL")
-
 
 
 
@@ -352,58 +265,6 @@ def test_upsert_products_inserts_new(conn):
 
 
 
-def test_upsert_products_fill_only_manufacturer(conn):
-    record = ProductRecord(
-        item_code="BARCODE_MFR_001",
-        name="Test",
-        manufacturer="Original Mfr",
-        manufacturer_country="IL",
-        item_type=0,
-    )
-
-    upsert_products(conn, [record])
-
-    record.manufacturer = "Different Mfr"
-    record.manufacturer_country = "US"
-    upsert_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT manufacturer, manufacturer_country FROM products WHERE item_code = %s",
-            (record.item_code,),
-        )
-        assert cur.fetchone() == ("Original Mfr", "IL")
-
-
-def test_upsert_products_blank_name_is_true_noop(conn):
-    # Blank name never participates in name resolution, and manufacturer
-    # is unchanged (fill-only, same value) -- so nothing should update.
-    record = ProductRecord(
-        item_code="BARCODE_BLANK_001",
-        name=None,
-        manufacturer="Mfr",
-        manufacturer_country="IL",
-        item_type=0,
-    )
-    upsert_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT updated_at FROM products WHERE item_code = %s",
-            (record.item_code,),
-        )
-        first = cur.fetchone()[0]
-
-    upsert_products(conn, [record])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT updated_at FROM products WHERE item_code = %s",
-            (record.item_code,),
-        )
-        second = cur.fetchone()[0]
-
-    assert second == first
 
 
 # ---- file_tracking ----
@@ -529,6 +390,62 @@ def test_mark_files_loaded_only_flips_unloaded(conn, test_store):
 
     assert mark_files_loaded(conn, [filename]) == 1
     assert mark_files_loaded(conn, [filename]) == 0
+
+
+def test_get_downloaded_pricefull_files_filters_type_downloaded_loaded(
+    conn,
+    test_store,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    insert_file_tracking(
+        conn,
+        [
+            _file_record(
+                chain_id,
+                "PriceFull_001.gz",
+                store_id,
+                downloaded=True,
+                loaded=False,
+                file_type="PriceFull",
+            ),
+            _file_record(
+                chain_id,
+                "PriceFull_002.gz",
+                store_id,
+                downloaded=False,
+                loaded=False,
+                file_type="PriceFull",
+            ),
+            _file_record(
+                chain_id,
+                "PriceFull_003.gz",
+                store_id,
+                downloaded=True,
+                loaded=True,
+                file_type="PriceFull",
+            ),
+            _file_record(
+                chain_id,
+                "Price_004.gz",
+                store_id,
+                downloaded=True,
+                loaded=False,
+                file_type="Price",
+            ),
+        ],
+    )
+
+    rows = get_downloaded_pricefull_files(conn)
+
+    filenames = {
+        row[4]
+        for row in rows
+        if row[0] == chain_id and row[2] == store_id
+    }
+
+    assert filenames == {"PriceFull_001.gz", "PriceFull_003.gz"}
 
 
 def test_get_latest_downloaded_price_files_picks_newest_when_nothing_loaded(
@@ -788,161 +705,6 @@ def test_upsert_promotions_inserts_new(conn, test_store):
         assert cur.fetchone()[0] == "Test Promo"
 
 
-def test_upsert_promotions_noop_when_unchanged(conn, test_store):
-    chain_id, store_id = test_store["chain_id"], test_store["store_id_text"]
-    promo = _promotion(chain_id, store_id, promotion_id="PROMO_NOOP")
-
-    upsert_promotions(conn, [promo])
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT updated_at FROM promotions "
-            "WHERE chain_id=%s AND promotion_id=%s AND store_id=%s",
-            (chain_id, promo.promotion_id, store_id),
-        )
-        first = cur.fetchone()[0]
-
-    upsert_promotions(conn, [promo])
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT updated_at FROM promotions "
-            "WHERE chain_id=%s AND promotion_id=%s AND store_id=%s",
-            (chain_id, promo.promotion_id, store_id),
-        )
-        second = cur.fetchone()[0]
-
-    assert second == first
-
-
-def test_upsert_promotions_updates_changed_field(conn, test_store):
-    chain_id, store_id = test_store["chain_id"], test_store["store_id_text"]
-    promo = _promotion(chain_id, store_id, promotion_id="PROMO_CHANGE")
-
-    upsert_promotions(conn, [promo])
-    promo.description = "Updated description"
-    upsert_promotions(conn, [promo])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT description FROM promotions "
-            "WHERE chain_id=%s AND promotion_id=%s AND store_id=%s",
-            (chain_id, promo.promotion_id, store_id),
-        )
-        assert cur.fetchone()[0] == "Updated description"
-
-
-def test_upsert_promotion_groups_inserts_and_updates(conn, test_store):
-    chain_id = test_store["chain_id"]
-    store_id = test_store["store_id_text"]
-
-    promotion_id = "PROMO_GRP"
-
-    upsert_promotions(
-        conn,
-        [
-            _promotion(
-                chain_id,
-                store_id,
-                promotion_id=promotion_id,
-            )
-        ],
-    )
-
-    group = _promotion_group(
-        chain_id,
-        store_id,
-        promotion_id=promotion_id,
-    )
-
-    upsert_promotion_groups(conn, [group])
-
-    group.discount_type = "percentage"
-
-    upsert_promotion_groups(conn, [group])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT discount_type
-            FROM promotion_groups
-            WHERE chain_id = %s
-              AND promotion_id = %s
-              AND store_id = %s
-              AND group_id = %s
-            """,
-            (
-                chain_id,
-                promotion_id,
-                store_id,
-                group.group_id,
-            ),
-        )
-
-        assert cur.fetchone()[0] == "percentage"
-
-
-def test_upsert_promotion_items_inserts_and_updates(conn, test_store):
-    chain_id = test_store["chain_id"]
-    store_id = test_store["store_id_text"]
-
-    promotion_id = "PROMO_ITEM"
-
-    upsert_promotions(
-        conn,
-        [
-            _promotion(
-                chain_id,
-                store_id,
-                promotion_id=promotion_id,
-            )
-        ],
-    )
-
-    upsert_promotion_groups(
-        conn,
-        [
-            _promotion_group(
-                chain_id,
-                store_id,
-                promotion_id=promotion_id,
-                group_id="G1",
-            )
-        ],
-    )
-
-    item = _promotion_item(
-        chain_id,
-        store_id,
-        promotion_id=promotion_id,
-        group_id="G1",
-    )
-
-    upsert_promotion_items(conn, [item])
-
-    item.discounted_price = Decimal("9.90")
-
-    upsert_promotion_items(conn, [item])
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT discounted_price
-            FROM promotion_items
-            WHERE chain_id = %s
-              AND promotion_id = %s
-              AND store_id = %s
-              AND group_id = %s
-              AND item_code = %s
-            """,
-            (
-                chain_id,
-                promotion_id,
-                store_id,
-                item.group_id,
-                item.item_code,
-            ),
-        )
-
-        assert cur.fetchone()[0] == Decimal("9.90")
 
 
 def test_reconcile_removed_promotion_items_only_removes_missing(conn, test_store):
@@ -1029,3 +791,13 @@ def test_reconcile_removed_promotion_groups_only_removes_missing(conn, test_stor
     )
 
     assert deleted == 1
+
+def test_get_promotion_details_returns_none_when_missing(conn):
+    assert get_promotion_details(
+        conn,
+        "MISSING_CHAIN",
+        "MISSING_STORE",
+        "MISSING_PROMO",
+        "MISSING_GROUP",
+        "MISSING_ITEM",
+    ) is None

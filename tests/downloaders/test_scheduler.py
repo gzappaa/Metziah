@@ -21,7 +21,9 @@ def mock_conn(monkeypatch):
     return conn
 
 
-# ---- helper functions ----
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     ("value", "expected"),
@@ -35,7 +37,7 @@ def mock_conn(monkeypatch):
     ],
 )
 def test_normalize_store_id(value, expected):
-    assert scheduler._normalize_store_id(value) == expected
+    assert scheduler.normalize_store_id(value) == expected
 
 
 def test_load_chain_metadata_extra_overrides_base(
@@ -55,11 +57,7 @@ def test_load_chain_metadata_extra_overrides_base(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-        scheduler,
-        "CHAINS_FILE",
-        chains_file,
-    )
+    monkeypatch.setattr(scheduler, "CHAINS_FILE", chains_file)
     monkeypatch.setattr(
         scheduler,
         "CHAINS_EXTRA_FILE",
@@ -71,7 +69,76 @@ def test_load_chain_metadata_extra_overrides_base(
     assert metadata["123"]["client"] == "LaibcatalogClient"
 
 
-# ---- main() / test-mode safety ----
+@pytest.mark.parametrize(
+    ("chain_id", "metadata", "expected"),
+    [
+        (
+            "123",
+            {"123": {"client": "LaibcatalogClient"}},
+            True,
+        ),
+        (
+            "123",
+            {"123": {"client": "OtherClient"}},
+            False,
+        ),
+        (
+            "999",
+            {"123": {"client": "LaibcatalogClient"}},
+            False,
+        ),
+    ],
+)
+def test_is_laibcatalog_chain(chain_id, metadata, expected):
+    assert (
+        scheduler._is_laibcatalog_chain(chain_id, metadata)
+        is expected
+    )
+
+
+def test_load_ignored_price_stores(tmp_path, monkeypatch):
+    ignored_file = tmp_path / "ignored_stores.json"
+
+    ignored_file.write_text(
+        """
+        [
+            {
+                "chain": "123",
+                "stores": ["006", "07"]
+            }
+        ]
+        """,
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "IGNORED_STORES_FILE",
+        ignored_file,
+    )
+
+    assert scheduler._load_ignored_price_stores() == {
+        ("123", "6"),
+        ("123", "7"),
+    }
+
+
+def test_load_ignored_price_stores_missing_file(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "IGNORED_STORES_FILE",
+        tmp_path / "missing.json",
+    )
+
+    assert scheduler._load_ignored_price_stores() == set()
+
+
+# ---------------------------------------------------------------------------
+# main() / safety
+# ---------------------------------------------------------------------------
 
 def test_main_test_requires_env_test(monkeypatch):
     monkeypatch.setattr(
@@ -139,524 +206,122 @@ def test_main_test_runs_with_both_protections(monkeypatch):
     run_all.assert_called_once()
 
 
-# ---- run_all() ----
+def test_main_unknown_command_does_not_run_pipeline(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "unknown"],
+    )
 
-def test_run_all_test_env_skips_pricesfull(monkeypatch):
-    monkeypatch.setattr(scheduler.settings, "ENV", "test")
+    run_all = MagicMock()
+    run_prices = MagicMock()
+    run_pricesfull = MagicMock()
+    run_promos = MagicMock()
 
-    pricesfull = MagicMock()
-    promos = MagicMock()
-    prices = MagicMock()
+    monkeypatch.setattr(scheduler, "run_all", run_all)
+    monkeypatch.setattr(
+        scheduler,
+        "run_prices_and_load",
+        run_prices,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_pricesfull",
+        run_pricesfull,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_promos_and_load",
+        run_promos,
+    )
 
-    monkeypatch.setattr(scheduler, "run_pricesfull", pricesfull)
-    monkeypatch.setattr(scheduler, "run_promos_and_load", promos)
-    monkeypatch.setattr(scheduler, "run_prices_and_load", prices)
+    scheduler.main()
 
-    scheduler.run_all()
-
-    pricesfull.assert_not_called()
-    promos.assert_called_once()
-    prices.assert_called_once()
-
-
-def test_run_all_non_test_env_runs_pricesfull(monkeypatch):
-    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
-
-    pricesfull = MagicMock()
-    promos = MagicMock()
-    prices = MagicMock()
-
-    monkeypatch.setattr(scheduler, "run_pricesfull", pricesfull)
-    monkeypatch.setattr(scheduler, "run_promos_and_load", promos)
-    monkeypatch.setattr(scheduler, "run_prices_and_load", prices)
-
-    scheduler.run_all()
-
-    pricesfull.assert_called_once()
-    promos.assert_called_once()
-    prices.assert_called_once()
+    run_all.assert_not_called()
+    run_prices.assert_not_called()
+    run_pricesfull.assert_not_called()
+    run_promos.assert_not_called()
 
 
-def test_run_all_test_env_runs_promos_before_prices(monkeypatch):
-    monkeypatch.setattr(scheduler.settings, "ENV", "test")
+# ---------------------------------------------------------------------------
+# run_all()
+# ---------------------------------------------------------------------------
 
+def test_run_all_order(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
         scheduler,
-        "run_promos_and_load",
-        lambda: calls.append("promos"),
+        "run_pricesfull",
+        lambda: calls.append("pricesfull"),
     )
+
     monkeypatch.setattr(
         scheduler,
         "run_prices_and_load",
         lambda: calls.append("prices"),
     )
 
+    monkeypatch.setattr(
+        scheduler,
+        "run_promos_and_load",
+        lambda: calls.append("promos"),
+    )
+
+    async def refresh():
+        calls.append("refresh")
+
+    monkeypatch.setattr(
+        scheduler,
+        "refresh_html_caches",
+        refresh,
+    )
+
     scheduler.run_all()
 
-    assert calls == ["promos", "prices"]
-
-
-# ---- run_prices_and_load() ----
-
-def test_run_prices_passes_test_flag(monkeypatch):
-    monkeypatch.setattr(
-        scheduler.settings,
-        "ENV",
-        "test",
-    )
-
-    download_prices = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        download_prices,
-    )
-
-    scheduler.run_prices_and_load()
-
-    download_prices.assert_awaited_once_with(test=True)
-
-
-def test_run_prices_passes_test_false(monkeypatch):
-    monkeypatch.setattr(
-        scheduler.settings,
-        "ENV",
-        "dev",
-    )
-
-    download_prices = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        download_prices,
-    )
-
-    scheduler.run_prices_and_load()
-
-    download_prices.assert_awaited_once_with(test=False)
-
-
-def test_run_prices_download_failure_stops(monkeypatch):
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(side_effect=Exception("download failed")),
-    )
-
-    load_price_files = MagicMock()
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    load_price_files.assert_not_called()
-
-
-def test_run_prices_no_pricefull_or_price_files_stops(monkeypatch):
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=[]),
-    )
-
-    load_price_files = MagicMock()
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    load_price_files.assert_not_called()
-
-
-def test_run_prices_builds_price_path(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    rows = [
-        (
-            "7290644700005",
-            "001",
-            "020",
-            "Price",
-            "Price7290644700005-001-020.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=rows),
-    )
-
-    load_price_files = MagicMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    files = load_price_files.call_args.args[1]
-
-    assert files == [
-        (
-            tmp_path
-            / "7290644700005"
-            / "020"
-            / "prices"
-            / "Price7290644700005-001-020.gz",
-            "Price",
-            False,
-        )
-    ]
-
-
-def test_run_prices_snapshot_false(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    rows = [
-        (
-            "7290644700005",
-            "001",
-            "007",
-            "Price",
-            "Price7290644700005-001-007.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=rows),
-    )
-
-    load_price_files = MagicMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    files = load_price_files.call_args.args[1]
-
-    assert files == [
-        (
-            tmp_path
-            / "7290644700005"
-            / "007"
-            / "prices"
-            / "Price7290644700005-001-007.gz",
-            "Price",
-            False,
-        )
-    ]
-
-
-def test_run_prices_ignores_ignored_store(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    rows = [
-        (
-            "7290058108879",
-            "001",
-            "006",
-            "Price",
-            "Price7290058108879-001-006.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=rows),
-    )
-
-    load_price_files = MagicMock()
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    load_price_files.assert_not_called()
-
-
-def test_run_prices_loads_pending_pricefull(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    pricefull_rows = [
-        (
-            "7290058108879",
-            "001",
-            "006",
-            "PriceFull",
-            "PriceFull7290058108879-001-006.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=pricefull_rows),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=[]),
-    )
-
-    load_price_files = MagicMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    files = load_price_files.call_args.args[1]
-
-    assert files == [
-        (
-            tmp_path
-            / "7290058108879"
-            / "006"
-            / "pricesfull"
-            / "PriceFull7290058108879-001-006.gz",
-            "PriceFull",
-            True,
-        )
-    ]
-
-
-def test_run_prices_snapshot_true(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    rows = [
-        (
-            "7290661400001",
-            "001",
-            "002",
-            "Price",
-            "Price7290661400001-001-002.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=rows),
-    )
-
-    load_price_files = MagicMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
-    files = load_price_files.call_args.args[1]
-
-    assert files == [
-        (
-            tmp_path
-            / "7290661400001"
-            / "002"
-            / "prices"
-            / "Price7290661400001-001-002.gz",
-            "Price",
-            True,
-        )
-    ]
-
-
-def test_run_prices_loads_pricefull_before_price(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    mock_conn(monkeypatch)
-
-    pricefull_rows = [
-        (
-            "7290058108879",
-            "001",
-            "006",
-            "PriceFull",
-            "PriceFull7290058108879-001-006.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    price_rows = [
-        (
-            "7290644700005",
-            "001",
-            "020",
-            "Price",
-            "Price7290644700005-001-020.gz",
-            "2026-09-16",
-        ),
-    ]
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=pricefull_rows),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=price_rows),
-    )
-
-    calls = []
-
-    def load_price_files(conn, files, feed_dir):
-        calls.append(files)
-        return []
-
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    scheduler.run_prices_and_load()
-
     assert calls == [
-        [
-            (
-                tmp_path
-                / "7290058108879"
-                / "006"
-                / "pricesfull"
-                / "PriceFull7290058108879-001-006.gz",
-                "PriceFull",
-                True,
-            )
-        ],
-        [
-            (
-                tmp_path
-                / "7290644700005"
-                / "020"
-                / "prices"
-                / "Price7290644700005-001-020.gz",
-                "Price",
-                False,
-            )
-        ],
+        "pricesfull",
+        "refresh",
+        "prices",
+        "refresh",
+        "promos",
     ]
 
 
-# ---- mark_downloaded() ----
+# ---------------------------------------------------------------------------
+# run_file_tracking()
+# ---------------------------------------------------------------------------
+
+def test_run_file_tracking_success(monkeypatch):
+    update = AsyncMock(return_value=5)
+
+    monkeypatch.setattr(
+        scheduler,
+        "update_file_tracking",
+        update,
+    )
+
+    assert scheduler.run_file_tracking() is True
+    update.assert_awaited_once()
+
+
+def test_run_file_tracking_failure(monkeypatch):
+    monkeypatch.setattr(
+        scheduler,
+        "update_file_tracking",
+        AsyncMock(side_effect=RuntimeError("failed")),
+    )
+
+    assert scheduler.run_file_tracking() is False
+
+
+# ---------------------------------------------------------------------------
+# mark_downloaded()
+# ---------------------------------------------------------------------------
 
 def test_mark_downloaded_empty_skips_db(monkeypatch):
     mark_files_downloaded = MagicMock()
+
     monkeypatch.setattr(
         scheduler,
         "mark_files_downloaded",
@@ -671,7 +336,8 @@ def test_mark_downloaded_empty_skips_db(monkeypatch):
 def test_mark_downloaded_marks_files_and_commits(monkeypatch):
     conn = mock_conn(monkeypatch)
 
-    mark_files_downloaded = MagicMock()
+    mark_files_downloaded = MagicMock(return_value=2)
+
     monkeypatch.setattr(
         scheduler,
         "mark_files_downloaded",
@@ -696,10 +362,17 @@ def test_mark_downloaded_marks_files_and_commits(monkeypatch):
     conn.commit.assert_called_once()
 
 
-# ---- cleanup_old_price_files() ----
+# ---------------------------------------------------------------------------
+# cleanup_old_price_files()
+# ---------------------------------------------------------------------------
 
 def test_cleanup_old_price_files_removes_old_snapshots(tmp_path):
-    prices_dir = tmp_path / "7290661400001" / "002" / "prices"
+    prices_dir = (
+        tmp_path
+        / "7290661400001"
+        / "002"
+        / "prices"
+    )
     prices_dir.mkdir(parents=True)
 
     loaded = prices_dir / "Price7290661400001-001-002.gz"
@@ -709,9 +382,7 @@ def test_cleanup_old_price_files_removes_old_snapshots(tmp_path):
     old.touch()
 
     scheduler.cleanup_old_price_files(
-        [
-            (loaded, True),
-        ]
+        [(loaded, True)]
     )
 
     assert loaded.exists()
@@ -719,7 +390,12 @@ def test_cleanup_old_price_files_removes_old_snapshots(tmp_path):
 
 
 def test_cleanup_old_price_files_keeps_delta_prices(tmp_path):
-    prices_dir = tmp_path / "7290661400001" / "002" / "prices"
+    prices_dir = (
+        tmp_path
+        / "7290661400001"
+        / "002"
+        / "prices"
+    )
     prices_dir.mkdir(parents=True)
 
     loaded = prices_dir / "Price7290661400001-001-002.gz"
@@ -729,9 +405,7 @@ def test_cleanup_old_price_files_keeps_delta_prices(tmp_path):
     old.touch()
 
     scheduler.cleanup_old_price_files(
-        [
-            (loaded, False),
-        ]
+        [(loaded, False)]
     )
 
     assert loaded.exists()
@@ -739,178 +413,37 @@ def test_cleanup_old_price_files_keeps_delta_prices(tmp_path):
 
 
 def test_cleanup_old_price_files_keeps_files_outside_prices(tmp_path):
-    pricesfull_dir = tmp_path / "7290661400001" / "002" / "pricesfull"
+    pricesfull_dir = (
+        tmp_path
+        / "7290661400001"
+        / "002"
+        / "pricesfull"
+    )
     pricesfull_dir.mkdir(parents=True)
 
-    loaded = pricesfull_dir / "PriceFull7290661400001-001-002.gz"
-    other = pricesfull_dir / "PriceFull7290661400001-001-001.gz"
+    loaded = (
+        pricesfull_dir
+        / "PriceFull7290661400001-001-002.gz"
+    )
+    other = (
+        pricesfull_dir
+        / "PriceFull7290661400001-001-001.gz"
+    )
 
     loaded.touch()
     other.touch()
 
     scheduler.cleanup_old_price_files(
-        [
-            (loaded, True),
-        ]
+        [(loaded, True)]
     )
 
     assert loaded.exists()
     assert other.exists()
 
 
-def test_run_prices_non_laibcatalog_price_is_delta(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(
-            return_value=[
-                "Price7290644700005-001-001.gz",
-            ]
-        ),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(
-            return_value=[
-                (
-                    "7290644700005",
-                    "001",
-                    "001",
-                    "Price",
-                    "Price7290644700005-001-001.gz",
-                    "2026-09-16",
-                )
-            ]
-        ),
-    )
-
-    load_price_files = MagicMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "mark_downloaded",
-        MagicMock(),
-    )
-
-    scheduler.run_prices_and_load()
-
-    files = load_price_files.call_args.args[1]
-
-    assert files == [
-        (
-            tmp_path
-            / "7290644700005"
-            / "001"
-            / "prices"
-            / "Price7290644700005-001-001.gz",
-            "Price",
-            False,
-        )
-    ]
-
-
-def test_run_prices_cleans_old_snapshot_files_after_successful_load(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
-
-    mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_prices",
-        AsyncMock(
-            return_value=[
-                "Price7290661400001-001-002.gz",
-            ]
-        ),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(
-            return_value=[
-                (
-                    "7290661400001",
-                    "001",
-                    "002",
-                    "Price",
-                    "Price7290661400001-001-002.gz",
-                    "2026-09-16",
-                )
-            ]
-        ),
-    )
-
-    loaded_file = (
-        tmp_path
-        / "7290661400001"
-        / "002"
-        / "prices"
-        / "Price7290661400001-001-002.gz"
-    )
-
-    load_price_files = MagicMock(
-        return_value=[loaded_file]
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "load_price_files",
-        load_price_files,
-    )
-
-    cleanup = MagicMock()
-    monkeypatch.setattr(
-        scheduler,
-        "cleanup_old_price_files",
-        cleanup,
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "mark_downloaded",
-        MagicMock(),
-    )
-
-    scheduler.run_prices_and_load()
-
-    cleanup.assert_called_once_with(
-        [
-            (loaded_file, True),
-        ]
-    )
-
-
-# ---- run_pricesfull() ----
+# ---------------------------------------------------------------------------
+# run_pricesfull()
+# ---------------------------------------------------------------------------
 
 def test_run_pricesfull_passes_test_flag(monkeypatch):
     monkeypatch.setattr(
@@ -919,22 +452,25 @@ def test_run_pricesfull_passes_test_flag(monkeypatch):
         "test",
     )
 
-    download_pricefull = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        scheduler,
-        "download_pricefull",
-        download_pricefull,
-    )
+    download = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
         scheduler,
+        "download_pricefull",
+        download,
+    )
+
+    mark = MagicMock()
+    monkeypatch.setattr(
+        scheduler,
         "mark_downloaded",
-        MagicMock(),
+        mark,
     )
 
     scheduler.run_pricesfull()
 
-    download_pricefull.assert_awaited_once_with(test=True)
+    download.assert_awaited_once_with(test=True)
+    mark.assert_called_once_with([])
 
 
 def test_run_pricesfull_passes_test_false(monkeypatch):
@@ -944,11 +480,12 @@ def test_run_pricesfull_passes_test_false(monkeypatch):
         "dev",
     )
 
-    download_pricefull = AsyncMock(return_value=[])
+    download = AsyncMock(return_value=[])
+
     monkeypatch.setattr(
         scheduler,
         "download_pricefull",
-        download_pricefull,
+        download,
     )
 
     monkeypatch.setattr(
@@ -959,7 +496,7 @@ def test_run_pricesfull_passes_test_false(monkeypatch):
 
     scheduler.run_pricesfull()
 
-    download_pricefull.assert_awaited_once_with(test=False)
+    download.assert_awaited_once_with(test=False)
 
 
 def test_run_pricesfull_downloads_and_marks(monkeypatch):
@@ -974,58 +511,537 @@ def test_run_pricesfull_downloads_and_marks(monkeypatch):
         AsyncMock(return_value=downloaded),
     )
 
-    mark_downloaded = MagicMock()
+    mark = MagicMock()
     monkeypatch.setattr(
         scheduler,
         "mark_downloaded",
-        mark_downloaded,
+        mark,
     )
 
     scheduler.run_pricesfull()
 
-    mark_downloaded.assert_called_once_with(downloaded)
+    mark.assert_called_once_with(downloaded)
 
 
 def test_run_pricesfull_download_failure_stops(monkeypatch):
     monkeypatch.setattr(
         scheduler,
         "download_pricefull",
-        AsyncMock(side_effect=RuntimeError("download failed")),
+        AsyncMock(
+            side_effect=RuntimeError("download failed")
+        ),
     )
 
-    mark_downloaded = MagicMock()
+    mark = MagicMock()
     monkeypatch.setattr(
         scheduler,
         "mark_downloaded",
-        mark_downloaded,
+        mark,
     )
 
     scheduler.run_pricesfull()
 
-    mark_downloaded.assert_not_called()
+    mark.assert_not_called()
 
 
-# ---- run_promos_and_load() ----
+# ---------------------------------------------------------------------------
+# run_prices_and_load()
+# ---------------------------------------------------------------------------
 
-def test_run_promos_passes_test_flag(monkeypatch):
+def test_run_prices_passes_test_flag(monkeypatch):
     monkeypatch.setattr(
         scheduler.settings,
         "ENV",
         "test",
     )
 
-    download_promofull = AsyncMock(return_value=[])
-    download_promos = AsyncMock(return_value=[])
+    download = AsyncMock(return_value=[])
 
     monkeypatch.setattr(
         scheduler,
-        "download_promofull",
-        download_promofull,
+        "download_prices",
+        download,
     )
+
+    scheduler.run_prices_and_load()
+
+    download.assert_awaited_once_with(test=True)
+
+
+def test_run_prices_passes_test_false(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "dev",
+    )
+
+    download = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        download,
+    )
+
+    scheduler.run_prices_and_load()
+
+    download.assert_awaited_once_with(test=False)
+
+
+def test_run_prices_download_failure_stops(monkeypatch):
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(
+            side_effect=Exception("download failed")
+        ),
+    )
+
+    load = MagicMock()
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load,
+    )
+
+    scheduler.run_prices_and_load()
+
+    load.assert_not_called()
+
+
+def test_run_prices_loads_pricefull_first(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    mock_conn(monkeypatch)
+
+    pricefull_rows = [
+        (
+            "7290058108879",
+            "001",
+            "006",
+            "PriceFull",
+            "PriceFull7290058108879-001-006.gz",
+            "2026-09-16",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=pricefull_rows),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(return_value=set()),
+    )
+
+    calls = []
+
+    def load_price_files(conn, files, feed_dir):
+        calls.append(files)
+        return []
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load_price_files,
+    )
+
+    scheduler.run_prices_and_load()
+
+    assert calls == [
+        [
+            (
+                tmp_path
+                / "7290058108879"
+                / "6"
+                / "pricesfull"
+                / "PriceFull7290058108879-001-006.gz",
+                "PriceFull",
+                True,
+            )
+        ]
+    ]
+
+
+def test_run_prices_builds_delta_price_path(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(return_value=set()),
+    )
+
+    rows = [
+        (
+            "7290644700005",
+            "001",
+            "20",
+            "Price",
+            "Price7290644700005-001-020.gz",
+            "2026-09-16",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=rows),
+    )
+
+    load = MagicMock(return_value=[])
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load,
+    )
+
+    scheduler.run_prices_and_load()
+
+    assert load.call_args.args[1] == [
+        (
+            tmp_path
+            / "7290644700005"
+            / "20"
+            / "prices"
+            / "Price7290644700005-001-020.gz",
+            "Price",
+            False,
+        )
+    ]
+
+
+def test_run_prices_laibcatalog_price_is_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(
+            return_value={
+                "7290661400001": {
+                    "client": "LaibcatalogClient",
+                }
+            }
+        ),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(return_value=set()),
+    )
+
+    rows = [
+        (
+            "7290661400001",
+            "001",
+            "2",
+            "Price",
+            "Price7290661400001-001-002.gz",
+            "2026-09-16",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=rows),
+    )
+
+    load = MagicMock(return_value=[])
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load,
+    )
+
+    scheduler.run_prices_and_load()
+
+    assert load.call_args.args[1] == [
+        (
+            tmp_path
+            / "7290661400001"
+            / "2"
+            / "prices"
+            / "Price7290661400001-001-002.gz",
+            "Price",
+            True,
+        )
+    ]
+
+
+def test_run_prices_ignores_ignored_store(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(
+            return_value={
+                ("7290058108879", "6"),
+            }
+        ),
+    )
+
+    rows = [
+        (
+            "7290058108879",
+            "001",
+            "006",
+            "Price",
+            "Price7290058108879-001-006.gz",
+            "2026-09-16",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=rows),
+    )
+
+    load = MagicMock()
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load,
+    )
+
+    scheduler.run_prices_and_load()
+
+    load.assert_not_called()
+
+
+def test_run_prices_no_eligible_files_stops(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=[]),
+    )
+
+    load = MagicMock()
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        load,
+    )
+
+    scheduler.run_prices_and_load()
+
+    load.assert_not_called()
+
+
+def test_run_prices_discovers_products_after_pricefull_load(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "download_prices",
+        AsyncMock(return_value=[]),
+    )
+
+    conn = mock_conn(monkeypatch)
+
+    pricefull_rows = [
+        (
+            "123",
+            "001",
+            "2",
+            "PriceFull",
+            "PriceFull123-001-002.gz",
+            "2026-09-16",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=pricefull_rows),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=[]),
+    )
+
+    loaded = [
+        tmp_path
+        / "123"
+        / "2"
+        / "pricesfull"
+        / "PriceFull123-001-002.gz"
+    ]
+
+    monkeypatch.setattr(
+        scheduler,
+        "load_price_files",
+        MagicMock(return_value=loaded),
+    )
+
+    discover = MagicMock()
+
+    monkeypatch.setattr(
+        scheduler,
+        "discover_new_products",
+        discover,
+    )
+
+    scheduler.run_prices_and_load()
+
+    discover.assert_called_once_with(
+        conn,
+        loaded,
+        tmp_path,
+    )
+
+# ---------------------------------------------------------------------------
+# run_promos_and_load()
+# ---------------------------------------------------------------------------
+
+def _mock_promo_dependencies(monkeypatch):
+    monkeypatch.setattr(
+        scheduler,
+        "download_promofull",
+        AsyncMock(return_value=[]),
+    )
+
     monkeypatch.setattr(
         scheduler,
         "download_promos",
-        download_promos,
+        AsyncMock(return_value=[]),
     )
 
     monkeypatch.setattr(
@@ -1052,10 +1068,24 @@ def test_run_promos_passes_test_flag(monkeypatch):
         MagicMock(),
     )
 
+
+def test_run_promos_passes_test_flag(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "test",
+    )
+
+    _mock_promo_dependencies(monkeypatch)
+
     scheduler.run_promos_and_load()
 
-    download_promofull.assert_awaited_once_with(test=True)
-    download_promos.assert_awaited_once_with(test=True)
+    scheduler.download_promofull.assert_awaited_once_with(
+        test=True
+    )
+    scheduler.download_promos.assert_awaited_once_with(
+        test=True
+    )
 
 
 def test_run_promos_passes_test_false(monkeypatch):
@@ -1065,51 +1095,47 @@ def test_run_promos_passes_test_false(monkeypatch):
         "dev",
     )
 
-    download_promofull = AsyncMock(return_value=[])
-    download_promos = AsyncMock(return_value=[])
+    _mock_promo_dependencies(monkeypatch)
 
+    scheduler.run_promos_and_load()
+
+    scheduler.download_promofull.assert_awaited_once_with(
+        test=False
+    )
+    scheduler.download_promos.assert_awaited_once_with(
+        test=False
+    )
+
+
+def test_run_promos_download_promofull_failure_stops(
+    monkeypatch,
+):
     monkeypatch.setattr(
         scheduler,
         "download_promofull",
-        download_promofull,
+        AsyncMock(
+            side_effect=RuntimeError("failed")
+        ),
     )
+
+    download_promos = AsyncMock(
+        return_value=[]
+    )
+
     monkeypatch.setattr(
         scheduler,
         "download_promos",
         download_promos,
     )
 
-    monkeypatch.setattr(
-        scheduler,
-        "mark_downloaded",
-        MagicMock(),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_promofull_files",
-        MagicMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_promo_files",
-        MagicMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "load_promo_files",
-        MagicMock(),
-    )
-
     scheduler.run_promos_and_load()
 
-    download_promofull.assert_awaited_once_with(test=False)
-    download_promos.assert_awaited_once_with(test=False)
+    download_promos.assert_not_awaited()
 
 
-def test_run_promos_downloads_and_marks_promofull(monkeypatch):
+def test_run_promos_downloads_and_marks_promofull(
+    monkeypatch,
+):
     promofull_files = [
         "PromoFull7290058108879-001-003.gz",
         "PromoFull7290058140886-001-711.gz",
@@ -1127,11 +1153,12 @@ def test_run_promos_downloads_and_marks_promofull(monkeypatch):
         AsyncMock(return_value=[]),
     )
 
-    mark_downloaded = MagicMock()
+    mark = MagicMock()
+
     monkeypatch.setattr(
         scheduler,
         "mark_downloaded",
-        mark_downloaded,
+        mark,
     )
 
     monkeypatch.setattr(
@@ -1154,10 +1181,12 @@ def test_run_promos_downloads_and_marks_promofull(monkeypatch):
 
     scheduler.run_promos_and_load()
 
-    assert mark_downloaded.call_args_list[0].args[0] == promofull_files
+    assert mark.call_args_list[0].args[0] == promofull_files
 
 
-def test_run_promos_downloads_and_marks_promo(monkeypatch):
+def test_run_promos_downloads_and_marks_promo(
+    monkeypatch,
+):
     promofull_files = [
         "PromoFull7290058108879-001-003.gz",
     ]
@@ -1179,11 +1208,12 @@ def test_run_promos_downloads_and_marks_promo(monkeypatch):
         AsyncMock(return_value=promo_files),
     )
 
-    mark_downloaded = MagicMock()
+    mark = MagicMock()
+
     monkeypatch.setattr(
         scheduler,
         "mark_downloaded",
-        mark_downloaded,
+        mark,
     )
 
     monkeypatch.setattr(
@@ -1206,14 +1236,20 @@ def test_run_promos_downloads_and_marks_promo(monkeypatch):
 
     scheduler.run_promos_and_load()
 
-    assert mark_downloaded.call_count == 2
+    assert mark.call_count == 2
+    assert mark.call_args_list[0].args[0] == promofull_files
+    assert mark.call_args_list[1].args[0] == promo_files
 
-    assert mark_downloaded.call_args_list[0].args[0] == promofull_files
-    assert mark_downloaded.call_args_list[1].args[0] == promo_files
 
-
-def test_run_promos_loads_pending_promofull(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
+def test_run_promos_loads_pending_promofull(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
 
     mock_conn(monkeypatch)
 
@@ -1222,6 +1258,7 @@ def test_run_promos_loads_pending_promofull(monkeypatch, tmp_path):
         "download_promofull",
         AsyncMock(return_value=[]),
     )
+
     monkeypatch.setattr(
         scheduler,
         "download_promos",
@@ -1232,7 +1269,7 @@ def test_run_promos_loads_pending_promofull(monkeypatch, tmp_path):
         (
             "7290058108879",
             "001",
-            "003",
+            "3",
             "PromoFull",
             "PromoFull7290058108879-001-003.gz",
             "2026-09-16",
@@ -1251,22 +1288,21 @@ def test_run_promos_loads_pending_promofull(monkeypatch, tmp_path):
         MagicMock(return_value=[]),
     )
 
-    load_promo_files = MagicMock(return_value=[])
+    load = MagicMock(return_value=[])
+
     monkeypatch.setattr(
         scheduler,
         "load_promo_files",
-        load_promo_files,
+        load,
     )
 
     scheduler.run_promos_and_load()
 
-    files = load_promo_files.call_args.args[1]
-
-    assert files == [
+    assert load.call_args.args[1] == [
         (
             tmp_path
             / "7290058108879"
-            / "003"
+            / "3"
             / "promosfull"
             / "PromoFull7290058108879-001-003.gz",
             "PromoFull",
@@ -1274,8 +1310,15 @@ def test_run_promos_loads_pending_promofull(monkeypatch, tmp_path):
     ]
 
 
-def test_run_promos_builds_promo_path(monkeypatch, tmp_path):
-    monkeypatch.setattr(scheduler, "FEEDS_DIR", tmp_path)
+def test_run_promos_builds_promo_path(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        scheduler,
+        "FEEDS_DIR",
+        tmp_path,
+    )
 
     mock_conn(monkeypatch)
 
@@ -1284,6 +1327,7 @@ def test_run_promos_builds_promo_path(monkeypatch, tmp_path):
         "download_promofull",
         AsyncMock(return_value=[]),
     )
+
     monkeypatch.setattr(
         scheduler,
         "download_promos",
@@ -1300,7 +1344,7 @@ def test_run_promos_builds_promo_path(monkeypatch, tmp_path):
         (
             "7290058108879",
             "001",
-            "003",
+            "3",
             "Promo",
             "Promo7290058108879-001-003.gz",
             "2026-09-16",
@@ -1313,22 +1357,21 @@ def test_run_promos_builds_promo_path(monkeypatch, tmp_path):
         MagicMock(return_value=rows),
     )
 
-    load_promo_files = MagicMock(return_value=[])
+    load = MagicMock(return_value=[])
+
     monkeypatch.setattr(
         scheduler,
         "load_promo_files",
-        load_promo_files,
+        load,
     )
 
     scheduler.run_promos_and_load()
 
-    files = load_promo_files.call_args.args[1]
-
-    assert files == [
+    assert load.call_args.args[1] == [
         (
             tmp_path
             / "7290058108879"
-            / "003"
+            / "3"
             / "promos"
             / "Promo7290058108879-001-003.gz",
             "Promo",
@@ -1336,85 +1379,125 @@ def test_run_promos_builds_promo_path(monkeypatch, tmp_path):
     ]
 
 
-def test_run_promos_does_not_load_promo_without_loaded_promofull(
+def test_run_promos_without_eligible_promo_stops(
     monkeypatch,
 ):
+    _mock_promo_dependencies(monkeypatch)
+
     mock_conn(monkeypatch)
-
-    monkeypatch.setattr(
-        scheduler,
-        "download_promofull",
-        AsyncMock(return_value=[]),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "download_promos",
-        AsyncMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_promofull_files",
-        MagicMock(return_value=[]),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_unloaded_promo_files",
-        MagicMock(return_value=[]),
-    )
-
-    load_mock = MagicMock()
-    monkeypatch.setattr(
-        scheduler,
-        "load_promo_files",
-        load_mock,
-    )
 
     scheduler.run_promos_and_load()
 
-    load_mock.assert_not_called()
+    scheduler.load_promo_files.assert_not_called()
 
 
-def test_run_prices_does_not_load_price_without_loaded_pricefull(
-    monkeypatch,
-):
-    mock_conn(monkeypatch)
+# ---------------------------------------------------------------------------
+# Command routing
+# ---------------------------------------------------------------------------
+
+def test_main_prices_command(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "prices"],
+    )
+
+    tracking = MagicMock()
+    prices = MagicMock()
 
     monkeypatch.setattr(
         scheduler,
-        "download_prices",
-        AsyncMock(return_value=[]),
-    )
-
-    monkeypatch.setattr(
-        scheduler,
-        "get_downloaded_pricefull_files",
-        MagicMock(return_value=[]),
+        "run_file_tracking",
+        tracking,
     )
     monkeypatch.setattr(
         scheduler,
-        "get_downloaded_unloaded_price_files",
-        MagicMock(return_value=[]),
+        "run_prices_and_load",
+        prices,
     )
+    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    scheduler.main()
+
+    tracking.assert_called_once()
+    prices.assert_called_once()
+
+
+def test_main_pricesfull_command(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "pricesfull"],
+    )
+
+    tracking = MagicMock()
+    pricesfull = MagicMock()
 
     monkeypatch.setattr(
         scheduler,
-        "_load_chain_metadata",
-        MagicMock(return_value={}),
+        "run_file_tracking",
+        tracking,
     )
     monkeypatch.setattr(
         scheduler,
-        "_load_ignored_price_stores",
-        MagicMock(return_value=set()),
+        "run_pricesfull",
+        pricesfull,
+    )
+    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    scheduler.main()
+
+    tracking.assert_called_once()
+    pricesfull.assert_called_once()
+
+
+def test_main_promos_command(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "promos"],
     )
 
-    load_mock = MagicMock()
+    tracking = MagicMock()
+    promos = MagicMock()
+
     monkeypatch.setattr(
         scheduler,
-        "load_price_files",
-        load_mock,
+        "run_file_tracking",
+        tracking,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_promos_and_load",
+        promos,
+    )
+    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    scheduler.main()
+
+    tracking.assert_called_once()
+    promos.assert_called_once()
+
+
+def test_main_all_command(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "all"],
     )
 
-    scheduler.run_prices_and_load()
+    tracking = MagicMock()
+    run_all = MagicMock()
 
-    load_mock.assert_not_called()
+    monkeypatch.setattr(
+        scheduler,
+        "run_file_tracking",
+        tracking,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_all",
+        run_all,
+    )
+    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    scheduler.main()
+
+    tracking.assert_called_once()
+    run_all.assert_called_once()
