@@ -1,7 +1,14 @@
 import pytest
 import psycopg
+from pathlib import Path
 
 from config import settings
+import utils.prices.update_prices as update_prices
+import utils.promos.update_promos as update_promos
+import utils.products.update_products as update_products
+
+from datetime import date
+
 
 
 @pytest.fixture
@@ -71,6 +78,59 @@ def test_store(conn):
 
 
 @pytest.fixture
+def test_price_partitions(conn):
+    chain_ids = ("9999999999999", "8888888888888")
+
+    with conn.cursor() as cur:
+        for chain_id in chain_ids:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS prices_{chain_id}
+                PARTITION OF prices
+                FOR VALUES IN ('{chain_id}')
+                """
+            )
+
+    conn.commit()
+
+    yield
+
+    with conn.cursor() as cur:
+        for chain_id in chain_ids:
+            cur.execute(
+                f"DROP TABLE IF EXISTS prices_{chain_id}"
+            )
+
+    conn.commit()
+
+
+@pytest.fixture
+def test_promo_partitions(conn):
+    chain_ids = ("9999999999999", "8888888888888")
+
+    with conn.cursor() as cur:
+        for chain_id in chain_ids:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS promotion_items_{chain_id}
+                PARTITION OF promotion_items
+                FOR VALUES IN ('{chain_id}')
+                """
+            )
+
+    conn.commit()
+
+    yield
+
+    with conn.cursor() as cur:
+        for chain_id in chain_ids:
+            cur.execute(
+                f"DROP TABLE IF EXISTS promotion_items_{chain_id}"
+            )
+
+    conn.commit()
+
+@pytest.fixture
 def create_store(conn):
     def _create_store(
         chain_id,
@@ -118,7 +178,7 @@ def create_store(conn):
 
 
 @pytest.fixture
-def pipeline_test_data(conn):
+def pipeline_test_data(conn, cleanup_test_chains):
     test_data = [
         {
             "chain_id": "9999999999999",
@@ -216,7 +276,7 @@ def pipeline_test_data(conn):
                         "test",
                         file_type,
                         filename,
-                        "2026-01-01",
+                        date.today(),
                     ),
                 )
 
@@ -224,30 +284,19 @@ def pipeline_test_data(conn):
 
     yield test_data
 
-    # Clean everything created by this fixture.
-    with conn.cursor() as cur:
-        for data in test_data:
-            chain_id = data["chain_id"]
 
+@pytest.fixture
+def cleanup_test_chains(conn):
+    yield
+
+    with conn.cursor() as cur:
+        for chain_id in ("9999999999999", "8888888888888"):
             cur.execute(
-                "DELETE FROM promotion_items WHERE chain_id = %s",
-                (chain_id,),
-            )
-            cur.execute(
-                """
-                DELETE FROM promotion_groups
-                WHERE promotion_id IN (
-                    SELECT id FROM promotions WHERE chain_id = %s
-                )
-                """,
+                "DELETE FROM prices WHERE chain_id = %s",
                 (chain_id,),
             )
             cur.execute(
                 "DELETE FROM promotions WHERE chain_id = %s",
-                (chain_id,),
-            )
-            cur.execute(
-                "DELETE FROM prices WHERE chain_id = %s",
                 (chain_id,),
             )
             cur.execute(
@@ -272,3 +321,44 @@ def pipeline_test_data(conn):
             )
 
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Added for update_products / update_prices / update_promos integration tests
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+# 9999999999999 / 8888888888888 are test-only chain IDs and deliberately do
+# NOT exist in the real chains.json / chains_extra.json. Each update_*
+# module's own _load_chain_metadata() is monkeypatched per-test instead of
+# touching production reference data.
+TEST_CHAIN_METADATA = {
+    "9999999999999": {
+        "name_he_normalized": "רשת בדיקה",
+        "name_en_normalized": "test chain 9999",
+    },
+    "8888888888888": {
+        "name_he_normalized": "רשת בדיקה 2",
+        "name_en_normalized": "test chain 8888",
+    },
+}
+
+
+@pytest.fixture
+def feeds_dir():
+    return FIXTURES_DIR
+
+
+@pytest.fixture
+def mock_chain_metadata(monkeypatch):
+
+
+    for module in (update_prices, update_promos, update_products):
+        monkeypatch.setattr(
+            module,
+            "_load_chain_metadata",
+            lambda: TEST_CHAIN_METADATA,
+        )
+
+    return TEST_CHAIN_METADATA

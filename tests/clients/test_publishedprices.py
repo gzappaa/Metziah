@@ -14,6 +14,19 @@ def client():
     )
 
 
+def _http_response(
+    *,
+    text="",
+    url="https://url.publishedprices.co.il/login",
+    status_code=200,
+):
+    response = Mock()
+    response.text = text
+    response.url = url
+    response.status_code = status_code
+    return response
+
+
 def test_init(client):
     assert client.username == "test_user"
     assert client.password == "test_password"
@@ -27,9 +40,9 @@ def test_get_with_retry_success(
     client,
     monkeypatch,
 ):
-    response = Mock()
-    response.url = "https://example.com/test"
-    response.status_code = 200
+    response = _http_response(
+        url="https://example.com/test",
+    )
 
     get = Mock(
         return_value=response
@@ -59,9 +72,9 @@ def test_get_with_retry_retries_timeout(
     client,
     monkeypatch,
 ):
-    response = Mock()
-    response.url = "https://example.com/test"
-    response.status_code = 200
+    response = _http_response(
+        url="https://example.com/test",
+    )
 
     get = Mock(
         side_effect=[
@@ -101,9 +114,9 @@ def test_get_with_retry_retries_connection_error(
     client,
     monkeypatch,
 ):
-    response = Mock()
-    response.url = "https://example.com/test"
-    response.status_code = 200
+    response = _http_response(
+        url="https://example.com/test",
+    )
 
     get = Mock(
         side_effect=[
@@ -180,7 +193,9 @@ def test_get_with_retry_does_not_retry_http_error(
     client,
     monkeypatch,
 ):
-    response = Mock()
+    response = _http_response(
+        url="https://example.com/test",
+    )
 
     response.raise_for_status.side_effect = (
         requests.HTTPError("404")
@@ -223,39 +238,33 @@ def test_login_success(
     client,
     monkeypatch,
 ):
-    login_page = Mock()
-
-    login_page.text = """
-        <html>
-            <head>
-                <meta
-                    name="csrftoken"
-                    content="initial-token"
-                >
-            </head>
-        </html>
-    """
-
-    login_page.url = (
-        "https://url.publishedprices.co.il/login"
+    login_page = _http_response(
+        text="""
+            <html>
+                <head>
+                    <meta
+                        name="csrftoken"
+                        content="initial-token"
+                    >
+                </head>
+            </html>
+        """,
     )
-    login_page.status_code = 200
 
-    post_response = Mock()
-
-    post_response.text = """
-        <html>
-            <body>
-                Logged in as 'test_user'
-                <meta
-                    name="csrftoken"
-                    content="logged-in-token"
-                >
-            </body>
-        </html>
-    """
-
-    post_response.status_code = 200
+    post_response = _http_response(
+        text="""
+            <html>
+                <body>
+                    Logged in as 'test_user'
+                    <meta
+                        name="csrftoken"
+                        content="logged-in-token"
+                    >
+                </body>
+            </html>
+        """,
+        url="https://url.publishedprices.co.il/login/user",
+    )
 
     get = Mock(
         return_value=login_page
@@ -303,13 +312,13 @@ def test_login_fails_when_initial_csrf_missing(
     client,
     monkeypatch,
 ):
-    response = Mock()
-
-    response.text = """
-        <html>
-            <head></head>
-        </html>
-    """
+    response = _http_response(
+        text="""
+            <html>
+                <head></head>
+            </html>
+        """
+    )
 
     get = Mock(
         return_value=response
@@ -332,14 +341,14 @@ def test_login_fails_when_initial_csrf_empty(
     client,
     monkeypatch,
 ):
-    response = Mock()
-
-    response.text = """
-        <meta
-            name="csrftoken"
-            content=""
-        >
-    """
+    response = _http_response(
+        text="""
+            <meta
+                name="csrftoken"
+                content=""
+            >
+        """
+    )
 
     get = Mock(
         return_value=response
@@ -375,17 +384,16 @@ def test_login_fails_when_not_logged_in(
     monkeypatch,
     login_text,
 ):
-    login_page = Mock()
-
-    login_page.text = """
-        <meta
-            name="csrftoken"
-            content="initial-token"
-        >
-    """
+    login_page = _http_response(
+        text="""
+            <meta
+                name="csrftoken"
+                content="initial-token"
+            >
+        """
+    )
 
     post_response = Mock()
-
     post_response.text = login_text
 
     get = Mock(
@@ -421,17 +429,16 @@ def test_login_fails_when_post_response_missing_csrf(
     client,
     monkeypatch,
 ):
-    login_page = Mock()
-
-    login_page.text = """
-        <meta
-            name="csrftoken"
-            content="initial-token"
-        >
-    """
+    login_page = _http_response(
+        text="""
+            <meta
+                name="csrftoken"
+                content="initial-token"
+            >
+        """
+    )
 
     post_response = Mock()
-
     post_response.text = """
         Logged in as 'test_user'
     """
@@ -467,17 +474,16 @@ def test_login_fails_when_post_csrf_empty(
     client,
     monkeypatch,
 ):
-    login_page = Mock()
-
-    login_page.text = """
-        <meta
-            name="csrftoken"
-            content="initial-token"
-        >
-    """
+    login_page = _http_response(
+        text="""
+            <meta
+                name="csrftoken"
+                content="initial-token"
+            >
+        """
+    )
 
     post_response = Mock()
-
     post_response.text = """
         Logged in as 'test_user'
         <meta
@@ -517,17 +523,16 @@ def test_login_raises_http_error_from_post(
     client,
     monkeypatch,
 ):
-    login_page = Mock()
-
-    login_page.text = """
-        <meta
-            name="csrftoken"
-            content="initial-token"
-        >
-    """
+    login_page = _http_response(
+        text="""
+            <meta
+                name="csrftoken"
+                content="initial-token"
+            >
+        """
+    )
 
     post_response = Mock()
-
     post_response.text = "error"
     post_response.raise_for_status.side_effect = (
         requests.HTTPError("500")

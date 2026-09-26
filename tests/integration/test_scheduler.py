@@ -25,7 +25,7 @@ import pytest
 from downloaders import scheduler
 
 
-TEST_DATE = date(2026, 9, 17)
+TEST_DATE = date.today()
 
 
 def insert_file(

@@ -284,7 +284,7 @@ def _file_record(
         "source": "TEST",
         "file_type": file_type,
         "filename": filename,
-        "file_date": date(2026, 8, 1),
+        "file_date": date.today(),
         "downloaded": downloaded,
         "loaded": loaded,
         "file_size": None,
@@ -612,7 +612,9 @@ def test_get_downloaded_unloaded_promo_files_requires_loaded_promofull(
         ],
     )
 
-    rows = get_downloaded_unloaded_promo_files(conn)
+    rows = get_downloaded_unloaded_promo_files(
+        conn,
+    )
 
     assert not any(
         row[0] == chain_id and row[4] == "Promo_001.gz"
@@ -651,7 +653,9 @@ def test_get_downloaded_unloaded_promo_files_allows_promo_after_promofull_loaded
 
     mark_files_loaded(conn, ["PromoFull_001.gz"])
 
-    rows = get_downloaded_unloaded_promo_files(conn)
+    rows = get_downloaded_unloaded_promo_files(
+        conn,
+    )
 
     assert any(
         row[0] == chain_id and row[4] == "Promo_001.gz"

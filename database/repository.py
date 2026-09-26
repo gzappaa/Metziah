@@ -1141,6 +1141,7 @@ def get_downloaded_unloaded_promo_files(conn):
         WHERE p.file_type = 'Promo'
           AND p.downloaded = true
           AND p.loaded = false
+          AND p.file_date = CURRENT_DATE
 
           AND EXISTS (
               SELECT 1
@@ -1206,6 +1207,7 @@ def get_downloaded_unloaded_price_files(conn):
         WHERE p.file_type = 'Price'
           AND p.downloaded = true
           AND p.loaded = false
+          AND p.file_date = CURRENT_DATE
 
           AND EXISTS (
               SELECT 1
@@ -1229,21 +1231,22 @@ def get_downloaded_unloaded_price_files(conn):
 
 def get_nearby_store_ids(
     conn,
-    chain_id: str,
     lat: float,
     lon: float,
     max_distance_km: float,
-) -> list[str]:
+    chain_id: str | None = None,
+) -> list[tuple[str, str]]:
     """
-    Returns store_id values for the given chain within max_distance_km
+    Returns (chain_id, store_id) pairs for stores within max_distance_km
     of (lat, lon), using the existing PostGIS `location` column.
+
+    If chain_id is provided, only stores from that chain are returned.
     """
 
     query = """
-        SELECT store_id
+        SELECT chain_id, store_id
         FROM stores
-        WHERE chain_id = %s
-          AND location IS NOT NULL
+        WHERE location IS NOT NULL
           AND ST_DWithin(
               location,
               ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
@@ -1251,17 +1254,19 @@ def get_nearby_store_ids(
           )
     """
 
+    params = [
+        lon,
+        lat,
+        max_distance_km * 1000,
+    ]
+
+    if chain_id is not None:
+        query += " AND chain_id = %s"
+        params.append(chain_id)
+
     with conn.cursor() as cur:
-        cur.execute(
-            query,
-            (
-                chain_id,
-                lon,
-                lat,
-                max_distance_km * 1000,
-            ),
-        )
-        return [row[0] for row in cur.fetchall()]
+        cur.execute(query, params)
+        return cur.fetchall()
 
 
 def get_promotion_details(

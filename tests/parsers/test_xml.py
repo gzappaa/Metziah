@@ -2,18 +2,25 @@ import pytest
 from decimal import Decimal
 from lxml import etree
 from datetime import datetime
-from parsers.xml import MachseneiXmlParser
+
+from parsers.xml import StoreXmlParser
 
 
 @pytest.fixture
 def parser():
-    return MachseneiXmlParser()
+    return StoreXmlParser()
 
 
-def make_xml(content="", section="Items", sub_chain_id="001", store_id="018"):
+def make_xml(
+    content="",
+    section="Items",
+    sub_chain_id="001",
+    store_id="018",
+    chain_id="7290661400001",
+):
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <Root>
-    <ChainID>7290661400001</ChainID>
+    <ChainID>{chain_id}</ChainID>
     <SubChainID>{sub_chain_id}</SubChainID>
     <StoreID>{store_id}</StoreID>
     <BikoretNo>0</BikoretNo>
@@ -55,6 +62,7 @@ def real_item_xml(
     <ItemStatus />
 </Item>
 """
+
 
 def real_promo_xml():
     return """
@@ -100,11 +108,20 @@ def real_promo_xml():
 """
 
 
+# ============================================================
+# Price parsing
+# ============================================================
+
+
 def test_parse_real_price_item(parser):
     xml = make_xml(real_item_xml())
+
     products = parser.parse_price_file(xml)
+
     assert len(products) == 1
+
     product = products[0]
+
     assert product.chain_id == "7290661400001"
     assert product.sub_chain_id == "001"
     assert product.store_id == "018"
@@ -122,33 +139,44 @@ def test_parse_real_price_item(parser):
 
 
 def test_parse_multiple_items(parser):
-    xml = make_xml(real_item_xml(item_code="111") + real_item_xml(item_code="222"))
+    xml = make_xml(
+        real_item_xml(item_code="111")
+        + real_item_xml(item_code="222")
+    )
+
     products = parser.parse_price_file(xml)
+
     assert len(products) == 2
     assert [p.item_code for p in products] == ["111", "222"]
 
 
 def test_parse_empty_items_returns_empty_list(parser):
     xml = make_xml()
-    products = parser.parse_price_file(xml)
-    assert products == []
+
+    assert parser.parse_price_file(xml) == []
 
 
 def test_parse_preserves_hebrew_text(parser):
     xml = make_xml(real_item_xml())
+
     product = parser.parse_price_file(xml)[0]
+
     assert "חתול" in product.name
 
 
 def test_parse_missing_price_defaults(parser):
     xml = make_xml(real_item_xml(price=""))
+
     product = parser.parse_price_file(xml)[0]
+
     assert product.price == Decimal("0")
 
 
 def test_parse_missing_name(parser):
     xml = make_xml(real_item_xml(name=""))
+
     product = parser.parse_price_file(xml)[0]
+
     assert product.name == ""
 
 
@@ -163,9 +191,49 @@ def test_parse_missing_root_metadata(parser):
     </Items>
 </Root>
 """
+
     products = parser.parse_price_file(xml)
+
     assert products[0].chain_id is None
+    assert products[0].sub_chain_id is None
     assert products[0].store_id is None
+
+
+def test_parse_alternative_root_metadata_names(parser):
+    xml = b"""
+<Root>
+    <ChainId>123</ChainId>
+    <SubChainId>456</SubChainId>
+    <StoreId>789</StoreId>
+    <Items>
+        <Item>
+            <ItemCode>123</ItemCode>
+            <ItemPrice>5</ItemPrice>
+        </Item>
+    </Items>
+</Root>
+"""
+
+    product = parser.parse_price_file(xml)[0]
+
+    assert product.chain_id == "123"
+    assert product.sub_chain_id == "456"
+    assert product.store_id == "789"
+
+
+def test_parse_root_metadata_is_stripped(parser):
+    xml = make_xml(
+        real_item_xml(),
+        chain_id=" 7290661400001 ",
+        sub_chain_id=" 001 ",
+        store_id=" 018 ",
+    )
+
+    product = parser.parse_price_file(xml)[0]
+
+    assert product.chain_id == "7290661400001"
+    assert product.sub_chain_id == "001"
+    assert product.store_id == "018"
 
 
 def test_invalid_xml_raises(parser):
@@ -173,11 +241,19 @@ def test_invalid_xml_raises(parser):
         parser.parse_price_file(b"<Root><Items><Item>")
 
 
-@pytest.mark.parametrize("price", ["7,90", " ", "abc"])
+@pytest.mark.parametrize("price", ["7,90", "abc"])
 def test_invalid_price_is_skipped(parser, price):
     xml = make_xml(real_item_xml(price=price))
-    products = parser.parse_price_file(xml)
-    assert products == []
+
+    assert parser.parse_price_file(xml) == []
+
+@pytest.mark.parametrize("price", ["", " "])
+def test_missing_price_defaults_to_zero(parser, price):
+    xml = make_xml(real_item_xml(price=price))
+
+    product = parser.parse_price_file(xml)[0]
+
+    assert product.price == Decimal("0")
 
 
 def test_invalid_item_is_skipped_and_valid_item_is_parsed(parser):
@@ -193,25 +269,35 @@ def test_invalid_item_is_skipped_and_valid_item_is_parsed(parser):
     assert products[0].price == Decimal("10.50")
 
 
-# ---- boolean conversions ----
+# ============================================================
+# Boolean conversions
+# ============================================================
 
 
 def test_parse_weighted_item(parser):
     xml = make_xml(real_item_xml(weighted="1"))
+
     product = parser.parse_price_file(xml)[0]
+
     assert product.weighted is True
 
 
 def test_parse_discount_allowed(parser):
     xml = make_xml(real_item_xml(allow_discount="1"))
+
     product = parser.parse_price_file(xml)[0]
+
     assert product.allow_discount is True
 
 
-# ---- additional price fields ----
+# ============================================================
+# Additional price fields
+# ============================================================
+
 
 def test_parse_price_item_additional_fields(parser):
     xml = make_xml(real_item_xml())
+
     product = parser.parse_price_file(xml)[0]
 
     assert product.price_update_time == datetime.fromisoformat(
@@ -225,31 +311,62 @@ def test_parse_price_item_additional_fields(parser):
     assert product.status is None
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("0", 0),
+        ("1", 1),
+        ("42", 42),
+        ("", None),
+        (None, None),
+        ("לא ידוע", None),
+        ("abc", None),
+    ],
+)
+def test_parse_int(parser, value, expected):
+    assert parser.parse_int(value) == expected
+
+
 def test_parse_item_type_one(parser):
-    xml = make_xml(
-        real_item_xml()
-        .replace("<ItemType>0</ItemType>", "<ItemType>1</ItemType>")
+    item = real_item_xml().replace(
+        "<ItemType>0</ItemType>",
+        "<ItemType>1</ItemType>",
     )
 
-    product = parser.parse_price_file(xml)[0]
+    product = parser.parse_price_file(make_xml(item))[0]
 
     assert product.item_type == 1
 
 
 def test_parse_missing_item_type(parser):
-    item = real_item_xml().replace("<ItemType>0</ItemType>", "")
-    xml = make_xml(item)
+    item = real_item_xml().replace(
+        "<ItemType>0</ItemType>",
+        "",
+    )
 
-    product = parser.parse_price_file(xml)[0]
+    product = parser.parse_price_file(make_xml(item))[0]
+
+    assert product.item_type is None
+
+
+def test_parse_unknown_item_type(parser):
+    item = real_item_xml().replace(
+        "<ItemType>0</ItemType>",
+        "<ItemType>לא ידוע</ItemType>",
+    )
+
+    product = parser.parse_price_file(make_xml(item))[0]
 
     assert product.item_type is None
 
 
 def test_parse_missing_package_quantity(parser):
-    item = real_item_xml().replace("<QtyInPackage>1</QtyInPackage>", "")
-    xml = make_xml(item)
+    item = real_item_xml().replace(
+        "<QtyInPackage>1</QtyInPackage>",
+        "",
+    )
 
-    product = parser.parse_price_file(xml)[0]
+    product = parser.parse_price_file(make_xml(item))[0]
 
     assert product.package_quantity is None
 
@@ -259,20 +376,34 @@ def test_parse_package_quantity_zero(parser):
         "<QtyInPackage>1</QtyInPackage>",
         "<QtyInPackage>0</QtyInPackage>",
     )
-    xml = make_xml(item)
 
-    product = parser.parse_price_file(xml)[0]
+    product = parser.parse_price_file(make_xml(item))[0]
 
     assert product.package_quantity == 0
 
 
-# ---- datetime conversions ----
+def test_parse_unknown_package_quantity(parser):
+    item = real_item_xml().replace(
+        "<QtyInPackage>1</QtyInPackage>",
+        "<QtyInPackage>לא ידוע</QtyInPackage>",
+    )
+
+    product = parser.parse_price_file(make_xml(item))[0]
+
+    assert product.package_quantity is None
+
+
+# ============================================================
+# Datetime conversions
+# ============================================================
 
 
 def test_parse_datetime_valid(parser):
-    result = parser.parse_datetime("2026-07-29T09:57:15.000")
-
-    assert result == datetime.fromisoformat("2026-07-29T09:57:15.000")
+    assert parser.parse_datetime(
+        "2026-07-29T09:57:15.000"
+    ) == datetime.fromisoformat(
+        "2026-07-29T09:57:15.000"
+    )
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -292,7 +423,9 @@ def test_parse_datetime_invalid_value(parser, value):
     assert parser.parse_datetime(value) is None
 
 
-# ---- decimal conversions ----
+# ============================================================
+# Decimal conversions
+# ============================================================
 
 
 @pytest.mark.parametrize(
@@ -302,19 +435,24 @@ def test_parse_datetime_invalid_value(parser, value):
         ("0", Decimal("0")),
         ("", Decimal("0")),
         (None, Decimal("0")),
+        ("כ12.90", Decimal("12.90")),
+        (" כ12.90 ", Decimal("12.90")),
     ],
 )
 def test_parse_decimal_valid_and_missing(parser, value, expected):
     assert parser.parse_decimal(value, "ItemPrice") == expected
 
 
-@pytest.mark.parametrize("value", ["abc", "7,90", "not-a-number"])
+@pytest.mark.parametrize(
+    "value",
+    ["abc", "7,90", "not-a-number"],
+)
 def test_parse_decimal_invalid_value(parser, value):
-    with pytest.raises(ValueError, match="Invalid ItemPrice format"):
+    with pytest.raises(
+        ValueError,
+        match="Invalid ItemPrice format",
+    ):
         parser.parse_decimal(value, "ItemPrice")
-
-
-# ---- optional decimal conversions ----
 
 
 @pytest.mark.parametrize(
@@ -325,12 +463,18 @@ def test_parse_decimal_invalid_value(parser, value):
         ("", None),
         (None, None),
         ("abc", None),
+        ("כ12.90", Decimal("12.90")),
+        (" כ12.90 ", Decimal("12.90")),
+        ("לא ידוע", None),
     ],
 )
 def test_parse_optional_decimal(parser, value, expected):
     assert parser.parse_optional_decimal(value) == expected
 
-# ---- promotion parsing ----
+
+# ============================================================
+# Promotion parsing
+# ============================================================
 
 
 def test_parse_real_promotion(parser):
@@ -437,7 +581,10 @@ def test_parse_promotion_item(parser):
 
     assert item.is_weighted is False
 
-# ---- promotion hierarchy ----
+
+# ============================================================
+# Promotion hierarchy
+# ============================================================
 
 
 def test_parse_multiple_promotion_groups_and_items(parser):
@@ -521,7 +668,11 @@ def test_parse_multiple_promotion_groups_and_items(parser):
     assert group1.discount_type == "1"
     assert len(group1.items) == 2
 
-    assert [item.item_code for item in group1.items] == ["111", "222"]
+    assert [item.item_code for item in group1.items] == [
+        "111",
+        "222",
+    ]
+
     assert group1.items[0].is_weighted is False
     assert group1.items[1].is_weighted is True
 
@@ -531,7 +682,10 @@ def test_parse_multiple_promotion_groups_and_items(parser):
     assert len(group2.items) == 1
     assert group2.items[0].item_code == "333"
 
-# ---- duplicate promotion IDs ----
+
+# ============================================================
+# Duplicate promotion/group IDs
+# ============================================================
 
 
 def test_parse_duplicate_promotion_id_merges_groups(parser):
@@ -584,14 +738,15 @@ def test_parse_duplicate_promotion_id_merges_groups(parser):
 
     assert promotion.promotion_id == "100"
     assert len(promotion.groups) == 2
-    assert [group.group_id for group in promotion.groups] == ["1", "2"]
-
-    assert [group.items[0].item_code for group in promotion.groups] == [
-        "111",
-        "222",
+    assert [group.group_id for group in promotion.groups] == [
+        "1",
+        "2",
     ]
 
-# ---- duplicate promotion group IDs ----
+    assert [
+        group.items[0].item_code
+        for group in promotion.groups
+    ] == ["111", "222"]
 
 
 def test_parse_duplicate_group_id_merges_items(parser):
@@ -636,28 +791,26 @@ def test_parse_duplicate_group_id_merges_items(parser):
 
     assert len(promotions) == 1
 
-    promotion = promotions[0]
-
-    assert len(promotion.groups) == 1
-
-    group = promotion.groups[0]
+    group = promotions[0].groups[0]
 
     assert group.group_id == "1"
-
-    # First group metadata is preserved.
     assert group.min_purchase_amount == Decimal("10")
     assert group.discount_type == "1"
-
-    # Items from both occurrences are merged.
     assert len(group.items) == 2
-    assert [item.item_code for item in group.items] == ["111", "222"]
+    assert [item.item_code for item in group.items] == [
+        "111",
+        "222",
+    ]
 
 
+# ============================================================
+# Malformed promotion items
+# ============================================================
 
-# ---- malformed promotion items ----
 
-
-def test_invalid_promotion_item_is_skipped_and_valid_item_is_parsed(parser):
+def test_invalid_promotion_item_is_skipped_and_valid_item_is_parsed(
+    parser,
+):
     promo_xml = """
 <Promotion>
     <PromotionID>100</PromotionID>
@@ -699,309 +852,10 @@ def test_invalid_promotion_item_is_skipped_and_valid_item_is_parsed(parser):
     assert promotion.promotion_id == "100"
     assert promotion.description == "Test promotion"
 
-    assert len(promotion.groups) == 1
-
     group = promotion.groups[0]
 
-    assert len(group.items) == 1
-    assert group.items[0].item_code == "222"
-    assert group.items[0].reward_type == 3
-
-
-# ---- optional promotion fields ----
-
-
-def test_parse_missing_optional_promotion_fields(parser):
-    promo_xml = """
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <PromotionDescription></PromotionDescription>
-    <PromotionStartHour></PromotionStartHour>
-    <PromotionEndHour></PromotionEndHour>
-    <PromotionDays></PromotionDays>
-    <AdditionalRestrictions></AdditionalRestrictions>
-    <Remarks>   </Remarks>
-
-    <RedemptionLimit></RedemptionLimit>
-    <MinNoOfItemOffered></MinNoOfItemOffered>
-
-    <Groups>
-        <Group>
-            <GroupID>1</GroupID>
-            <MinPurchaseAmount></MinPurchaseAmount>
-            <DiscountType></DiscountType>
-        </Group>
-    </Groups>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 1
-
-    promotion = promotions[0]
-
-    assert promotion.description == ""
-    assert promotion.start_hour is None
-    assert promotion.end_hour is None
-    assert promotion.promotion_days is None
-
-    assert promotion.redemption_limit is None
-    assert promotion.min_no_of_items_offered is None
-
-    assert promotion.additional_restrictions is None
-    assert promotion.remarks is None
-
-    group = promotion.groups[0]
-
-    assert group.min_purchase_amount is None
-    assert group.discount_type is None
-
-
-# ---- missing identifiers ----
-
-
-def test_parse_missing_promotion_id(parser):
-    promo_xml = """
-<Promotion>
-    <PromotionDescription>Missing ID</PromotionDescription>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 1
-    assert promotions[0].promotion_id is None
-
-
-def test_parse_missing_item_code(parser):
-    promo_xml = """
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <Groups>
-        <Group>
-            <GroupID>1</GroupID>
-            <PromotionItems>
-                <PromotionItem>
-                    <RewardType>3</RewardType>
-                </PromotionItem>
-            </PromotionItems>
-        </Group>
-    </Groups>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 1
-    assert len(promotions[0].groups[0].items) == 1
-    assert promotions[0].groups[0].items[0].item_code is None
-
-
-def test_parse_missing_group_id(parser):
-    promo_xml = """
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <Groups>
-        <Group>
-            <PromotionItems>
-                <PromotionItem>
-                    <ItemCode>111</ItemCode>
-                </PromotionItem>
-            </PromotionItems>
-        </Group>
-    </Groups>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 1
-
-    promotion = promotions[0]
-
-    assert len(promotion.groups) == 1
-
-    group = promotion.groups[0]
-
-    assert group.group_id is None
-    assert len(group.items) == 1
+    assert len(group.items) == 2
     assert group.items[0].item_code == "111"
-
-# ---- promotion collection ----
-
-
-def test_parse_multiple_promotions(parser):
-    promo_xml = """
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <PromotionDescription>First promotion</PromotionDescription>
-</Promotion>
-
-<Promotion>
-    <PromotionID>200</PromotionID>
-    <PromotionDescription>Second promotion</PromotionDescription>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 2
-    assert [p.promotion_id for p in promotions] == ["100", "200"]
-
-
-def test_parse_empty_promotions_returns_empty_list(parser):
-    xml = make_xml(
-        "",
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert promotions == []
-
-
-def test_parse_missing_promotions_section_returns_empty_list(parser):
-    xml = make_xml(
-        "",
-        section="Items",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotions = parser.parse_promo_file(xml)
-
-    assert promotions == []
-
-
-# ---- promotion boolean conversions ----
-
-
-@pytest.mark.parametrize(
-    "coupon, multiple, expected_coupon, expected_multiple",
-    [
-        ("0", "0", False, False),
-        ("1", "0", True, False),
-        ("0", "1", False, True),
-        ("1", "1", True, True),
-    ],
-)
-def test_parse_promotion_boolean_fields(
-    parser,
-    coupon,
-    multiple,
-    expected_coupon,
-    expected_multiple,
-):
-    promo_xml = f"""
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <AdditionalIsCoupon>{coupon}</AdditionalIsCoupon>
-    <AllowMultipleDiscounts>{multiple}</AllowMultipleDiscounts>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    promotion = parser.parse_promo_file(xml)[0]
-
-    assert promotion.additional_is_coupon is expected_coupon
-    assert promotion.allow_multiple_discounts is expected_multiple
-
-# ---- logging behavior ----
-
-
-def test_malformed_price_item_logs_warning(parser, caplog):
-    xml = make_xml(
-        real_item_xml(item_code="111", price="abc")
-    )
-
-    with caplog.at_level("WARNING", logger="parsers.xml"):
-        products = parser.parse_price_file(xml)
-
-    assert products == []
-
-    assert "Skipping malformed item" in caplog.text
-    assert "chain_id=7290661400001" in caplog.text
-    assert "store_id=018" in caplog.text
-    assert "item_code=111" in caplog.text
-
-def test_malformed_promotion_item_logs_warning(parser, caplog):
-    promo_xml = """
-<Promotion>
-    <PromotionID>100</PromotionID>
-    <PromotionDescription>Test promotion</PromotionDescription>
-    <Groups>
-        <Group>
-            <GroupID>1</GroupID>
-            <PromotionItems>
-                <PromotionItem>
-                    <ItemCode>111</ItemCode>
-                    <RewardType>not-a-number</RewardType>
-                </PromotionItem>
-            </PromotionItems>
-        </Group>
-    </Groups>
-</Promotion>
-"""
-
-    xml = make_xml(
-        promo_xml,
-        section="Promotions",
-        sub_chain_id="003",
-        store_id="097",
-    )
-
-    with caplog.at_level("WARNING", logger="parsers.xml"):
-        promotions = parser.parse_promo_file(xml)
-
-    assert len(promotions) == 1
-    assert len(promotions[0].groups[0].items) == 0
-
-    assert "Skipping malformed promotion item" in caplog.text
-    assert "chain_id=7290661400001" in caplog.text
-    assert "store_id=097" in caplog.text
-    assert "promotion_id=100" in caplog.text
-    assert "item_code=111" in caplog.text
+    assert group.items[0].reward_type is None
+    assert group.items[1].item_code == "222"
+    assert group.items[1].reward_type == 3

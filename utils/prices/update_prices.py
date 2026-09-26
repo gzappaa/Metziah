@@ -6,10 +6,9 @@ Core price-loading logic, shared by both entry points:
 
 This module is intentionally PRICE-ONLY.
 
-Product identity, product names, and product metadata are handled
-entirely by update_products.py. This module never creates products or
-store_products and never resolves names -- it only reads/writes the
-`prices` table.
+Product identity and product metadata are handled entirely by
+update_products.py. This module never creates products or store_products;
+it only reads product names when enriching price-change logs.
 
 This mirrors the file-discovery/parsing conventions used by
 update_products.py so both modules agree on what a feed file's
@@ -21,13 +20,14 @@ chain_id/store_id/sub_chain_id actually are:
     - filenames are parsed via utils.file_tracking.parser_file_tracking
       instead of an ad-hoc regex
     - iter_xml_from_path() is used instead of a bare gzip.open(), so
-      container files that hold more than one store's XML document
-      are handled the same way product loading handles them
+      container files that hold more than one store's XML document are
+      handled the same way product loading handles them
 
 This module:
   - parses Price and PriceFull feeds
   - deduplicates repeated item codes within a document
-  - optionally logs price changes
+  - optionally logs price changes, including product names
+  - reads product names from store_products/products only for log enrichment
   - upserts prices
   - reconciles items removed from snapshot feeds
   - marks successfully loaded files
@@ -38,6 +38,8 @@ Feed semantics:
   - The caller specifies whether a Price file is a snapshot.
   - Delta feeds never reconcile missing items.
 """
+
+
 
 import json
 import logging
@@ -146,6 +148,61 @@ def _dedupe_price_records(records):
 
 
 # ---------------------------------------------------------------------------
+# Fetch names for logging - maybe change this later
+# ---------------------------------------------------------------------------
+
+
+def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
+    """
+    Resolve item_code -> name for logging.
+
+    Prefer the store-specific name from store_products and fall back
+    to the global product name from products.
+    """
+    if not item_codes:
+        return {}
+
+    item_codes = list(item_codes)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT item_code, name
+            FROM store_products
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND item_code = ANY(%s)
+            """,
+            (
+                chain_id,
+                store_id_text,
+                item_codes,
+            ),
+        )
+        names = dict(cur.fetchall())
+
+    missing = [
+        code
+        for code in item_codes
+        if code not in names
+    ]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT item_code, name
+                FROM products
+                WHERE item_code = ANY(%s)
+                """,
+                (missing,),
+            )
+            names.update(dict(cur.fetchall()))
+
+    return names
+
+
+# ---------------------------------------------------------------------------
 # Existing prices
 # ---------------------------------------------------------------------------
 
@@ -194,18 +251,18 @@ def _log_price_changes(
     store_id_text,
     price_records,
     existing_prices,
+    item_names,
 ):
     """
     Log additions and price changes.
 
-    Product names are intentionally not fetched here.
-
-    Price logging should not depend on product metadata.
+    Product names are supplied by the caller for log enrichment.
     """
     for record in price_records:
         old = existing_prices.get(
             record.item_code
         )
+        name = item_names.get(record.item_code)
 
         if old is None:
             change_logger.info(
@@ -213,10 +270,12 @@ def _log_price_changes(
                 "chain_id=%s "
                 "store_id=%s "
                 "item_code=%s "
+                "name=%s "
                 "price=%s",
                 chain_id,
                 store_id_text,
                 record.item_code,
+                name,
                 record.price,
             )
 
@@ -230,6 +289,7 @@ def _log_price_changes(
                 "chain_id=%s "
                 "store_id=%s "
                 "item_code=%s "
+                "name=%s "
                 "old_price=%s "
                 "new_price=%s "
                 "old_unit_price=%s "
@@ -237,6 +297,7 @@ def _log_price_changes(
                 chain_id,
                 store_id_text,
                 record.item_code,
+                name,
                 old[0],
                 record.price,
                 old[1],
@@ -477,13 +538,25 @@ def load_one_file(
                 store_id_text,
             )
 
+            all_relevant_codes = (
+                item_codes_in_file
+                | set(existing_prices)
+            )
+
+            item_names = _fetch_item_names(
+                conn,
+                chain_id,
+                store_id_text,
+                all_relevant_codes,
+            )
+
             _log_price_changes(
                 chain_id,
                 store_id_text,
                 price_records,
                 existing_prices,
+                item_names,
             )
-
         # -----------------------------------------------------------
         # Write prices
         # -----------------------------------------------------------
@@ -521,19 +594,20 @@ def load_one_file(
             )
 
             for item_code in removed_codes:
-                old_price = existing_prices[
-                    item_code
-                ][0]
+                old_price = existing_prices[item_code][0]
+                name = item_names.get(item_code)
 
                 change_logger.info(
                     "ITEM REMOVED "
                     "chain_id=%s "
                     "store_id=%s "
                     "item_code=%s "
+                    "name=%s "
                     "(was price=%s)",
                     chain_id,
                     store_id_text,
                     item_code,
+                    name,
                     old_price,
                 )
 

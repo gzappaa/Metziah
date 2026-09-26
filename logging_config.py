@@ -29,7 +29,7 @@ point already configured root.
 """
 
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from config import settings
@@ -47,27 +47,31 @@ _ENV_LEVELS = {
 
 
 def _make_formatter():
-    return logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    return logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
 
-def _make_file_handler(filename: str) -> RotatingFileHandler:
-    handler = RotatingFileHandler(
+def _make_file_handler(filename: str) -> TimedRotatingFileHandler:
+    handler = TimedRotatingFileHandler(
         LOG_DIR / filename,
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
+        when="midnight",
+        interval=1,
+        backupCount=0,
         encoding="utf-8",
     )
     handler.setFormatter(_make_formatter())
     return handler
 
 
-def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logger:
+def setup_logging(
+    name: str,
+    log_to_console: bool | None = None,
+) -> logging.Logger:
     """
     Configure the ROOT logger for a pipeline entry point.
 
-    The scheduler is the root logging owner for the entire pipeline, so
-    everything executed through it propagates into scheduler.log or
-    scheduler.test.log.
+    Logs rotate once per day at midnight.
 
     Normal environment:
         logs/<name>.log
@@ -108,7 +112,9 @@ def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logg
     return root_logger
 
 
-def setup_general_logging(log_to_console: bool | None = None) -> None:
+def setup_general_logging(
+    log_to_console: bool | None = None,
+) -> None:
     """
     For ad-hoc scripts (get_stores.py, etc.) that aren't part of the
     daily pipeline. Same mechanism as setup_logging, always writes to
@@ -124,6 +130,8 @@ def setup_isolated_logging(
     """
     Create a logger with its own dedicated file.
     Does not propagate to root.
+
+    Logs rotate once per day at midnight.
 
     Used for logs that are consumed independently,
     such as price_changes.log and store_changes.log.

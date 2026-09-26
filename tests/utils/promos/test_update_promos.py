@@ -86,19 +86,19 @@ def patch_reconciliation(monkeypatch):
     monkeypatch.setattr(
         module,
         "reconcile_removed_promotions",
-        Mock(),
+        Mock(return_value=0),
     )
 
     monkeypatch.setattr(
         module,
         "reconcile_removed_promotion_groups",
-        Mock(),
+        Mock(return_value=0),
     )
 
     monkeypatch.setattr(
         module,
         "reconcile_removed_promotion_items",
-        Mock(),
+        Mock(return_value=0),
     )
 
 

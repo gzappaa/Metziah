@@ -1403,34 +1403,9 @@ def test_main_prices_command(monkeypatch):
     )
 
     tracking = MagicMock()
-    prices = MagicMock()
-
-    monkeypatch.setattr(
-        scheduler,
-        "run_file_tracking",
-        tracking,
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "run_prices_and_load",
-        prices,
-    )
-    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
-    scheduler.main()
-
-    tracking.assert_called_once()
-    prices.assert_called_once()
-
-
-def test_main_pricesfull_command(monkeypatch):
-    monkeypatch.setattr(
-        scheduler.sys,
-        "argv",
-        ["scheduler.py", "pricesfull"],
-    )
-
-    tracking = MagicMock()
     pricesfull = MagicMock()
+    prices = MagicMock()
+    file_sizes = MagicMock()
 
     monkeypatch.setattr(
         scheduler,
@@ -1442,11 +1417,68 @@ def test_main_pricesfull_command(monkeypatch):
         "run_pricesfull",
         pricesfull,
     )
-    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    monkeypatch.setattr(
+        scheduler,
+        "run_prices_and_load",
+        prices,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "populate_file_sizes",
+        file_sizes,
+    )
+
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "dev",
+    )
+
     scheduler.main()
 
     tracking.assert_called_once()
     pricesfull.assert_called_once()
+    prices.assert_called_once()
+    file_sizes.assert_called_once()
+
+
+def test_main_pricesfull_command(monkeypatch):
+    monkeypatch.setattr(
+        scheduler.sys,
+        "argv",
+        ["scheduler.py", "pricesfull"],
+    )
+
+    tracking = MagicMock()
+    pricesfull = MagicMock()
+    file_sizes = MagicMock()
+
+    monkeypatch.setattr(
+        scheduler,
+        "run_file_tracking",
+        tracking,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "run_pricesfull",
+        pricesfull,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "populate_file_sizes",
+        file_sizes,
+    )
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "dev",
+    )
+
+    scheduler.main()
+
+    tracking.assert_called_once()
+    pricesfull.assert_called_once()
+    file_sizes.assert_called_once()
 
 
 def test_main_promos_command(monkeypatch):
@@ -1458,6 +1490,7 @@ def test_main_promos_command(monkeypatch):
 
     tracking = MagicMock()
     promos = MagicMock()
+    file_sizes = MagicMock()
 
     monkeypatch.setattr(
         scheduler,
@@ -1469,11 +1502,22 @@ def test_main_promos_command(monkeypatch):
         "run_promos_and_load",
         promos,
     )
-    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    monkeypatch.setattr(
+        scheduler,
+        "populate_file_sizes",
+        file_sizes,
+    )
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "dev",
+    )
+
     scheduler.main()
 
     tracking.assert_called_once()
     promos.assert_called_once()
+    file_sizes.assert_called_once()
 
 
 def test_main_all_command(monkeypatch):
@@ -1485,6 +1529,7 @@ def test_main_all_command(monkeypatch):
 
     tracking = MagicMock()
     run_all = MagicMock()
+    file_sizes = MagicMock()
 
     monkeypatch.setattr(
         scheduler,
@@ -1496,8 +1541,19 @@ def test_main_all_command(monkeypatch):
         "run_all",
         run_all,
     )
-    monkeypatch.setattr(scheduler.settings, "ENV", "dev")
+    monkeypatch.setattr(
+        scheduler,
+        "populate_file_sizes",
+        file_sizes,
+    )
+    monkeypatch.setattr(
+        scheduler.settings,
+        "ENV",
+        "dev",
+    )
+
     scheduler.main()
 
     tracking.assert_called_once()
     run_all.assert_called_once()
+    file_sizes.assert_called_once()

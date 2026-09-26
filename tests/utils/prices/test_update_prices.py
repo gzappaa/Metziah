@@ -280,6 +280,7 @@ def test_log_price_changes_logs_added(monkeypatch):
         STORE_ID,
         [record],
         {},
+        {"ITEM-1": "Milk"},
     )
 
     logger.info.assert_called_once()
@@ -291,6 +292,7 @@ def test_log_price_changes_logs_added(monkeypatch):
         "chain_id=%s "
         "store_id=%s "
         "item_code=%s "
+        "name=%s "
         "price=%s"
     )
 
@@ -298,6 +300,7 @@ def test_log_price_changes_logs_added(monkeypatch):
         CHAIN_ID,
         STORE_ID,
         "ITEM-1",
+        "Milk",
         Decimal("10.00"),
     )
 
@@ -327,6 +330,7 @@ def test_log_price_changes_logs_price_change(monkeypatch):
                 Decimal("10.00"),
             )
         },
+        {"ITEM-1": "Milk"},
     )
 
     logger.info.assert_called_once()
@@ -363,6 +367,7 @@ def test_log_price_changes_logs_unit_price_change(
                 Decimal("10.00"),
             )
         },
+        {"ITEM-1": "Milk"},
     )
 
     logger.info.assert_called_once()
@@ -399,10 +404,10 @@ def test_log_price_changes_does_not_log_equal_values(
                 Decimal("10.00"),
             )
         },
+        {"ITEM-1": "Milk"},
     )
 
     logger.info.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # load_one_file - validation
