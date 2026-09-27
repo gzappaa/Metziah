@@ -1,14 +1,43 @@
-# inspection/stores/stores_yellow.py
-#
-# Run from anywhere:
-#
-#     python -m inspection.stores.yellow
-#
-# It reads:
-#     data/reference/yellow_stations.csv
-#
-# and compares the station IDs in the CSV against
-# PriceFull files from Paz's publishedprices account.
+"""
+inspection/stores/stores_yellow.py
+
+Standalone fallback tool for comparing store IDs from an external store
+list with stores published through a chain's PriceFull feed.
+
+This tool was created for Yellow/Paz when a Stores feed was not
+available. It reads store IDs from data/reference/yellow_stations.csv,
+retrieves the published PriceFull file listing from publishedprices.co.il,
+and compares the store IDs found in the two sources.
+
+The comparison reports:
+
+    - stores present in both sources
+    - stores present only in publishedprices
+    - stores present only in the CSV
+
+The PriceFull filenames are used to extract store IDs; feed contents are
+not downloaded or parsed.
+
+The tool is currently not used by the normal Metziah pipeline. It is
+kept as a standalone fallback for investigating similar situations in
+which a chain does not publish a usable Stores feed and an independent
+store list is available.
+
+The current implementation is specific to the Yellow/Paz publishedprices
+source and uses the corresponding chain ID and CSV reference.
+
+Input:
+
+    data/reference/yellow_stations.csv
+
+External source:
+
+    https://url.publishedprices.co.il
+
+Output:
+
+    Printed comparison to stdout.
+"""
 
 import csv
 import re

@@ -1,3 +1,17 @@
+"""
+config.py
+
+Central configuration for Metziah.
+
+Loads environment-specific settings for:
+- PostgreSQL database connection
+- Geocoding API
+- Application environment and debug mode
+- Promotion notification location/distance
+- SMTP email notifications
+"""
+
+
 from pathlib import Path
 import os
 

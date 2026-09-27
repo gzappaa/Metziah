@@ -1,4 +1,6 @@
 """
+utils/stores/seed_stores.py
+
 Seeds the `stores` table from geocoded stores JSON files under data/stores/.
 
 In normal mode, all stores are seeded.

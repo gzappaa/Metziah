@@ -1,4 +1,11 @@
-# clients/laibcatalog.py
+"""
+clients/laibcatalog.py
+
+HTTP client for Laibcatalog.
+
+Handles file discovery, download URL construction, and file downloads,
+including retry and backoff handling for transient HTTP failures.
+"""
 
 import asyncio
 import logging

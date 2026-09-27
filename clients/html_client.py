@@ -1,3 +1,15 @@
+"""
+clients/html_client.py
+
+Generic HTTP client for discovering downloadable files from
+server-rendered HTML listing pages.
+
+Supports anchor- and table-row-based extraction, configurable filename
+sources, optional file-size extraction, and HTTP retry/backoff handling.
+Publisher-specific filtering and filename logic are handled elsewhere.
+"""
+
+
 import asyncio
 import logging
 from dataclasses import dataclass

@@ -1,4 +1,19 @@
-# utils/stores/geocode.py
+"""
+utils/stores/geocode.py
+
+Geocodes store addresses and cities into latitude/longitude coordinates
+using the Google Geocoding API.
+
+As of 2026-09-27, Metziah has at least 2,500 stores in its store data, so
+a full geocoding run can require at least 2,500 API requests.
+
+Stores that have already been geocoded are skipped, as are stores with
+missing or unknown address/city data.
+
+Geocoding runs only in the dev environment because it requires the Google
+API key configured there.
+"""
+
 
 import asyncio
 import json

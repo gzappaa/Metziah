@@ -1,4 +1,16 @@
-# utils/stores/get_stores.py
+"""
+utils/stores/get_stores.py
+
+Builds and maintains the local store registry from Stores XML feeds.
+
+Handles:
+- Finding and reading Stores files, including XML, gzip, and ZIP formats
+- Parsing store and chain metadata across feed schema variants
+- Using the chain reference registry for canonical output filenames
+- Comparing current XML stores with existing JSON records
+- Preserving existing JSON metadata while marking removed stores as [N]
+- Appending genuinely new stores and logging store changes
+"""
 
 import gzip
 import json

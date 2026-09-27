@@ -12,6 +12,7 @@ from utils.resolve_canonical_name import resolve_canonical_name
 
 VALID_BARCODE = "4006381333931"
 DISCOVER_BARCODE = "4006381333948"
+NEW_BARCODE = "4006381333943"
 
 def _fake_product(item_code, name, chain_id, store_id, manufacturer=None,
                    manufacturer_country=None):
@@ -235,25 +236,36 @@ def test_unknown_chain_is_skipped_not_raised(
     successful = load_files(conn, filepaths, tmp_path)
     assert successful == []
 
-
-def test_discover_new_products_inserts_new_item_with_canonical_name(
-    conn, create_store, monkeypatch, tmp_path,
+NEW_BARCODE = "9506000140445"
+def test_discover_new_products_inserts_new_item_with_observed_name(
+    conn,
+    create_store,
+    monkeypatch,
+    tmp_path,
 ):
     create_store("9999999999999", "1")
 
     filepaths = _write_and_patch(
-        monkeypatch, tmp_path,
+        monkeypatch,
+        tmp_path,
         {
-            "9999999999999/1/pricesfull/PriceFull9999999999999-001-001-20260101-000000.xml": [
-                _fake_product(DISCOVER_BARCODE, "שם מלוכלך גולמי", "9999999999999", "001"),
+            "9999999999999/1/pricesfull/"
+            "PriceFull9999999999999-001-001-20260101-000000.xml": [
+                _fake_product(
+                    NEW_BARCODE,
+                    "שם מלוכלך גולמי",
+                    "9999999999999",
+                    "001",
+                ),
             ],
         },
     )
 
     discover_new_products(conn, filepaths, tmp_path)
 
-    name, _, _ = _product_row(conn, DISCOVER_BARCODE)
-    assert name == "שם קנוני שנבחר"
+    name, _, _ = _product_row(conn, NEW_BARCODE)
+
+    assert name == "שם מלוכלך גולמי"
 
 
 def test_discover_new_products_never_touches_existing_item(

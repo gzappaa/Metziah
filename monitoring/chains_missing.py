@@ -1,5 +1,6 @@
-'''monitoring/chains_missing.py'''
 '''
+monitoring/chains_missing.py
+
 WHY THIS SCRIPT EXISTS
 ======================
 

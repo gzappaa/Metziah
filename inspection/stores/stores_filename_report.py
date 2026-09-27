@@ -1,3 +1,44 @@
+"""
+inspection/stores/stores_filename_report.py
+
+Offline inspection report for Stores feed filename structures.
+
+The script scans Stores files under the feed directories and analyzes the
+filename patterns actually present in the collected data.
+
+The report includes:
+
+    - file-extension frequencies
+    - normalized filename structures
+    - occurrence counts for each structure
+    - chains using each structure
+    - real filename examples
+    - duplicate exact filenames
+    - the complete tracked Stores filename list
+
+Filename normalization replaces variable numeric components such as chain
+IDs, dates, timestamps, and other numeric values with structural
+placeholders. This normalization is intentionally independent of the
+production Stores filename parser so that the report can expose
+structures found in the source data without assuming that they are valid
+according to production parsing rules.
+
+The chain ID used in the report is taken from the feed directory rather
+than parsed from the filename.
+
+This is an offline inspection tool. It does not modify Stores files,
+store metadata, or other pipeline data, and does not participate in
+normal feed downloading, loading, scheduling, or store processing.
+
+Input:
+
+    data/feeds/{chain_id}/{store_id}/stores/*
+
+Output:
+
+    inspection/reports/stores_filename_report.txt
+"""
+
 from pathlib import Path
 from collections import Counter, defaultdict
 import re

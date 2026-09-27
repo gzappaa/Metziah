@@ -1,4 +1,21 @@
-# scheduler.py
+"""
+scheduler.py
+
+Main scheduler and pipeline orchestrator for Metziah feed ingestion.
+
+Coordinates:
+- File-tracking updates and HTML cache refreshes
+- PriceFull → Price download and loading dependencies
+- PromoFull → Promo download and loading dependencies
+- Snapshot/delta handling and Price snapshot cleanup
+- Product discovery after successful price loads
+- Test-mode safety checks and CLI stage selection
+- File-size population after download/load stages
+
+Ensures feed types are processed in the required dependency order and
+delegates source-specific downloading and database loading to the
+corresponding modules.
+"""
 
 import asyncio
 import json

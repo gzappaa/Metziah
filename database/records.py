@@ -1,32 +1,12 @@
 """
-DB-shaped records derived from the parser's Product and Promotion models.
+database/records.py
 
-Products are split into separate database records because the database
-stores product identity, store-specific product data, and price state
-separately:
+Defines database-shaped records derived from the parser's Product and
+Promotion models.
 
-    products
-        Valid GTINs. Global product identity.
-
-    store_products
-        Non-GTIN/internal item codes, scoped to chain + store + item_code.
-
-    prices
-        Per-store price state for both GTIN and non-GTIN items.
-
-Promotion objects are also transformed to match the database structure.
-The parser represents a promotion as a nested tree:
-
-    Promotion
-        └── PromotionGroup
-                └── PromotionItem
-
-split_promotion() flattens this into the three database record levels:
-the promotion itself, its groups, and its items.
-
-Store-specific selling details such as unit_qty, weighted, and
-package_quantity belong to prices because they describe how an item is
-sold at a particular store, not what the item is.
+Splits products into global ProductRecord, store-specific
+StoreProductRecord, and PriceRecord according to GTIN validity, and
+flattens nested promotions into promotion, group, and item records.
 """
 
 from dataclasses import dataclass

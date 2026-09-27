@@ -1,5 +1,6 @@
-# analytics/log_parsers/common.py
 """
+analytics/log_parsers/common.py
+
 Shared helpers for the log-parser scripts: log-line parsing, log-entry
 iteration (with traceback/continuation-line folding), datetime helpers,
 chain-name resolution, dual JSON+TXT report writing, and the couple of

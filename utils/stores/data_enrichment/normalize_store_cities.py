@@ -1,4 +1,16 @@
-# utils/stores/normalize_store_cities.py
+"""
+utils/stores/normalize_store_cities.py
+
+Normalizes city values in store JSON files using Israeli Central Bureau
+of Statistics (CBS) locality data.
+
+Replaces CBS locality codes with their corresponding Hebrew locality
+names using the locally stored CBS API reference data. This is required
+before geocoding because the geocoding service needs a city name to
+resolve a store's location accurately and cannot use the CBS locality
+code directly.
+"""
+
 
 import json
 from pathlib import Path

@@ -1,4 +1,11 @@
-# clients/binaprojects.py
+"""
+clients/binaprojects.py
+
+HTTP client for Bina Projects.
+
+Handles file discovery, download URL resolution, and file downloads,
+including retry and fallback handling for the source's download endpoints.
+"""
 
 import logging
 import time

@@ -1,4 +1,12 @@
-# clients/carrefour.py
+"""
+clients/carrefour.py
+
+HTTP client for Carrefour.
+
+Handles file discovery from the Carrefour website and file downloads,
+including parsing the source's HTML-based file metadata and retry
+handling for transient HTTP failures.
+"""
 
 import asyncio
 import logging

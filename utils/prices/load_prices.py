@@ -1,30 +1,36 @@
 """
-Standalone price loader.
+utils/prices/load_prices.py
 
-Walks the selected feeds directory, finds the latest PriceFull file
-for each chain/store, parses it, and upserts into:
+Standalone PriceFull database bootstrap loader.
 
-    prices
+Walks the selected feeds directory, finds the latest PriceFull file for
+each chain/sub-chain/store, and loads those snapshots into the prices
+table.
 
-Product identity, names, and metadata are handled entirely by
-load_products.py / update_products.py -- this loader ignores them.
+This loader is intentionally PriceFull-only. A Price file may be a delta
+containing only changed items, while update_prices.py reconciles items
+missing from snapshot feeds. Loading a delta through this path would
+therefore incorrectly remove prices that were simply absent from the
+delta. Price delta processing belongs to the live scheduler.
 
-Decoupled from the live download step on purpose -- run this manually
-or via its own cron entry, pointed at whatever's already on disk.
+This script is intended for manual backfills or one-time initialization
+of the price database. It is decoupled from the live download step and
+operates only on PriceFull files already present on disk.
 
-This loader is intentionally PriceFull-only, the same convention used
-by load_promos.py for PromoFull: a delta "Price" file only contains
-changed items, not a full store snapshot, and update_prices.py always
-reconciles (deletes) items missing from what it just parsed. Loading a
-delta file through this path would incorrectly delete every item the
-delta didn't happen to mention. Delta Price files are handled later by
-the scheduler/cron, not by this standalone backfill loader.
+The actual loading logic lives in utils.prices.update_prices.load_files()
+and is shared with the live scheduler. This script is only a thin CLI
+wrapper that:
 
-Thin CLI wrapper only -- actual loading logic lives in
-utils/update_prices.py (load_files/load_one_file), shared with cron's
-run_prices_and_load(). Runs with log_changes=False so backfill/manual
-runs never write to price_changes.log -- that log stays exclusively a
-record of live cron activity.
+    1. discovers the latest PriceFull snapshot for each
+       chain/sub-chain/store
+    2. calls load_files() with log_changes=False
+
+Product identity, names, and metadata are handled by
+utils.products.update_products. This loader only loads prices and does
+not create or update products or store_products.
+
+Backfill/manual runs do not write to price_changes.log. That log is
+reserved for live scheduler activity.
 
 File tracking is handled by load_files(). Successfully loaded files are
 marked loaded=true there; failed files remain loaded=false.

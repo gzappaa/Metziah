@@ -1,5 +1,6 @@
-# analytics/log_parsers/scheduler.py
 """
+analytics/log_parsers/scheduler.py
+
 Parses logs/scheduler.log* : phase timings (start->end pairs with elapsed
 time), per-source discovery counts, missing-file warnings, per-chain
 no-items/no-prices/no-valid-promotions warnings, product discovery events,

@@ -1,3 +1,18 @@
+"""
+utils/stores/data_enrichment/citymarket_addresses.py
+
+Updates City Market (7290000000003) store addresses and cities using a manually reviewed
+CSV of candidate addresses.
+
+The CSV contains store IDs and address information reviewed for whether
+the store name includes a usable real-world address. Only rows marked
+"OK" are applied to the existing City Market stores JSON; rows with
+statuses such as "ADDRESS MISSING" or "NOT SURE" are ignored.
+
+Existing store records are updated only for address and city fields.
+"""
+
+
 import csv
 import json
 from pathlib import Path

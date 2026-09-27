@@ -87,18 +87,13 @@ jobs:
             -d metziah_test \
             -f database/migrations/001_schema.sql
 
-      - name: Seed store data
+      - name: Apply chain partitions
         run: |
-          python -m utils.seed_stores \
-            data/stores/machsenei_hashuk.json \
-            --test
-
-      - name: Prepare test packages
-        run: |
-          touch tests/__init__.py
-          touch tests/database/__init__.py
-          touch tests/integration/__init__.py
-          touch tests/utils/__init__.py
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -f database/migrations/002_chain_partitions.sql
 
       - name: Run tests
         run: pytest

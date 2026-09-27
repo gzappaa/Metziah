@@ -1,32 +1,40 @@
 """
-Standalone loader for the initial PromoFull database seed.
+utils/promos/load_promos.py
+
+One-time PromoFull database bootstrap loader.
 
 Walks:
+
     data/feeds/{chain_id}/{store_id}/promosfull/
 
-Finds the latest PromoFull file for each chain/sub-chain/store,
-gzip-decompresses it, parses it, and upserts it into Postgres.
+Finds the latest PromoFull file for each chain/sub-chain/store and loads
+the selected snapshots into Postgres.
 
-Decoupled from the live download step on purpose -- run this manually
-against PromoFull files already present on disk.
+This script exists to establish the initial PromoFull baseline before the
+promotion scheduler takes over. It is intended to be run once when
+initializing or reseeding the promotion database, not as part of normal
+recurring operation.
 
-Thin CLI wrapper only -- actual loading logic lives in
-utils/update_promos.py (load_files/load_one_file), shared with cron's
-run_promos_and_load().
+After the PromoFull baseline has been successfully loaded, the scheduler
+is responsible for all subsequent PromoFull and Promo delta processing,
+including deciding when Promo files are safe to load.
 
-Runs with log_changes=False so the initial seed/manual backfill never
-writes to promo_changes.log. That log stays exclusively a record of
-live cron activity.
+This script is intentionally decoupled from the live download step. It
+operates only on PromoFull files already present on disk and reuses the
+same loading logic as the live scheduler through
+utils.promos.update_promos.load_files().
 
-This loader is intentionally PromoFull-only. Promo delta files are
-handled later by the scheduler after a PromoFull baseline has been
-successfully loaded.
+PromoFull files are loaded with log_changes=False, so this one-time
+bootstrap does not write to promo_changes.log. That log remains
+exclusively for live scheduler activity.
+
+Successfully loaded files are marked as loaded in file_tracking.
 
 Usage:
-    python utils/load_promos.py
-    python utils/load_promos.py --dev
-    python utils/load_promos.py --test
-    python utils/load_promos.py --feeds-dir data/feeds
+    python utils/promos/load_promos.py
+    python utils/promos/load_promos.py --dev
+    python utils/promos/load_promos.py --test
+    python utils/promos/load_promos.py --feeds-dir data/feeds
 """
 
 import argparse

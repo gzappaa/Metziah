@@ -1,3 +1,49 @@
+"""
+inspection/items/inspect_invalid_item_codes.py
+
+Offline inspection tool for investigating invalid GTIN-shaped ItemCodes
+found in PriceFull feeds.
+
+The script:
+
+    1. Finds the latest physical PriceFull file for each chain/store.
+    2. Reads each file once and collects both:
+       - GTIN-shaped ItemCodes with invalid check digits
+       - valid GTINs
+    3. Aggregates occurrences across stores, chains, and files.
+    4. Examines checksum corrections, including whether the corrected
+       candidate exists as a valid GTIN and occurs in the same store.
+    5. Detects repeated, sequential, low-diversity, and other numeric
+       patterns.
+    6. Calculates chain/store coverage and investigation evidence flags.
+    7. Assigns an investigation score and interest level to each invalid
+       code.
+    8. Writes detailed JSON and human-readable TXT reports.
+
+The corrected-GTIN analysis uses the valid GTINs collected during the
+same PriceFull pass, so files are not parsed a second time.
+
+The report is intended to investigate whether invalid GTIN-shaped
+ItemCodes represent data-quality issues, store/chain-specific codes,
+checksum errors, or other recurring patterns in the source feeds.
+
+This is an offline inspection tool. It does not modify PriceFull files,
+products, store_products, prices, or other pipeline data, and does not
+participate in normal feed loading or scheduling.
+
+Input:
+
+    data/feeds/{chain_id}/{store_id}/pricesfull/
+    data/reference/chains.json
+    data/reference/extra_chains.json
+
+Outputs:
+
+    inspection/reports/invalid_itemcodes_report.txt
+    inspection/reports/invalid_itemcodes.json
+"""
+
+
 import gzip
 import json
 import zipfile

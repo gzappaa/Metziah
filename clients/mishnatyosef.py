@@ -1,4 +1,13 @@
-# clients/mishnatyosef.py
+"""
+clients/mishnatyosef.py
+
+HTTP client for Mishnat Yosef.
+
+Handles file discovery from the source's listing endpoint and direct file
+downloads, including validation of the file listing response and retry
+handling for transient HTTP failures.
+"""
+
 
 import asyncio
 import logging

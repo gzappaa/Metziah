@@ -1,3 +1,32 @@
+"""
+utils/xml_source.py
+
+XML container reader for feed files.
+
+Provides iter_xml_from_path(), which yields complete XML documents as
+bytes from feed files that may be:
+
+    - plain XML
+    - GZIP-compressed
+    - XML.GZ
+    - ZIP archives
+    - extensionless or incorrectly named files
+
+Filename extensions are treated as hints rather than authoritative file
+types. When the extension is missing or misleading, the reader falls
+back through:
+
+    GZIP -> ZIP -> plain XML
+
+ZIP archives may contain multiple XML documents. Each XML-like member is
+decompressed when necessary and yielded separately.
+
+This utility centralizes feed-container handling so loaders do not need
+to assume that one file contains exactly one XML document or that its
+filename extension accurately describes the underlying format.
+"""
+
+
 import gzip
 import zipfile
 from pathlib import Path

@@ -1,4 +1,6 @@
 '''
+monitoring/stores_missing.py
+
 Some stores tracked in the feeds are not present in the Stores registry.
 Before adding those stores to the database, we first need to discover all
 filenames from all stores and generate file_tracking.csv:

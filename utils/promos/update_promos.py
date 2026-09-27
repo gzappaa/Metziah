@@ -1,24 +1,31 @@
 """
-Core promo-loading logic.
+utils/promos/update_promos.py
+
+Core promotion-loading logic.
 
 PromoFull:
-    - complete current-state snapshot
-    - upsert promotions/groups/items
-    - reconcile removals
+    - represents the complete current promotion state for a chain/store
+    - upserts promotions, groups, and items
+    - reconciles promotions, groups, and items no longer present
 
 Promo:
-    - incremental/delta feed
-    - upsert promotions/groups/items
-    - NEVER reconcile removals
+    - represents an incremental/delta update
+    - upserts promotions, groups, and items
+    - never reconciles removals
+
+Each PromoFull is an independent authoritative snapshot for its
+chain/store. Promo files modify the current state but cannot determine
+that a promotion, group, or item was removed.
 
 The scheduler is responsible for deciding which files are safe to load.
-In particular, Promo files should only be loaded after a PromoFull for the
-same store has successfully been loaded.
+In particular, a Promo file should only be loaded after a successful
+PromoFull for the same store.
 
-Diff logging:
-    log_changes=False skips the pre-write SELECTs entirely.
+Optional diff logging compares the incoming data with the existing
+database state before writes. When log_changes=False, the pre-write
+SELECTs used for diff logging are skipped entirely.
 
-Each store's PromoFull is an independent authoritative snapshot.
+Successful files are marked as loaded in file_tracking by load_files().
 """
 
 import gzip

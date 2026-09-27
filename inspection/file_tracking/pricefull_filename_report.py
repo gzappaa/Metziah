@@ -1,3 +1,39 @@
+"""
+inspection/file_tracking/pricefull_filename_report.py
+
+Offline inspection report for PriceFull filename structures.
+
+Reads PriceFull records from data/reference/file_tracking.csv and analyzes
+the filename patterns actually present in the tracked data.
+
+The report includes:
+
+    - file-extension frequencies
+    - normalized filename structures
+    - occurrence counts for each structure
+    - sources and chain IDs using each structure
+    - real filename examples
+    - duplicate filenames
+    - PriceFull file-date coverage
+    - the complete tracked PriceFull filename list
+
+Filename normalization is intentionally independent of the production
+filename parser. This allows the report to expose filename structures
+found in the tracked data without assuming that they are valid according
+to production parsing rules.
+
+The report is intended for inspecting historical PriceFull filename
+patterns and supporting parser/test maintenance. It does not participate
+in feed downloading, loading, scheduling, or other normal data-pipeline
+processing.
+
+Input:
+    data/reference/file_tracking.csv
+
+Output:
+    inspection/reports/pricefull_filename_report.txt
+"""
+
 from collections import Counter, defaultdict
 from pathlib import Path
 import csv

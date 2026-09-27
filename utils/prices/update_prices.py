@@ -1,44 +1,51 @@
-# utils/update_prices.py
 """
-Core price-loading logic, shared by both entry points:
-  - utils/load_prices.py  (manual/backfill CLI, log_changes=False)
-  - cron's run_prices_and_load()  (live runs, log_changes=True by default)
+utils/prices/update_prices.py
+
+Core price-loading logic shared by manual/backfill loading and the live
+scheduler.
 
 This module is intentionally PRICE-ONLY.
 
-Product identity and product metadata are handled entirely by
-update_products.py. This module never creates products or store_products;
-it only reads product names when enriching price-change logs.
+Product identity and product metadata are handled by update_products.py.
+This module never creates products or store_products. It only reads
+product names from store_products/products when enriching price-change
+logs.
 
-This mirrors the file-discovery/parsing conventions used by
-update_products.py so both modules agree on what a feed file's
-chain_id/store_id/sub_chain_id actually are:
-
-    - chain metadata comes from chains.json / chains_extra.json, the
-      same as update_products.py, since ensure_chain() now requires
-      the chain's normalized names rather than just its id
-    - filenames are parsed via utils.file_tracking.parser_file_tracking
-      instead of an ad-hoc regex
-    - iter_xml_from_path() is used instead of a bare gzip.open(), so
-      container files that hold more than one store's XML document are
-      handled the same way product loading handles them
-
-This module:
-  - parses Price and PriceFull feeds
-  - deduplicates repeated item codes within a document
-  - optionally logs price changes, including product names
-  - reads product names from store_products/products only for log enrichment
-  - upserts prices
-  - reconciles items removed from snapshot feeds
-  - marks successfully loaded files
+Responsibilities:
+    - parse Price and PriceFull feeds
+    - resolve chain/store/sub-chain identity from the feed path and
+      filename using the same conventions as update_products.py
+    - deduplicate repeated item_codes within each XML document, keeping
+      the record with the latest price_update_time
+    - optionally log price additions, changes, and snapshot removals
+    - upsert prices
+    - reconcile items missing from snapshot feeds
+    - mark successfully loaded files in file_tracking
 
 Feed semantics:
-  - PriceFull is always a complete snapshot.
-  - Price can be either a snapshot or a delta.
-  - The caller specifies whether a Price file is a snapshot.
-  - Delta feeds never reconcile missing items.
-"""
 
+    PriceFull
+        always represents a complete snapshot
+        -> upsert prices
+        -> reconcile items missing from the snapshot
+
+    Price
+        may represent either a snapshot or a delta
+        -> caller specifies whether it is a snapshot
+        -> snapshot=True  -> reconcile missing items
+        -> snapshot=False -> upsert only; never reconcile removals
+
+Price-change logging is optional. When log_changes=False, the database
+queries required only for diff logging are skipped.
+
+iter_xml_from_path() is used instead of assuming one XML document per
+file, allowing container files containing multiple XML documents to be
+processed consistently with product loading.
+
+Chain metadata is loaded from chains.json with chains_extra.json
+overriding matching entries, using the same registry convention as
+update_products.py.
+"""
 
 
 import json

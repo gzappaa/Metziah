@@ -1,4 +1,14 @@
-# downloaders/promosfull.py
+"""
+downloaders/promosfull.py
+
+Downloader for PromoFull snapshot feeds from all supported Metziah source
+protocols.
+
+Discovers the latest PromoFull file per chain, store, and day, applies
+test-mode and source-specific filtering, and saves the selected files
+using the shared full-file logic.
+"""
+
 
 import logging
 from urllib.parse import urljoin

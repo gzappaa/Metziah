@@ -1,4 +1,6 @@
 '''
+utils/stores/chains_id_normalizer.py
+
 The stores file for each source is currently the source of truth for
 the stores published by that source.
 

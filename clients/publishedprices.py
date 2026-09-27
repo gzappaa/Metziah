@@ -1,4 +1,11 @@
-# clients/publishedprices.py
+"""
+clients/publishedprices.py
+
+HTTP client for PublishedPrices.
+
+Handles authentication, CSRF token management, file discovery, download
+URL construction, and file downloads with retry handling.
+"""
 
 import logging
 import time

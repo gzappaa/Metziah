@@ -1,5 +1,7 @@
-# analytics/log_parsers/promo_changes.py
 """
+analytics/log_parsers/promo_changes.py
+
+
 Parses logs/promo_changes.log : promotion coverage (%-of-chain-stores via
 `promotions` table), promo-item add/change/remove per-chain summaries,
 discount-vs-normal-price lookup (via `prices`, batched with unnest()),

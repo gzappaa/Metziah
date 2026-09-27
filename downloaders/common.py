@@ -1,12 +1,15 @@
-# downloaders/common.py
 """
-Generic, protocol-agnostic helpers shared by every downloader module
-(pricesfull.py, promosfull.py, prices.py, promos.py, stores.py).
+downloaders/common.py
 
-Nothing in here knows about "PriceFull" vs "Stores" vs any other file
-type — that logic lives in full_family.py / delta_family.py / stores.py.
-This module only knows about: where things get saved on disk, and how
-to talk to each of the seven source protocols to get a raw file listing.
+Shared helpers used by the Metziah downloader modules.
+
+Provides environment-aware feed paths, test-mode filtering and trimming,
+file saving, HTML cache loading, and normalization of file listings from
+different source protocols.
+
+Also provides generic HTML pagination and source-specific listing
+normalization helpers. File-type-specific download logic belongs in the
+individual downloader modules.
 """
 
 import asyncio

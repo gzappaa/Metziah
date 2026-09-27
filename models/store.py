@@ -1,3 +1,14 @@
+"""
+models/store.py
+
+Defines the Store data model for supermarket store information.
+
+Stores chain and store identity, name, address, city, postal code, and
+geographic coordinates.
+"""
+
+
+
 from dataclasses import dataclass
 
 

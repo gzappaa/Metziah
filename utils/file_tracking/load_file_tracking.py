@@ -1,3 +1,19 @@
+"""
+utils/file_tracking/load_file_tracking.py
+
+Discovers today's published feed files across all Metziah source protocols
+and updates the file_tracking database table.
+
+Handles:
+- Source-specific file discovery and normalization
+- Optional remote file-size retrieval
+- Local downloaded-state detection
+- CSV report generation
+- Deduplication and database insertion
+- Advisory locking to prevent concurrent file-tracking runs
+- CLI options for report generation and quick/slow size collection
+"""
+
 import argparse
 import asyncio
 import csv

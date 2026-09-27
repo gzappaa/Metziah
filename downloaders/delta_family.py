@@ -1,9 +1,11 @@
-# downloaders/delta_family.py
 """
-Shared logic for "delta" feed types (Price, Promo): every matching file
-published today is downloaded, with no per-store dedup and no cleanup
-of older files — each delta file is its own distinct, timestamped
-snapshot rather than a "latest wins" full replacement.
+downloaders/delta_family.py
+
+Shared logic for delta feed types such as Price and Promo.
+
+Identifies files published today, optionally selects the latest file per
+store for snapshot-style processing, builds store-specific feed paths,
+and saves delta files synchronously or asynchronously.
 """
 
 import logging

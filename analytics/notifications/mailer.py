@@ -1,4 +1,6 @@
 """
+analytics/notifications/mailer.py
+
 Simple SMTP email sending, used by utils/promo_notifications.py.
 
 Credentials come from config.py / .env -- never hardcoded.

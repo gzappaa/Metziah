@@ -1,4 +1,48 @@
-# inspection/files/all_files_report.py
+"""
+inspection/files/all_files_report.py
+
+Offline inspection tool for examining the files and packaging formats
+present in the Metziah feed directories.
+
+The script scans files under:
+
+    data/feeds/{chain}/{store}/{prices,pricesfull,promos,promosfull}/
+
+and inspects their actual contents rather than relying on filename
+extensions. It recursively detects and opens supported container formats,
+including:
+
+    - XML
+    - GZIP
+    - ZIP
+    - nested GZIP/ZIP combinations
+    - plain text
+    - unknown binary content
+
+The generated report includes:
+
+    - discovered chains, stores, and feed types
+    - filename structures and examples
+    - detected content/container formats
+    - files that cannot be opened or inspected successfully
+    - nested archive examples
+    - today's Price vs PriceFull and Promo vs PromoFull size comparisons
+    - normal files whose size is at least 80% of the corresponding Full
+      file and therefore warrant inspection as possible snapshots
+
+Nested archives are inspected in memory and are never extracted into the
+feed directories.
+
+The tool is intended for offline inspection of feed files, including
+investigation of real-world filename, packaging, and content patterns.
+It does not participate in feed downloading, loading, scheduling, or
+other normal data-pipeline processing.
+
+Outputs:
+
+    inspection/reports/files_report.txt
+    inspection/reports/files_failures.csv
+"""
 
 import csv
 import gzip
@@ -11,27 +55,6 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 
-"""
-RUN IT AFTER DOWNLOADING EVERYFILE AVAILABLE in downloaders/
-
-What this script does:
-
-- Scans every file under data/feeds/{chain}/{store}/{prices,pricesfull,promos,promosfull}.
-- Does not assume the extension tells us the real format.
-- Actually tries to read every file.
-- Detects and recursively opens gzip, zip, nested zip, XML, text, and unknown binary content.
-- Reports exactly which files fail and why.
-- Keeps nested archives in memory; it does not extract anything into the feed directories.
-- Groups filenames into their structural patterns and shows examples.
-- Checks today's prices vs pricesfull and promos vs promofull.
-- Flags pairs where the normal file is at least 80% of the Full file size, since those are worth investigating as possible snapshots rather than deltas.
-- Writes the detailed report to placeholder_inspection.txt.
-- Writes individual failures to placeholder_failures.csv.
-
-The main goal is to establish what formats and packaging patterns actually exist
-in the feeds, and whether there are any files that we won't be able to reliably
-open later during ingestion.
-"""
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 

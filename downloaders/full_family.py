@@ -1,8 +1,11 @@
-# downloaders/full_family.py
 """
-Shared logic for "full" feed types (PriceFull, PromoFull): the latest
-file per chain+store+day wins, and older same-day files for that store
-are cleaned up after a successful new download.
+downloaders/full_family.py
+
+Shared logic for full feed types such as PriceFull and PromoFull.
+
+Identifies the latest file per chain, store, and day, builds store-specific
+feed paths, and removes older same-day full files after a successful
+download.
 """
 
 import logging

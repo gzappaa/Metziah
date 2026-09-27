@@ -1,4 +1,6 @@
 """
+utils/file_tracking/data_enrichment/populate_file_sizes.py
+
 Populates missing file sizes in `file_tracking` from files already
 downloaded under data/feeds/.
 

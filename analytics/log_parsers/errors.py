@@ -1,5 +1,6 @@
-# analytics/log_parsers/errors.py
 """
+analytics/log_parsers/errors.py
+
 Scans scheduler.log*, price_changes.log and promo_changes.log for
 ERROR-level entries, keeping the full message + traceback verbatim, and
 additionally groups the very common "downloaders.common: FAILED

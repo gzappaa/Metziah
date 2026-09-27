@@ -1,27 +1,36 @@
 """
-Daily cron entry point: email a COUNT of new promotion items (PROMO ITEM
-ADDED) that appeared today at stores near you, across all chains, and
-write the full per-item detail to reports/{date}/report_promos_details.json/.txt.
+analytics/notifications/promo_notifications.py
 
-Design notes:
-- No chain filter: analytics/log_parsers/promo_changes.py is the single
-  source of truth for parsing, name lookup, and normal-price lookup (via
-  the `prices` table) -- this script does not re-parse the log itself and
-  does not hit the DB a second time for promotion details. What
-  promo_changes.parse() already resolved is what gets reported and emailed.
-- "Nearby" is chain-agnostic: get_nearby_store_ids(chain_id=None) returns
-  (chain_id, store_id) pairs for ANY chain within MAX_STORE_DISTANCE_KM of
-  the fixed USER_LAT/USER_LON.
-- The email body is counts only (per nearby store) -- item-level detail
-  goes to the promos_details report, not the email.
-- notified_promotions.log dedups by identity (chain_id, store_id,
-  promotion_id, group_id, item_code) so re-running the same day's log
-  doesn't re-email the same promotion.
+Daily notification job for new promotion items at nearby stores.
 
-Run manually:
-    python -m utils.promo_notifications
+The job:
 
-Cron (once per day):
+    1. Parses promo_changes.log through analytics/log_parsers/promo_changes.py.
+    2. Finds stores within MAX_STORE_DISTANCE_KM of the configured
+       USER_LAT/USER_LON across all chains.
+    3. Filters the parser's PROMO ITEM ADDED events to those nearby stores.
+    4. Writes a full item-level report to the daily reports directory.
+    5. Sends a count-only email summarizing newly notified promotions per
+       nearby store.
+    6. Records notified promotion identities in
+       data/notified_promotions.log to prevent duplicate emails.
+
+analytics/log_parsers/promo_changes.py is the single source of truth for
+promotion parsing, product names, and normal-price information. This
+module does not re-parse the logs or query the database for promotion
+details; the database is used only to determine which stores are nearby.
+
+The detailed report is written regardless of whether individual
+promotions have already been emailed. Notification deduplication applies
+only to email delivery.
+
+This module is intended to run once daily via cron, but can also be run
+manually.
+
+Manual:
+    python -m analytics.notifications.promo_notifications
+
+Cron:
     0 8 * * * cd /path/to/metziah && /path/to/venv/bin/python -m utils.promo_notifications
 """
 

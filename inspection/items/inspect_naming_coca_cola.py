@@ -1,3 +1,50 @@
+"""
+inspection/items/inspect_naming_coca_cola.py
+
+Offline inspection report for a specific ItemCode across PriceFull feeds.
+
+The script searches the latest PriceFull file for every chain/store for
+the target ItemCode and reports the product name associated with that
+ItemCode.
+
+It:
+
+    1. Finds the latest physical PriceFull file for each chain/store.
+    2. Searches each file for TARGET_ITEM_CODE.
+    3. Extracts the item name from the surrounding product/item XML
+       structure.
+    4. Groups observed names globally and by chain.
+    5. Reports the stores where the target ItemCode was not found.
+    6. Records files that could not be opened or parsed.
+
+The report is intended for investigating how a specific product is
+represented across different chains and stores, including differences
+in the source-provided product name.
+
+Filename extensions are treated as hints when reading feed files.
+ZIP, GZIP, XML, and extensionless/unknown files are supported through
+fallback format detection.
+
+This is an offline inspection tool. It does not modify feed files,
+products, store_products, prices, or other pipeline data, and does not
+participate in normal feed loading or scheduling.
+
+Target ItemCode:
+
+    7290110115227
+
+Input:
+
+    data/feeds/{chain_id}/{store_id}/pricesfull/
+    data/reference/chains.json
+    data/reference/extra_chains.json
+
+Output:
+
+    inspection/reports/coca_cola_report.txt
+"""
+
+
 import gzip
 import json
 import zipfile

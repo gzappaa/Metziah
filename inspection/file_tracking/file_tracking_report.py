@@ -1,3 +1,35 @@
+"""
+inspection/file_tracking/file_tracking_report.py
+
+Offline inspection report for the file-tracking history.
+
+Reads data/reference/file_tracking.csv and generates a human-readable
+report covering:
+
+    - overall file-type counts
+    - files per source
+    - file types per source
+    - sources missing expected Price or Promo file types
+    - zero-byte and tiny files
+    - largest tracked files
+    - Price files that appear to be snapshots based on their size relative
+      to the matching PriceFull file
+    - files not marked as downloaded
+    - chain IDs associated with each source
+
+The report is intended for inspecting the collected file-tracking data
+and investigating feed-source and file-history patterns. It does not
+participate in feed downloading, loading, scheduling, or other normal
+data-pipeline processing.
+
+Input:
+    data/reference/file_tracking.csv
+
+Output:
+    inspection/reports/file_tracking_report.txt
+"""
+
+
 import csv
 from collections import defaultdict
 from pathlib import Path

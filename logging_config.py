@@ -1,5 +1,6 @@
-# logging_config.py
 """
+logging_config.py
+
 Central logging setup for Metziah.
 
 Three ways to get a logger here:

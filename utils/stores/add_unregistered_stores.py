@@ -1,4 +1,6 @@
 """
+utils/stores/add_unregistered_stores.py
+
 Adds stores observed in feeds but missing from the publisher Stores JSON.
 
 Reads:

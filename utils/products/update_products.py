@@ -1,9 +1,11 @@
 """
-Core product-loading logic.
+utils/products/update_products.py
+
+Product-loading and new-product discovery logic.
 
 Responsibilities:
 
-    PriceFull feeds
+    Full product loading (PriceFull)
         ↓
     parse product observations
         ↓
@@ -18,11 +20,23 @@ Responsibilities:
     upsert products
     upsert store_products
 
-This module does NOT load prices.
+    Real-time product discovery (Price / PriceFull)
+        ↓
+    detect previously unseen item_codes
+        ↓
+    insert new global products immediately
+    upsert store_products normally
 
-Product identity is decided here so that the canonical name can be based
-on evidence from the entire set of available feeds rather than whichever
-file happened to be processed first.
+Product identity is decided here. Full product loading resolves canonical
+names using evidence from the entire set of available feeds, while
+real-time discovery intentionally inserts newly observed products without
+canonical-name resolution so they are available immediately.
+
+Product metadata is normalized before loading. Empty or known-unknown
+metadata values are treated as missing so they do not overwrite useful
+existing metadata.
+
+This module does NOT load prices.
 """
 
 import json

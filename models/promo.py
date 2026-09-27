@@ -1,4 +1,14 @@
-# models.promo.py
+"""
+models/promo.py
+
+Defines the data models used to represent supermarket promotions.
+
+Includes promotions, their groups, and the individual items affected by
+each promotion.
+"""
+
+
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal

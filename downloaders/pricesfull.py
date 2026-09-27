@@ -1,4 +1,13 @@
-# downloaders/pricesfull.py
+"""
+downloaders/pricesfull.py
+
+Downloader for PriceFull snapshot feeds from all supported Metziah
+source protocols.
+
+Discovers the latest PriceFull file per chain, store, and day, applies
+test-mode handling, and saves the selected files using the shared
+full-file logic.
+"""
 
 import logging
 from urllib.parse import urljoin

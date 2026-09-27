@@ -1,4 +1,18 @@
-# utils/file_tracking/filename_parser.py
+"""
+utils/file_tracking/parser_file_tracking.py
+
+Parses and normalizes Metziah feed filenames into structured file-tracking
+records.
+
+Handles:
+- Feed type, chain, sub-chain, store, and date extraction
+- Mapping StoresFull to the canonical Stores feed type
+- Local feed path construction
+- Filtering to files published today
+- Downloaded-state detection
+- Time-suffix extraction for chronological file comparison
+"""
+
 
 import logging
 import re

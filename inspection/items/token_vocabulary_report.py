@@ -1,4 +1,48 @@
-# inspection/token_vocabulary_report.py
+"""
+inspection/token_vocabulary_report.py
+
+Offline inspection and vocabulary-analysis tool for product names found
+in PriceFull feeds.
+
+The script:
+
+    1. Finds the latest physical PriceFull file for each chain/store.
+    2. Extracts ItemCode/ItemName pairs from those files.
+    3. Tokenizes and normalizes product names.
+    4. Aggregates token usage across ItemCodes, chains, and occurrences.
+    5. Keeps tokens associated with at least MIN_ITEM_CODES distinct
+       ItemCodes.
+    6. Writes the most common qualifying tokens to a human-readable
+       investigation report.
+    7. Writes the resulting token vocabulary to
+       data/reference/product_name_vocabulary.json.
+
+The generated vocabulary was used as an exploratory reference when
+developing the canonical-name vocabulary and resolution logic. It is not
+the vocabulary directly consumed by resolve_canonical_name.py.
+
+This tool is intentionally based on the latest physical PriceFull file
+for each chain/store and does not use file_tracking.csv.
+
+Filename extensions are treated as hints when reading feed files.
+ZIP, GZIP, XML, and extensionless/unknown files are supported through
+fallback format detection.
+
+This is an offline inspection/vocabulary-analysis tool. It does not
+modify feed files, products, store_products, prices, or other pipeline
+data, and does not participate in normal feed loading or scheduling.
+
+Input:
+
+    data/feeds/{chain_id}/{store_id}/pricesfull/
+    data/reference/chains.json
+    data/reference/extra_chains.json
+
+Outputs:
+
+    inspection/reports/token_vocabulary_report.txt
+    data/reference/product_name_vocabulary.json
+"""
 
 import gzip
 import json

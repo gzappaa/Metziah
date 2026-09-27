@@ -1,11 +1,37 @@
-# monitoring/sources.py
 """
-Monitor the Israeli government supermarket registry and detect changes
-that could affect Metziah's data sources.
+monitoring/sources.py
 
-The module compares the current government data with the previous scrape,
-checks government chain names and credentials against the manually
-maintained chains.json registry, and logs detected changes for review.
+Monitor the Israeli government supermarket registry for changes that may
+affect Metziah's configured data sources.
+
+The module:
+
+    1. Scrapes the government's supermarket source registry.
+    2. Classifies and deduplicates published source URLs.
+    3. Extracts source credentials and Laibcatalog chain IDs when needed.
+    4. Compares the current scrape with the previous saved snapshot.
+    5. Logs added, removed, and changed supermarkets, sources, and
+       credentials.
+    6. Compares government supermarket names with the manually maintained
+       chains.json registry.
+    7. Validates government credentials against credentials stored in
+       chains.json.
+    8. Saves the latest government source snapshot to
+       monitoring/data/supermarket_sources.json.
+
+Source changes and chains.json discrepancies are logged separately through
+dedicated monitoring loggers.
+
+The module does not modify chains.json. Government changes that require
+changes to the manually maintained chain registry are reported for
+manual review.
+
+Passwords are used internally for credential comparison but are never
+written to the logs.
+
+The government registry is treated as the external source of truth for
+currently published supermarket names and data-source information, while
+chains.json remains the manually curated Metziah registry.
 """
 
 

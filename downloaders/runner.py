@@ -1,5 +1,6 @@
-# downloaders/runner.py
 """
+downloaders/runner.py
+
 Generic download orchestration for downloader entry points. Each per-file-type
 module (pricesfull.py, promosfull.py, prices.py, promos.py, stores.py)
 builds its own set of per-source-type download callables.

@@ -1,5 +1,7 @@
-# analytics/log_parsers/price_changes.py
 """
+analytics/log_parsers/price_changes.py
+
+
 Parses logs/price_changes.log : per-chain add/change/remove counts, same-run
 reintroduction detection, majority-of-chain removals, substantial price
 changes, and inter-store / inter-chain correlation (the latter gated on the

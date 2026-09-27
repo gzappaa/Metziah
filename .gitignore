@@ -3,8 +3,6 @@ venv
 *.env
 **/__pycache__/
 *.pyc
-machsenei_hashuk_prices.csv
-machsenei_hashuk_stores.json
 __init__.py
 notes.md
 data/reports/
@@ -31,6 +29,6 @@ data/cache
 data/feedsOLD
 analytics/reports
 monitoring/data/filename_chains.json
-monitoring/data/filename_patterns.json
 monitoring/data/store_duplicates.json
 monitoring/data/stores_missing_from_registry.json
+python_tree.py

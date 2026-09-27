@@ -1,5 +1,6 @@
-# analytics/runner.py
 """
+analytics/runner.py
+
 Runs the log parsers, writes their JSON+TXT reports under reports/{date}/,
 then archives the source log files to logs/archives/{date}/.
 

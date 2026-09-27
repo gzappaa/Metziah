@@ -1,12 +1,24 @@
 """
-Standalone product loader.
+utils/products/load_products.py
+
+Standalone canonical product-name updater.
 
 Walks the selected feeds directory, finds the latest PriceFull file for
-each chain/sub-chain/store, parses product information, resolves canonical
-product names, and upserts:
+each chain/sub-chain/store, parses product information, aggregates product
+observations across the available feeds, resolves canonical product names,
+and upserts:
 
     products
     store_products
+
+This script is intended to run periodically, including as a cron job
+between scheduler runs, to refresh canonical product names.
+
+Real-time Price and PriceFull processing uses
+discover_new_products(), which inserts previously unseen products
+immediately but intentionally does not resolve canonical names. Running
+this loader periodically provides the full cross-chain/store evidence
+needed to update those temporary names to their canonical names.
 
 Price data is intentionally ignored here.
 

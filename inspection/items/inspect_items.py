@@ -1,3 +1,49 @@
+"""
+inspection/items/inspect_items.py
+
+Offline inspection report for ItemCode structures found in PriceFull
+feeds.
+
+The script:
+
+    1. Finds the latest physical PriceFull file for each chain/store.
+    2. Extracts the unique ItemCodes from each file.
+    3. Aggregates ItemCodes globally and separately per chain.
+    4. Classifies codes as:
+       - valid GTIN/EAN/UPC
+       - invalid GTIN checksum
+       - other numeric lengths
+       - non-numeric
+    5. Reports ItemCode length distributions and checksum validity ratios.
+    6. Reports the same statistics separately for each chain.
+    7. Records PriceFull files that cannot be opened or parsed.
+
+Global statistics are based on globally unique ItemCode strings, while
+chain summaries are based on unique ItemCodes within each chain.
+
+Filename extensions are treated as hints when reading feed files.
+XML, GZIP, ZIP, and extensionless/unknown files are supported through
+the same fallback detection logic used by this inspection workflow.
+
+The report is intended to inspect the structure and validity of ItemCodes
+present in the collected PriceFull data and to support investigation of
+barcode and store-specific item-code patterns.
+
+This is an offline inspection tool. It does not modify feed files,
+products, store_products, prices, or other pipeline data, and does not
+participate in normal feed loading or scheduling.
+
+Input:
+
+    data/feeds/{chain_id}/{store_id}/pricesfull/
+    data/reference/chains.json
+    data/reference/extra_chains.json
+
+Output:
+
+    inspection/reports/items_report.txt
+"""
+
 import csv
 import gzip
 import json

@@ -1,4 +1,13 @@
-# utils/file_tracking/file_size.py
+"""
+utils/file_tracking/add_sizes_file_tracking.py
+
+Utilities for retrieving and normalizing remote file sizes.
+
+Supports:
+- HTTP HEAD and streaming GET requests for Content-Length
+- Optional slow size retrieval
+- Parsing human-readable file sizes such as KB, MB, and GB into bytes
+"""
 
 import logging
 import re

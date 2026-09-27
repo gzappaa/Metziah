@@ -1,3 +1,15 @@
+"""
+parsers/xml.py
+
+Parses supermarket XML feed files into Metziah domain models.
+
+Handles:
+- Price files into Product objects
+- Promotion files into nested Promotion, PromotionGroup, and PromotionItem objects
+- Feed-specific decimal, integer, and datetime normalization
+- Malformed item/promotion handling without discarding the entire file
+"""
+
 import logging
 from datetime import datetime
 from decimal import Decimal, InvalidOperation

@@ -1,3 +1,16 @@
+"""
+clients/html_config.py
+
+Configuration for supermarket publishers that use the generic HTML
+file-discovery client.
+
+Defines each source's listing URL, pagination and filtering parameters,
+file-type categories, date/store parameters, extraction mode, and
+filename source.
+"""
+
+
+
 SOURCES = [
     {
         "name": "hazi hinam",

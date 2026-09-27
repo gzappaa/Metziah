@@ -1,4 +1,13 @@
-# downloaders/promos.py
+"""
+downloaders/promos.py
+
+Downloader for Promo delta feeds from all supported Metziah source
+protocols.
+
+Discovers today's Promo files, applies test-mode and source-specific
+filtering, and saves the files into the promos feed directory using the
+shared delta-file handling.
+"""
 
 import logging
 from urllib.parse import urljoin

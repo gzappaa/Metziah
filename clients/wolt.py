@@ -1,4 +1,12 @@
-# clients/wolt.py
+"""
+clients/wolt.py
+
+HTTP client for Wolt.
+
+Handles discovery of available date pages and downloadable files from
+Wolt's public price data endpoint, including HTTP retry and backoff
+handling for transient connection and timeout failures.
+"""
 
 import asyncio
 import logging

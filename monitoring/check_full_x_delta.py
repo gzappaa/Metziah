@@ -1,3 +1,29 @@
+"""
+monitoring/check_full_x_delta.py
+
+Diagnostic inspection of Full vs normal feed sizes.
+
+Compares today's PriceFull/Price and PromoFull/Promo files for the same
+chain/store and flags normal feeds whose file size is unusually close to
+the corresponding Full snapshot.
+
+A normal feed is considered suspicious when its size is at least 80% of
+the Full feed. This can help identify cases where a supposedly
+incremental feed may contain unexpectedly large amounts of data.
+
+The inspection is intentionally lightweight: it uses only filenames,
+feed paths, dates, and file sizes. Feed contents are never opened or
+parsed.
+
+The script is a monitoring/diagnostic tool only and is not part of the
+normal feed-loading pipeline.
+
+Reports:
+
+    monitoring/data/prices_vs_pricesfull_report.json
+    monitoring/data/promos_vs_promofull_report.json
+"""
+
 import json
 import re
 from collections import defaultdict
@@ -5,25 +31,7 @@ from datetime import date
 from pathlib import Path
 
 
-"""
-Dedicated inspection for Full vs normal feed sizes.
 
-Checks today's:
-
-    pricesfull vs prices
-    promosfull vs promos
-
-A normal file whose size is >= 80% of the corresponding Full file
-is considered suspicious.
-
-This script does NOT open or parse the feed contents.
-It only checks today's filenames, paths, and file sizes.
-
-Reports:
-
-    monitoring/data/prices_vs_pricesfull_report.json
-    monitoring/data/promos_vs_promofull_report.json
-"""
 
 
 # ============================================================

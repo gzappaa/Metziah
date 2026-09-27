@@ -1,3 +1,40 @@
+"""
+monitoring/check_store_duplicates.py
+
+Diagnostic inspection tool for detecting duplicate store and sub-chain
+records across Metziah's tracked data.
+
+The module checks three related cases:
+
+    1. File tracking:
+       identifies chain/store pairs associated with multiple sub-chain IDs.
+
+    2. Sub-chain files:
+       compares files belonging to those duplicate sub-chains, reporting
+       which filenames are present under each sub-chain and whether their
+       file sizes match.
+
+    3. Store metadata:
+       scans the store JSON files and identifies chain/store pairs that
+       occur more than once with different store metadata.
+
+The inspection is intentionally read-only. It does not modify store
+metadata, file tracking, or feed files.
+
+Input:
+
+    data/reference/file_tracking.csv
+    data/stores/*.json
+
+Output:
+
+    monitoring/data/store_duplicates.json
+
+The report is intended for diagnosing duplicate or inconsistent store
+and sub-chain records during data maintenance.
+"""
+
+
 import csv
 import json
 from collections import defaultdict

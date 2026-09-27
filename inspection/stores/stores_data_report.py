@@ -1,4 +1,39 @@
-# inspection/stores/store_data_report.py
+"""
+inspection/stores/store_data_report.py
+
+Offline inspection report for the completeness and consistency of store
+metadata.
+
+The script reads the store JSON files under data/stores/ and reports:
+
+    - store counts per chain
+    - required-field completeness for name, address, and city
+    - optional zip_code completeness
+    - field completeness per chain
+    - complete vs incomplete stores
+    - duplicate store IDs within a chain
+    - malformed records missing chain_id or store_id
+    - examples of records with missing fields
+
+Required fields are limited to metadata expected from the Stores
+XML/source data. The optional zip_code field is reported separately and
+does not affect the required-field completeness score.
+
+Duplicate detection is based on (chain_id, store_id) and also reports
+whether duplicate records are identical or contain different metadata.
+
+This is an offline inspection tool. It does not modify store JSON files,
+store metadata, or other pipeline data, and does not participate in
+normal store loading, downloading, or scheduling.
+
+Input:
+
+    data/stores/*.json
+
+Output:
+
+    inspection/reports/stores_data_report.txt
+"""
 
 from collections import Counter, defaultdict
 from pathlib import Path

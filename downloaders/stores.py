@@ -1,10 +1,14 @@
-# downloaders/stores.py
 """
-Stores files are published once per chain (not once per store, unlike
-PriceFull/PromoFull/Price/Promo), so this module keeps its own
-find-latest logic (GENERIC_STORES_FILE_RE / find_latest_matching_file)
-rather than sharing full_family.py or delta_family.py. It does reuse the
-protocol-level helpers from common.py.
+downloaders/stores.py
+
+Downloader for Stores files from all supported Metziah source protocols.
+
+Stores files are published once per chain rather than once per store, so
+this module uses its own latest-file matching logic instead of the shared
+full/delta downloader families.
+
+Handles source-specific file discovery and downloading while reusing the
+shared protocol helpers from downloaders.common.
 """
 
 import logging
