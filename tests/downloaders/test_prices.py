@@ -1,260 +1,418 @@
-# tests/downloaders/test_prices.py
-from unittest.mock import AsyncMock, MagicMock
+from datetime import date
 
 import pytest
 
-from downloaders import prices
+from downloaders.prices import (
+    download_price_publishedprices,
+    download_price_binaprojects,
+    download_price_laibcatalog,
+    download_price_carrefour,
+    download_price_html,
+    download_price_mishnatyosef,
+    download_price_wolt,
+    download_prices,
+)
 
 
-# ---- parse_filename ----
-
-def test_parse_filename_valid():
-    meta = prices.parse_filename(
-        "Price7290661400001-001-020-20260801-042307.gz"
-    )
-    assert meta == {
-        "chain": "7290661400001",
-        "subchain": "001",
-        "store": "020",
-        "date": "20260801",
-        "time": "042307",
-    }
+TODAY = date.today()
 
 
-def test_parse_filename_invalid_returns_none():
-    assert prices.parse_filename("NotAMatch.gz") is None
-    
-
-def test_parse_filename_wrong_prefix_returns_none():
-    assert prices.parse_filename(
-        "Promo7290661400001-001-020-20260801-042307.gz"
-    ) is None
+def _filename(
+    chain="7290661400001",
+    store="001",
+    time="120000",
+):
+    return f"Price{chain}-001-{store}-{TODAY:%Y%m%d}-{time}.gz"
 
 
-def test_parse_filename_rejects_trailing_content():
-    assert prices.parse_filename(
-        "Price7290661400001-001-020-20260801-042307.gz.bak"
-    ) is None
+def _price_file(filename=None):
+    filename = filename or _filename()
 
-
-
-
-
-# ---- download_prices ----
-
-def make_file_entry(store, date, time_, prefix="Price"):
     return {
-        "fileName": f"{prefix}7290661400001-001-{store}-{date}-{time_}.gz"
+        "filename": filename,
+        "chain_id": "7290661400001",
+        "store_id": "1",
+        "file_date": TODAY,
+        "path": "some/path",
     }
 
 
-@pytest.fixture
-def mock_client_class(monkeypatch):
-    instance = MagicMock()
-    instance.get_files = AsyncMock()
-    instance.build_download_url = MagicMock(
-        side_effect=lambda filename: f"https://fake/{filename}"
+def _async_path(tmp_path, filename):
+    return tmp_path / filename
+
+
+def test_download_price_publishedprices_login_failure(monkeypatch):
+    class FakeClient:
+        BASE_URL = "https://example.com"
+
+        def __init__(self, username, password):
+            pass
+
+        def login(self):
+            raise Exception("login failed")
+
+    monkeypatch.setattr(
+        "downloaders.prices.PublishedPricesClient",
+        FakeClient,
     )
-    instance.download_file = AsyncMock(return_value=b"fake gz bytes")
 
-    client_class = MagicMock(return_value=instance)
-    monkeypatch.setattr(prices, "LaibcatalogClient", client_class)
-
-    return instance
-
-
-@pytest.mark.asyncio
-async def test_downloads_new_file(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
-
-    await prices.download_prices()
-
-    dest = (
-        tmp_path / "7290661400001" / "001" / "020" / "prices"
-        / "Price7290661400001-001-020-20260801-042307.gz"
+    result = download_price_publishedprices(
+        "Test",
+        "user",
+        "password",
     )
-    assert dest.exists()
-    assert dest.read_bytes() == b"fake gz bytes"
+
+    assert result == []
+
+
+def test_download_price_publishedprices(monkeypatch, tmp_path):
+    latest = _price_file()
+
+    class FakeClient:
+        BASE_URL = "https://example.com"
+
+        def __init__(self, username, password):
+            pass
+
+        def login(self):
+            pass
+
+    monkeypatch.setattr(
+        "downloaders.prices.PublishedPricesClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.list_publishedprices_entries_recursive",
+        lambda client: [],
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
+
+    saved = []
+
+    def fake_save(**kwargs):
+        saved.append(kwargs)
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file",
+        fake_save,
+    )
+
+    result = download_price_publishedprices(
+        "Test",
+        "user",
+        "password",
+    )
+
+    assert result == [tmp_path / latest["filename"]]
+    assert saved[0]["chain_id"] == latest["chain_id"]
+    assert saved[0]["store_id"] == latest["store_id"]
+    assert saved[0]["filename"] == latest["filename"]
+    assert saved[0]["subfolder"] == "prices"
+
+
+def test_download_price_binaprojects(monkeypatch, tmp_path):
+    latest = _price_file()
+
+    class FakeClient:
+        def __init__(self, url):
+            pass
+
+        def get_hok_files(self, file_type):
+            return []
+
+    monkeypatch.setattr(
+        "downloaders.prices.BinaProjectsClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.filter_ignored_bina_stores",
+        lambda files, *args: files,
+    )
+
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file",
+        lambda **kwargs: tmp_path / kwargs["filename"],
+    )
+
+    result = download_price_binaprojects(
+        "Test",
+        "https://example.com",
+    )
+
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_filters_out_pricefull_files(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307", prefix="Price"),
-        make_file_entry("020", "20260801", "042307", prefix="PriceFull"),
-    ]
+async def test_download_price_laibcatalog(monkeypatch, tmp_path):
+    latest = _price_file()
 
-    await prices.download_prices()
+    class FakeClient:
+        def __init__(self, chain_id):
+            pass
 
-    all_gz = list(tmp_path.rglob("*.gz"))
-    assert len(all_gz) == 1
-    assert "PriceFull" not in all_gz[0].name
+        async def get_files(self):
+            return []
 
+        def build_download_url(self, filename):
+            return f"https://example.com/{filename}"
 
-@pytest.mark.asyncio
-async def test_keeps_only_latest_per_store_across_different_days(
-    monkeypatch, tmp_path, mock_client_class
-):
-    # Unlike pricesfull.py, dedup here has NO date component — only one
-    # file survives per store, even across different days.
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260731", "230000"),
-        make_file_entry("020", "20260801", "090000"),  # latest overall
-        make_file_entry("020", "20260801", "050000"),
-    ]
+        async def download_file(self, url):
+            return b"data"
 
-    await prices.download_prices()
+    monkeypatch.setattr(
+        "downloaders.prices.LaibcatalogClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.keep_latest_file_per_store",
+        lambda files: files,
+    )
 
-    folder = tmp_path / "7290661400001" / "001" / "020" / "prices"
-    remaining = list(folder.glob("Price*.gz"))
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
 
-    assert len(remaining) == 1
-    assert "20260801-090000" in remaining[0].name
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file_async",
+        fake_save,
+    )
 
+    result = await download_price_laibcatalog(
+        "Test",
+        "https://example.com",
+        "7290661400001",
+    )
 
-
-
-
-@pytest.mark.asyncio
-async def test_skips_download_when_latest_already_present(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "prices"
-    folder.mkdir(parents=True)
-    existing = folder / "Price7290661400001-001-020-20260801-090000.gz"
-    existing.write_bytes(b"already here")
-
-    await prices.download_prices()
-
-    assert existing.read_bytes() == b"already here"
-    mock_client_class.download_file.assert_not_called()
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_dedup_is_per_store_not_global(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("020", "20260801", "090000"),
-        make_file_entry("021", "20260801", "050000"),
-        make_file_entry("021", "20260801", "060000"),
-        make_file_entry("022", "20260801", "070000"),
-    ]
+async def test_download_price_carrefour(monkeypatch, tmp_path):
+    latest = _price_file()
 
-    await prices.download_prices()
+    class FakeClient:
+        base_url = "https://example.com"
 
-    for store, expected_time in [("020", "090000"), ("021", "060000"), ("022", "070000")]:
-        folder = tmp_path / "7290661400001" / "001" / store / "prices"
-        remaining = list(folder.glob("Price*.gz"))
-        assert len(remaining) == 1
-        assert expected_time in remaining[0].name
+        async def get_files(self):
+            return {
+                "path": "/files",
+                "files": [],
+            }
 
+        async def download_file(self, url):
+            return b"data"
 
-@pytest.mark.asyncio
-async def test_download_failure_does_not_block_remaining_files(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-        make_file_entry("021", "20260801", "042307"),
-        make_file_entry("022", "20260801", "042307"),
-    ]
-    mock_client_class.download_file.side_effect = [
-        b"ok bytes",
-        Exception("boom"),
-        b"ok bytes too",
-    ]
+    monkeypatch.setattr(
+        "downloaders.prices.CarrefourClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.normalize_carrefour_listing",
+        lambda files: [],
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
 
-    await prices.download_prices()
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
 
-    assert (tmp_path / "7290661400001" / "001" / "020" / "prices"
-            / "Price7290661400001-001-020-20260801-042307.gz").exists()
-    # 021 failed — no file written
-    assert not (tmp_path / "7290661400001" / "001" / "021" / "prices"
-                / "Price7290661400001-001-021-20260801-042307.gz").exists()
-    # 022 still processed despite 021's failure
-    assert (tmp_path / "7290661400001" / "001" / "022" / "prices"
-            / "Price7290661400001-001-022-20260801-042307.gz").exists()
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_price_carrefour()
+
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_get_files_failure_returns_early(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.side_effect = Exception("api down")
+async def test_download_price_html(monkeypatch, tmp_path):
+    latest = _price_file()
 
-    # should not raise — caught and logged
-    await prices.download_prices()
+    source = {
+        "name": "Test HTML",
+        "listing": {
+            "base_url": "https://example.com",
+        },
+        "extraction_mode": "table",
+        "filename_source": "text",
+    }
 
-    assert list(tmp_path.rglob("*.gz")) == []
+    class Candidate:
+        filename = latest["filename"]
+        href = "https://example.com/file.gz"
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "downloaders.prices.HtmlFileLinkClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices._load_html_cache",
+        lambda name: [Candidate()],
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.parse_filename",
+        lambda filename: {"file_type": "Price"},
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
+
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_price_html(source)
+
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_failed_count_incremented_on_download_error(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
-    mock_client_class.download_file.side_effect = Exception("boom")
+async def test_download_price_mishnatyosef(monkeypatch, tmp_path):
+    latest = _price_file()
 
-    await prices.download_prices()
+    class FakeClient:
+        async def get_files(self):
+            return []
 
-    # no file written, no exception raised
-    assert not (tmp_path / "7290661400001" / "001" / "020" / "prices"
-                / "Price7290661400001-001-020-20260801-042307.gz").exists()
+        async def download_file(self, href):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.prices.MishnatYosefClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.normalize_mishnatyosef_listing",
+        lambda files, file_type: (
+            [{"filename": latest["filename"]}],
+            {latest["filename"]: "https://example.com/file.gz"},
+        ),
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
+
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_price_mishnatyosef()
+
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_old_file_kept_when_new_download_fails(
-    monkeypatch, tmp_path, mock_client_class
-):
-    # When download fails, `continue` skips old-file cleanup —
-    # the previous snapshot should remain on disk.
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
-    mock_client_class.download_file.side_effect = Exception("boom")
+async def test_download_price_wolt(monkeypatch, tmp_path):
+    latest = _price_file()
 
-    folder = tmp_path / "7290661400001" / "001" / "020" / "prices"
-    folder.mkdir(parents=True)
-    old_file = folder / "Price7290661400001-001-020-20260731-230000.gz"
-    old_file.write_bytes(b"still here")
+    class FakeClient:
+        async def get_date_pages(self):
+            return ["https://example.com/date"]
 
-    await prices.download_prices()
+        async def get_files(self, date_page):
+            return []
 
-    assert old_file.exists()
+        async def download_file(self, href):
+            return b"data"
 
+    monkeypatch.setattr(
+        "downloaders.prices.WoltClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.normalize_wolt_file_urls",
+        lambda urls: (
+            [{"filename": latest["filename"]}],
+            {latest["filename"]: "https://example.com/file.gz"},
+        ),
+    )
+    monkeypatch.setattr(
+        "downloaders.prices.find_delta_files",
+        lambda *args, **kwargs: [latest],
+    )
 
-def test_parse_filename_skips_with_warning_not_crash():
-    # invalid filenames just return None; download_prices() should
-    # skip them via the `if not meta: continue` branch, not crash.
-    assert prices.parse_filename("garbage") is None
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.prices.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_price_wolt()
+
+    assert result == [tmp_path / latest["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_invalid_datetime_in_filename_is_skipped(
-    monkeypatch, tmp_path, mock_client_class
-):
-    # e.g. month "13" — matches the regex shape but datetime.strptime fails
-    monkeypatch.setattr(prices, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        {"fileName": "Price7290661400001-001-020-20261301-042307.gz"},
-    ]
+async def test_download_prices(monkeypatch):
+    expected = ["a", "b"]
 
-    await prices.download_prices()
+    async def fake_run_all_sources(*args, **kwargs):
+        return expected
 
-    assert list(tmp_path.rglob("*.gz")) == []
-    mock_client_class.download_file.assert_not_called()
+    monkeypatch.setattr(
+        "downloaders.prices.run_all_sources",
+        fake_run_all_sources,
+    )
+
+    result = await download_prices(test=True)
+
+    assert result == expected

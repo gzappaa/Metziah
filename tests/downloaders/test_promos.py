@@ -1,355 +1,416 @@
-from unittest.mock import AsyncMock, MagicMock
+from datetime import date
 
 import pytest
 
-from downloaders import promos
+from downloaders.promos import (
+    download_promo_publishedprices,
+    download_promo_binaprojects,
+    download_promo_laibcatalog,
+    download_promo_carrefour,
+    download_promo_html,
+    download_promo_mishnatyosef,
+    download_promo_wolt,
+    download_promos,
+)
 
 
-# ---- parse_filename: pure regex logic ----
-
-def test_parse_filename_valid():
-    meta = promos.parse_filename(
-        "Promo7290661400001-001-020-20260801-042307.gz"
-    )
-
-    assert meta == {
-        "chain": "7290661400001",
-        "subchain": "001",
-        "store": "020",
-        "date": "20260801",
-        "time": "042307",
-    }
+TODAY = date.today()
 
 
-def test_parse_filename_invalid_returns_none():
-    assert promos.parse_filename("NotAMatch.gz") is None
+def _filename(
+    chain="7290661400001",
+    store="001",
+    time="120000",
+):
+    return f"Promo{chain}-001-{store}-{TODAY:%Y%m%d}-{time}.gz"
 
 
-def test_parse_filename_rejects_promofull():
-    assert promos.parse_filename(
-        "PromoFull7290661400001-001-020-20260801-042307.gz"
-    ) is None
+def _promo_file(filename=None):
+    filename = filename or _filename()
 
-
-def test_parse_filename_rejects_trailing_content():
-    assert promos.parse_filename(
-        "Promo7290661400001-001-020-20260801-042307.gz.bak"
-    ) is None
-
-
-# ---- get_storage_path ----
-
-def test_get_storage_path(tmp_path):
-    meta = {
-        "chain": "7290661400001",
-        "subchain": "001",
-        "store": "020",
-    }
-
-    path = promos.get_storage_path(meta, tmp_path)
-
-    assert path == (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
-    )
-
-
-# ---- download_promos ----
-
-def make_file_entry(store, date, time_):
     return {
-        "fileName": (
-            f"Promo7290661400001-001-{store}-{date}-{time_}.gz"
-        )
+        "filename": filename,
+        "chain_id": "7290661400001",
+        "store_id": "1",
+        "file_date": TODAY,
+        "path": "some/path",
     }
 
 
-@pytest.fixture
-def mock_client_class(monkeypatch):
-    instance = MagicMock()
-    instance.get_files = AsyncMock()
-    instance.build_download_url = MagicMock(
-        side_effect=lambda filename: f"https://fake/{filename}"
-    )
-    instance.download_file = AsyncMock(
-        return_value=b"fake gz bytes"
-    )
+def test_download_promo_publishedprices_login_failure(monkeypatch):
+    class FakeClient:
+        BASE_URL = "https://example.com"
 
-    client_class = MagicMock(return_value=instance)
+        def __init__(self, username, password):
+            pass
+
+        def login(self):
+            raise Exception("login failed")
+
     monkeypatch.setattr(
-        promos,
-        "LaibcatalogClient",
-        client_class,
+        "downloaders.promos.PublishedPricesClient",
+        FakeClient,
     )
 
-    return instance
+    result = download_promo_publishedprices(
+        "Test",
+        "user",
+        "password",
+    )
+
+    assert result == []
+
+
+def test_download_promo_publishedprices(monkeypatch, tmp_path):
+    promo_file = _promo_file()
+
+    class FakeClient:
+        BASE_URL = "https://example.com"
+
+        def __init__(self, username, password):
+            pass
+
+        def login(self):
+            pass
+
+    monkeypatch.setattr(
+        "downloaders.promos.PublishedPricesClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.list_publishedprices_entries_recursive",
+        lambda client: [],
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
+    )
+
+    saved = []
+
+    def fake_save(**kwargs):
+        saved.append(kwargs)
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file",
+        fake_save,
+    )
+
+    result = download_promo_publishedprices(
+        "Test",
+        "user",
+        "password",
+    )
+
+    assert result == [tmp_path / promo_file["filename"]]
+    assert saved[0]["chain_id"] == promo_file["chain_id"]
+    assert saved[0]["store_id"] == promo_file["store_id"]
+    assert saved[0]["filename"] == promo_file["filename"]
+    assert saved[0]["subfolder"] == "promos"
+
+
+def test_download_promo_binaprojects(monkeypatch, tmp_path):
+    promo_file = _promo_file()
+
+    class FakeClient:
+        def __init__(self, url):
+            pass
+
+        def get_hok_files(self, file_type):
+            assert file_type == 3
+            return []
+
+    monkeypatch.setattr(
+        "downloaders.promos.BinaProjectsClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.filter_ignored_bina_stores",
+        lambda files, *args: files,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file",
+        lambda **kwargs: tmp_path / kwargs["filename"],
+    )
+
+    result = download_promo_binaprojects(
+        "Test",
+        "https://example.com",
+    )
+
+    assert result == [tmp_path / promo_file["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_downloads_new_file(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
+async def test_download_promo_laibcatalog(monkeypatch, tmp_path):
+    promo_file = _promo_file()
 
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
+    class FakeClient:
+        def __init__(self, chain_id):
+            pass
 
-    result = await promos.download_promos()
+        async def get_files(self):
+            return []
 
-    expected = (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
-        / "Promo7290661400001-001-020-20260801-042307.gz"
+        def build_download_url(self, filename):
+            return f"https://example.com/{filename}"
+
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.promos.LaibcatalogClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
     )
 
-    assert expected.exists()
-    assert expected.read_bytes() == b"fake gz bytes"
-    assert result == [expected]
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
 
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_promo_laibcatalog(
+        "Test",
+        "https://example.com",
+        "7290661400001",
+    )
+
+    assert result == [tmp_path / promo_file["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_keeps_all_promo_files_without_deduplication(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
+async def test_download_promo_carrefour(monkeypatch, tmp_path):
+    promo_file = _promo_file()
 
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("020", "20260801", "050000"),
-        make_file_entry("020", "20260801", "060000"),
-    ]
+    class FakeClient:
+        base_url = "https://example.com"
 
-    result = await promos.download_promos()
+        async def get_files(self):
+            return {
+                "path": "/files",
+                "files": [],
+            }
 
-    folder = (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.promos.CarrefourClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.normalize_carrefour_listing",
+        lambda files: [],
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
     )
 
-    remaining = list(folder.glob("Promo*.gz"))
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
 
-    assert len(remaining) == 3
-    assert len(result) == 3
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_promo_carrefour()
+
+    assert result == [tmp_path / promo_file["filename"]]
 
 
 @pytest.mark.asyncio
-async def test_ignores_promofull_files(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
+async def test_download_promo_html(monkeypatch, tmp_path):
+    promo_file = _promo_file()
 
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-        {
-            "fileName": (
-                "PromoFull7290661400001-001-020-20260801-042307.gz"
-            )
+    source = {
+        "name": "Test HTML",
+        "listing": {
+            "base_url": "https://example.com",
         },
-    ]
+        "extraction_mode": "table",
+        "filename_source": "text",
+    }
 
-    await promos.download_promos()
+    class Candidate:
+        filename = promo_file["filename"]
+        href = "https://example.com/file.gz"
 
-    files = list(tmp_path.rglob("*.gz"))
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
 
-    assert len(files) == 1
-    assert files[0].name.startswith("Promo729")
-
-
-@pytest.mark.asyncio
-async def test_skips_existing_file(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
-
-    filename = "Promo7290661400001-001-020-20260801-042307.gz"
-
-    mock_client_class.get_files.return_value = [
-        {"fileName": filename},
-    ]
-
-    folder = (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
+    monkeypatch.setattr(
+        "downloaders.promos.HtmlFileLinkClient",
+        FakeClient,
     )
-    folder.mkdir(parents=True)
-
-    existing = folder / filename
-    existing.write_bytes(b"original")
-
-    result = await promos.download_promos()
-
-    assert existing.read_bytes() == b"original"
-    assert result == []
-    mock_client_class.download_file.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_download_failure_does_not_block_remaining_files(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
-
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("021", "20260801", "050000"),
-        make_file_entry("022", "20260801", "060000"),
-    ]
-
-    mock_client_class.download_file.side_effect = [
-        b"first",
-        Exception("boom"),
-        b"third",
-    ]
-
-    result = await promos.download_promos()
-
-    assert len(result) == 2
-
-    assert (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
-        / "Promo7290661400001-001-020-20260801-040000.gz"
-    ).exists()
-
-    assert not (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "021"
-        / "promos"
-        / "Promo7290661400001-001-021-20260801-050000.gz"
-    ).exists()
-
-    assert (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "022"
-        / "promos"
-        / "Promo7290661400001-001-022-20260801-060000.gz"
-    ).exists()
-
-
-@pytest.mark.asyncio
-async def test_get_files_failure_returns_empty(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
-
-    mock_client_class.get_files.side_effect = Exception("api down")
-
-    result = await promos.download_promos()
-
-    assert result == []
-    assert list(tmp_path.rglob("*.gz")) == []
-
-
-@pytest.mark.asyncio
-async def test_ignores_invalid_promo_filename(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(promos, "DATA_DIR", tmp_path)
-
-    mock_client_class.get_files.return_value = [
-        {"fileName": "Promo_totally_wrong_format.gz"},
-    ]
-
-    result = await promos.download_promos()
-
-    assert result == []
-    assert list(tmp_path.rglob("*.gz")) == []
-
-
-@pytest.mark.asyncio
-async def test_test_mode_keeps_only_existing_test_stores(
-    monkeypatch, tmp_path, mock_client_class
-):
-    test_feeds_dir = tmp_path / "data" / "test_feeds"
-
-    (
-        test_feeds_dir
-        / "7290661400001"
-        / "001"
-        / "020"
-    ).mkdir(parents=True)
-
-    (
-        test_feeds_dir
-        / "7290661400001"
-        / "001"
-        / "021"
-    ).mkdir(parents=True)
-
-    monkeypatch.setattr(promos, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(promos, "TEST_DATA_DIR", test_feeds_dir)
-
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("021", "20260801", "050000"),
-        make_file_entry("022", "20260801", "060000"),
-    ]
-
-    result = await promos.download_promos(test=True)
-
-    assert len(result) == 2
-
-    files = list(test_feeds_dir.rglob("Promo*.gz"))
-
-    assert len(files) == 2
-    assert sorted(path.parts[-3] for path in files) == [
-        "020",
-        "021",
-    ]
-
-@pytest.mark.asyncio
-async def test_test_mode_keeps_all_promo_files_for_existing_store(
-    monkeypatch, tmp_path, mock_client_class
-):
-    test_feeds_dir = tmp_path / "data" / "test_feeds"
-
-    (
-        test_feeds_dir
-        / "7290661400001"
-        / "001"
-        / "020"
-    ).mkdir(parents=True)
-
-    monkeypatch.setattr(promos, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(promos, "TEST_DATA_DIR", test_feeds_dir)
-
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260816", "060000"),
-        make_file_entry("020", "20260816", "070000"),
-        make_file_entry("020", "20260816", "080000"),
-    ]
-
-    result = await promos.download_promos(test=True)
-
-    assert len(result) == 3
-
-    folder = (
-        test_feeds_dir
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "promos"
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos._load_html_cache",
+        lambda name: [Candidate()],
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.parse_filename",
+        lambda filename: {"file_type": "Promo"},
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
     )
 
-    assert len(list(folder.glob("Promo*.gz"))) == 3
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_promo_html(source)
+
+    assert result == [tmp_path / promo_file["filename"]]
+
+
+@pytest.mark.asyncio
+async def test_download_promo_mishnatyosef(monkeypatch, tmp_path):
+    promo_file = _promo_file()
+
+    class FakeClient:
+        async def get_files(self):
+            return []
+
+        async def download_file(self, href):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.promos.MishnatYosefClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.normalize_mishnatyosef_listing",
+        lambda files, file_type: (
+            [{"filename": promo_file["filename"]}],
+            {
+                promo_file["filename"]:
+                    "https://example.com/file.gz"
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
+    )
+
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_promo_mishnatyosef()
+
+    assert result == [tmp_path / promo_file["filename"]]
+
+
+@pytest.mark.asyncio
+async def test_download_promo_wolt(monkeypatch, tmp_path):
+    promo_file = _promo_file()
+
+    class FakeClient:
+        async def get_date_pages(self):
+            return ["https://example.com/date"]
+
+        async def get_files(self, date_page):
+            return []
+
+        async def download_file(self, href):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.promos.WoltClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.get_data_dir",
+        lambda test: tmp_path,
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.normalize_wolt_file_urls",
+        lambda urls: (
+            [{"filename": promo_file["filename"]}],
+            {
+                promo_file["filename"]:
+                    "https://example.com/file.gz"
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "downloaders.promos.find_delta_files",
+        lambda *args, **kwargs: [promo_file],
+    )
+
+    async def fake_save(**kwargs):
+        return tmp_path / kwargs["filename"]
+
+    monkeypatch.setattr(
+        "downloaders.promos.save_delta_file_async",
+        fake_save,
+    )
+
+    result = await download_promo_wolt()
+
+    assert result == [tmp_path / promo_file["filename"]]
+
+
+@pytest.mark.asyncio
+async def test_download_promos(monkeypatch):
+    expected = ["a", "b"]
+
+    async def fake_run_all_sources(*args, **kwargs):
+        return expected
+
+    monkeypatch.setattr(
+        "downloaders.promos.run_all_sources",
+        fake_run_all_sources,
+    )
+
+    result = await download_promos(test=True)
+
+    assert result == expected

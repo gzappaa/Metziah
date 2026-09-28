@@ -1,258 +1,512 @@
-import argparse
-import asyncio
-import re
-from datetime import datetime
-from pathlib import Path
+"""
+downloaders/prices.py
 
-from chains.registry import CHAINS
-from clients.laibcatalog import LaibcatalogClient
+Downloader for Price delta feeds from all supported Metziah source
+protocols.
+
+Discovers today's Price files, applies test-mode and source-specific
+filtering, and saves the files into the prices feed directory using the
+shared delta-file handling.
+"""
+
 import logging
+from urllib.parse import urljoin
+
+from logging_config import setup_general_logging
+from clients.publishedprices import PublishedPricesClient
+from clients.binaprojects import BinaProjectsClient
+from clients.laibcatalog import LaibcatalogClient
+from clients.carrefour import CarrefourClient
+from clients.html_client import HtmlFileLinkClient
+from clients.mishnatyosef import MishnatYosefClient
+from clients.wolt import WoltClient
+
+from utils.file_tracking.parser_file_tracking import parse_filename
+
+from downloaders.common import (
+    get_data_dir,
+    _load_html_cache,
+    filter_test_store_files,
+    list_publishedprices_entries_recursive,
+    filter_ignored_bina_stores,
+    normalize_carrefour_listing,
+    normalize_wolt_file_urls,
+    normalize_mishnatyosef_listing,
+    get_all_html_candidates,
+)
+from downloaders.delta_family import (
+    keep_latest_file_per_store,
+    find_delta_files,
+    save_delta_file,
+    save_delta_file_async,
+)
+from downloaders.runner import run_all_sources, run_cli
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DATA_DIR = BASE_DIR / "data" / "feeds"
-TEST_DATA_DIR = BASE_DIR / "data" / "test_feeds"
-
-CHAIN = CHAINS["machsenei_hashuk"]
-CHAIN_ID = CHAIN.chain_id
+setup_general_logging()
 
 logger = logging.getLogger(__name__)
 
-
-FILENAME_PATTERN = re.compile(
-    r"Price"
-    r"(?P<chain>\d+)-"
-    r"(?P<subchain>\d+)-"
-    r"(?P<store>\d+)-"
-    r"(?P<date>\d{8})-"
-    r"(?P<time>\d{6})\.gz"
-)
+FILE_TYPE = "Price"
+SUBFOLDER = "prices"
 
 
-def parse_filename(filename):
+def download_price_publishedprices(
+    name: str,
+    username: str,
+    password: str = "",
+    test: bool = False,
+) -> list:
 
-    match = FILENAME_PATTERN.fullmatch(filename)
+    data_dir = get_data_dir(test)
+    client = PublishedPricesClient(username, password)
 
-    if not match:
-        return None
-
-    return match.groupdict()
-
-
-async def download_prices(test=False) -> list[Path]:
-
-    data_dir = (
-        TEST_DATA_DIR
-        if test
-        else DATA_DIR
+    logger.info(
+        "Logging in and listing files for %s (%s)...", name, username,
     )
-
-    client = LaibcatalogClient(CHAIN_ID)
-
-    logger.info("Getting files from API...")
 
     try:
-
-        files = await client.get_files()
-
+        client.login()
     except Exception:
-
-        logger.exception(
-            "Failed getting file list from Laibcatalog"
-        )
-
+        logger.exception("Failed logging in for %s", username)
         return []
 
-    price_files = [
-        f["fileName"]
-        for f in files
-        if (
-            f["fileName"].startswith("Price")
-            and not f["fileName"].startswith("PriceFull")
-        )
-    ]
+    entries = list_publishedprices_entries_recursive(client)
 
-    logger.info(
-        "Found %d Price files",
-        len(price_files)
-    )
+    price_files = find_delta_files(entries, FILE_TYPE, filename_key="fname")
 
     if test:
+        price_files = filter_test_store_files(price_files)
 
-        # Use exactly the stores already present in test_feeds.
-        test_stores = {
-            path.name
-            for path in TEST_DATA_DIR.glob("*/*/*")
-            if path.is_dir()
-        }
+    if not price_files:
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
+        return []
 
-        price_files = [
-            filename
-            for filename in price_files
-            if (
-                (meta := parse_filename(filename))
-                and meta["store"] in test_stores
-            )
-        ]
-
-        logger.info(
-            "TEST MODE: keeping Price files for %d existing test store(s)",
-            len(test_stores),
-        )
-
-    latest_files = {}
-
-    # Find newest Price file per store.
-    for filename in price_files:
-
-        meta = parse_filename(filename)
-
-        if not meta:
-
-            logger.warning(
-                "Skipping invalid filename: %s",
-                filename
-            )
-
-            continue
-
-        key = (
-            meta["chain"],
-            meta["subchain"],
-            meta["store"],
-        )
-
-        try:
-            file_datetime = datetime.strptime(
-                meta["date"] + meta["time"],
-                "%Y%m%d%H%M%S"
-            )
-        except ValueError:
-            logger.warning(
-                "Skipping invalid datetime in filename: %s",
-                filename,
-            )
-            continue
-
-        if (
-            key not in latest_files
-            or file_datetime > latest_files[key][0]
-        ):
-
-            latest_files[key] = (
-                file_datetime,
-                filename,
-                meta
-            )
-
-    logger.info(
-        "Keeping %d latest Price files",
-        len(latest_files)
-    )
-
-    downloaded = 0
-    skipped = 0
-    failed = 0
     downloaded_files = []
 
-    for _, filename, meta in latest_files.values():
+    for price_file in price_files:
 
-        folder = (
-            data_dir
-            / meta["chain"]
-            / meta["subchain"]
-            / meta["store"]
-            / "prices"
-        )
-
-        folder.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        destination = folder / filename
-
-        if destination.exists():
-
-            logger.info(
-                "UP TO DATE: %s",
-                filename
+        def fetch_content(price_file=price_file) -> bytes:
+            download_url = (
+                f"{PublishedPricesClient.BASE_URL}/file/d/{price_file['path']}"
             )
+            return client.download_file(download_url)
 
-            skipped += 1
-            continue
-
-        logger.info(
-            "DOWNLOAD: %s",
-            filename
+        result = save_delta_file(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
-        try:
-
-            url = client.build_download_url(filename)
-
-            content = await client.download_file(url)
-
-            destination.write_bytes(content)
-
-            downloaded += 1
-            downloaded_files.append(destination)
-
-        except Exception:
-
-            logger.exception(
-                "FAILED downloading %s",
-                filename
-            )
-
-            failed += 1
-            continue
-
-    logger.info("Finished")
-
-    logger.info(
-        "Downloaded: %d",
-        downloaded
-    )
-
-    logger.info(
-        "Skipped: %d",
-        skipped
-    )
-
-    logger.info(
-        "Failed: %d",
-        failed
-    )
+        if result:
+            downloaded_files.append(result)
 
     return downloaded_files
 
 
-if __name__ == "__main__":
+def download_price_binaprojects(
+    name: str,
+    url: str,
+    test: bool = False,
+) -> list:
 
-    parser = argparse.ArgumentParser()
+    data_dir = get_data_dir(test)
+    client = BinaProjectsClient(url)
 
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        help="Download Price files for stores already present in data/test_feeds",
-    )
-
-    args = parser.parse_args()
+    logger.info("Listing files for %s (BinaProjects)...", name)
 
     try:
-
-        asyncio.run(
-            download_prices(
-                test=args.test
-            )
-        )
-
+        # file_type=2 -> Price, per the documented WFileType mapping.
+        files = client.get_hok_files(file_type=2)
     except Exception:
+        logger.exception("Failed getting file list for %s", name)
+        return []
 
-        logger.exception(
-            "Prices downloader crashed"
+    files = filter_ignored_bina_stores(files, "FileNm", parse_filename)
+
+    price_files = find_delta_files(files, FILE_TYPE, filename_key="FileNm")
+
+    if test:
+        price_files = filter_test_store_files(price_files)
+
+    if not price_files:
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        def fetch_content(price_file=price_file) -> bytes:
+            return client.download_file(price_file["filename"])
+
+        result = save_delta_file(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
         )
 
-        raise
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_price_laibcatalog(
+    name: str,
+    url: str,
+    chain_id: str,
+    test: bool = False,
+) -> list:
+
+    data_dir = get_data_dir(test)
+    client = LaibcatalogClient(chain_id)
+
+    logger.info("Listing files for %s (Laibcatalog)...", name)
+
+    try:
+        files = await client.get_files()
+    except Exception:
+        logger.exception("Failed getting file list for %s", name)
+        return []
+
+    price_files = find_delta_files(
+    files,
+    FILE_TYPE,
+    filename_key="fileName",
+)
+
+    price_files = keep_latest_file_per_store(price_files)
+
+
+    if test:
+        price_files = filter_test_store_files(price_files)
+
+    if not price_files:
+        logger.warning("No %s files found for %s", FILE_TYPE, name)
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        resolved_chain_id = price_file.get("chain_id") or chain_id
+
+        async def fetch_content(price_file=price_file) -> bytes:
+            download_url = client.build_download_url(price_file["filename"])
+            return await client.download_file(download_url)
+
+        result = await save_delta_file_async(
+            chain_id=resolved_chain_id,
+            store_id=price_file["store_id"],
+            filename=price_file["filename"],
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
+        )
+
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_price_carrefour(test: bool = False) -> list:
+
+    data_dir = get_data_dir(test)
+    client = CarrefourClient()
+
+    logger.info("Listing files for Carrefour...")
+
+    try:
+        listing = await client.get_files()
+    except Exception:
+        logger.exception("Failed getting file list for Carrefour")
+        return []
+
+    path = listing["path"]
+    normalized = normalize_carrefour_listing(listing["files"])
+
+    price_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+
+    if test:
+        price_files = filter_test_store_files(price_files)
+
+    if not price_files:
+        logger.warning("No %s files found for Carrefour", FILE_TYPE)
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        filename = price_file["filename"]
+
+        download_url = urljoin(
+            f"{client.base_url}/", f"{path.strip('/')}/{filename}",
+        )
+
+        async def fetch_content(download_url=download_url) -> bytes:
+            return await client.download_file(download_url)
+
+        result = await save_delta_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=filename,
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
+        )
+
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_price_html(
+    source: dict,
+    test: bool = False,
+) -> list:
+
+    data_dir = get_data_dir(test)
+    name = source["name"]
+
+    client = HtmlFileLinkClient(
+        name=name,
+        base_url=source["listing"]["base_url"],
+        extraction_mode=source["extraction_mode"],
+        filename_column=source.get("filename_column"),
+        filename_source=source["filename_source"],
+        filename_param=source.get("filename_param"),
+    )
+
+    logger.info(
+        "Loading HTML cache for %s...",
+        name,
+    )
+
+    candidates = _load_html_cache(name)
+
+    href_by_filename = {}
+
+    for candidate in candidates:
+        filename = candidate.filename
+
+        if not filename:
+            continue
+
+        try:
+            record = parse_filename(filename)
+        except ValueError:
+            continue
+
+        if record["file_type"] != FILE_TYPE:
+            continue
+
+        href_by_filename[filename] = candidate.href
+
+    price_files = find_delta_files(
+        [
+            {"filename": filename}
+            for filename in href_by_filename
+        ],
+        FILE_TYPE,
+        filename_key="filename",
+    )
+
+    if test:
+        price_files = filter_test_store_files(
+            price_files
+        )
+
+    if not price_files:
+        logger.warning(
+            "No %s files found for %s",
+            FILE_TYPE,
+            name,
+        )
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        filename = price_file["filename"]
+        href = href_by_filename[filename]
+
+        async def fetch_content(href=href) -> bytes:
+            response = await client._get_with_retry(href)
+            return response.content
+
+        result = await save_delta_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=filename,
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
+        )
+
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_price_mishnatyosef(test: bool = False) -> list:
+
+    data_dir = get_data_dir(test)
+    client = MishnatYosefClient()
+
+    logger.info("Listing files for Mishnat Yosef...")
+
+    try:
+        files = await client.get_files()
+    except Exception:
+        logger.exception("Failed getting file list for Mishnat Yosef")
+        return []
+
+    normalized, href_by_filename = normalize_mishnatyosef_listing(
+        files, FILE_TYPE,
+    )
+
+    price_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+
+    if test:
+        price_files = filter_test_store_files(price_files)
+
+    if not price_files:
+        logger.warning("No %s files found for Mishnat Yosef", FILE_TYPE)
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        filename = price_file["filename"]
+        href = href_by_filename[filename]
+
+        async def fetch_content(href=href) -> bytes:
+            return await client.download_file(href)
+
+        result = await save_delta_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=filename,
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
+        )
+
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_price_wolt(test: bool = False) -> list:
+
+    data_dir = get_data_dir(test)
+    client = WoltClient()
+
+    logger.info("Listing date pages for Wolt...")
+
+    try:
+        date_pages = await client.get_date_pages()
+    except Exception:
+        logger.exception("Failed getting date pages for Wolt")
+        return []
+
+    if not date_pages:
+        logger.warning("No date pages found for Wolt")
+        return []
+
+    try:
+        file_urls = await client.get_files(date_pages[0])
+    except Exception:
+        logger.exception("Failed getting file list for Wolt")
+        return []
+
+    normalized, href_by_filename = normalize_wolt_file_urls(file_urls)
+
+    price_files = find_delta_files(normalized, FILE_TYPE, filename_key="filename")
+
+    if test:
+        price_files = filter_test_store_files(price_files)
+
+    if not price_files:
+        logger.warning("No %s files found for Wolt", FILE_TYPE)
+        return []
+
+    downloaded_files = []
+
+    for price_file in price_files:
+
+        filename = price_file["filename"]
+        href = href_by_filename[filename]
+
+        async def fetch_content(href=href) -> bytes:
+            return await client.download_file(href)
+
+        result = await save_delta_file_async(
+            chain_id=price_file["chain_id"],
+            store_id=price_file["store_id"],
+            filename=filename,
+            file_date=price_file["file_date"],
+            data_dir=data_dir,
+            test=test,
+            fetch_content=fetch_content,
+            subfolder=SUBFOLDER,
+        )
+
+        if result:
+            downloaded_files.append(result)
+
+    return downloaded_files
+
+
+async def download_prices(test: bool = False) -> list:
+    """Awaitable entry point for the scheduler (no argparse/sys.argv)."""
+    return await run_all_sources(
+        FILE_TYPE,
+        download_price_publishedprices,
+        download_price_binaprojects,
+        download_price_laibcatalog,
+        download_price_html,
+        download_price_carrefour,
+        download_price_mishnatyosef,
+        download_price_wolt,
+        test=test,
+    )
+
+
+if __name__ == "__main__":
+    run_cli(
+        FILE_TYPE,
+        download_price_publishedprices,
+        download_price_binaprojects,
+        download_price_laibcatalog,
+        download_price_html,
+        download_price_carrefour,
+        download_price_mishnatyosef,
+        download_price_wolt,
+    )

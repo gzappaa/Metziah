@@ -1,5 +1,6 @@
-# logging_config.py
 """
+logging_config.py
+
 Central logging setup for Metziah.
 
 Three ways to get a logger here:
@@ -28,10 +29,8 @@ geocode_google.py, etc. -- should just do
 point already configured root.
 """
 
-# logging_config.py
 import logging
-import os
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from config import settings
@@ -42,34 +41,38 @@ LOG_DIR.mkdir(exist_ok=True)
 ENV = settings.ENV  # dev | test | prod -- now reads from config.py / .env.test
 
 _ENV_LEVELS = {
-    "dev": logging.INFO,    ## CHANGE IT LATER
-    "test": logging.INFO, ## CHANGE IT LATER
+    "dev": logging.INFO,
+    "test": logging.DEBUG,
     "prod": logging.INFO,
 }
 
 
 def _make_formatter():
-    return logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    return logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
 
-def _make_file_handler(filename: str) -> RotatingFileHandler:
-    handler = RotatingFileHandler(
+def _make_file_handler(filename: str) -> TimedRotatingFileHandler:
+    handler = TimedRotatingFileHandler(
         LOG_DIR / filename,
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
+        when="midnight",
+        interval=1,
+        backupCount=0,
         encoding="utf-8",
     )
     handler.setFormatter(_make_formatter())
     return handler
 
 
-def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logger:
+def setup_logging(
+    name: str,
+    log_to_console: bool | None = None,
+) -> logging.Logger:
     """
     Configure the ROOT logger for a pipeline entry point.
 
-    The scheduler is the root logging owner for the entire pipeline, so
-    everything executed through it propagates into scheduler.log or
-    scheduler.test.log.
+    Logs rotate once per day at midnight.
 
     Normal environment:
         logs/<name>.log
@@ -91,6 +94,10 @@ def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logg
 
     root_logger.setLevel(_ENV_LEVELS.get(ENV, logging.INFO))
 
+    # Keep third-party HTTP request logs out of the main pipeline logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     if ENV == "test":
         filename = f"{name}.test.log"
     else:
@@ -106,7 +113,9 @@ def setup_logging(name: str, log_to_console: bool | None = None) -> logging.Logg
     return root_logger
 
 
-def setup_general_logging(log_to_console: bool | None = None) -> None:
+def setup_general_logging(
+    log_to_console: bool | None = None,
+) -> None:
     """
     For ad-hoc scripts (get_stores.py, etc.) that aren't part of the
     daily pipeline. Same mechanism as setup_logging, always writes to
@@ -122,6 +131,8 @@ def setup_isolated_logging(
     """
     Create a logger with its own dedicated file.
     Does not propagate to root.
+
+    Logs rotate once per day at midnight.
 
     Used for logs that are consumed independently,
     such as price_changes.log and store_changes.log.

@@ -1,4 +1,6 @@
 """
+database/repository.py
+
 DB read/write layer for the ingestion pipeline.
 
 Sections:
@@ -16,57 +18,108 @@ Sections:
     Notifications      -- get_nearby_store_ids (PostGIS ST_DWithin lookup),
                            get_promotion_details (client-facing promo/item
                            read, used by utils/promo_notifications.py)
+    Source configuration -- get_publishing_sources (reads
+                           supermarket_sources.json and returns source
+                           configuration by publishing type)
 
-NAME RESOLUTION (products.name / store_products.name):
-    Vote counter (`name_count`), not a history table.
-    - Incoming name matches current -> name_count += 1
-    - Incoming name differs -> name_count -= 1; hits 0 -> name SWITCHES
-      to incoming, count resets to 1
-    - Blank/empty incoming name never participates
+NAME HANDLING:
+    products.name:
+        Canonical name resolved by update_products.py from observations
+        across chains/stores.
+
+    store_products.name:
+        Name copied directly from the chain/store feed.
+        These are internal/non-barcode item codes and have no global
+        name resolution.
 
 MANUFACTURER / MANUFACTURER_COUNTRY:
-    Fill-only. Once non-blank, never overwritten.
+    Fill-only for products and store_products.
+    Once non-blank, never overwritten.
 """
 
 import logging
-from collections import defaultdict
+
 
 from models.promo import Promotion, PromotionGroup, PromotionItem
 from database.records import PriceRecord, ProductRecord, StoreProductRecord
 
+import json
+from pathlib import Path
+
+
+
 logger = logging.getLogger(__name__)
 
 
-def _resolve_name(existing_name, existing_count, incoming_name):
+
+CHAINS_FILE = (
+    Path(__file__).parent.parent
+    / "data"
+    / "reference"
+    / "chains.json"
+)
+
+
+
+
+
+def get_publishing_sources(
+    client_name: str,
+) -> list[dict]:
     """
-    Vote-based name resolution.
+    Read chains.json and return chains matching the
+    requested client.
+
+    The returned fields are:
+
+        chain_id
+        name
+        name_normalized
+        url
+
+    PublishedPricesClient additionally returns:
+        credentials
     """
-    if not incoming_name:
-        return existing_name, existing_count
 
-    if existing_name is None:
-        return incoming_name, 1
+    with CHAINS_FILE.open(
+        encoding="utf-8"
+    ) as file:
+        chains = json.load(file)
 
-    if incoming_name == existing_name:
-        return existing_name, existing_count + 1
+    sources = []
 
-    new_count = existing_count - 1
+    for chain_id, chain in chains.items():
 
-    if new_count <= 0:
-        return incoming_name, 1
+        if chain.get("client") != client_name:
+            continue
 
-    return existing_name, new_count
+        result = {
+            "chain_id": chain_id,
+            "name": chain["Chain_name_store_file"],
+            "name_normalized": chain.get(
+                "name_en_normalized",
+                chain["Chain_name_store_file"],
+            ),
+            "url": chain["publishing_in"],
+        }
+
+        if client_name == "PublishedPricesClient":
+            result["credentials"] = chain.get(
+                "credentials",
+                {},
+            )
+
+        sources.append(result)
+
+    logger.info(
+        "Found %d %s sources",
+        len(sources),
+        client_name,
+    )
+
+    return sources
 
 
-def _resolve_fill_only(existing_value, incoming_value):
-    """
-    Keep whatever's already filled. Only accept incoming if existing is
-    blank/null.
-    """
-    if existing_value:
-        return existing_value
-
-    return incoming_value or existing_value
 
 
 def upsert_stores(conn, stores: list) -> None:
@@ -133,19 +186,36 @@ def upsert_stores(conn, stores: list) -> None:
         )
 
 
-def ensure_chain(conn, chain_id: str) -> None:
+def ensure_chain(
+    conn,
+    chain_id: str,
+    name_he_normalized: str,
+    name_en_normalized: str,
+) -> None:
     """
-    Makes sure the chain exists before inserting rows that reference it.
+    Makes sure the chain exists and is synchronized with chains.json
+    before inserting rows that reference it.
     """
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO chains (chain_id)
-            VALUES (%s)
-            ON CONFLICT DO NOTHING
+            INSERT INTO chains (
+                chain_id,
+                name_he_normalized,
+                name_en_normalized
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT (chain_id)
+            DO UPDATE SET
+                name_he_normalized = EXCLUDED.name_he_normalized,
+                name_en_normalized = EXCLUDED.name_en_normalized
             """,
-            (chain_id,),
+            (
+                chain_id,
+                name_he_normalized,
+                name_en_normalized,
+            ),
         )
 
 
@@ -177,137 +247,70 @@ def update_store_subchain(
         )
 
 
-def upsert_products(conn, records: list[ProductRecord]) -> None:
+def upsert_products(
+    conn,
+    records: list[ProductRecord],
+) -> None:
     """
-    Upsert into `products` (real barcodes only).
+    Upsert canonical global products.
+
+    Names have already been resolved by update_products.py.
+    This repository function only writes the resolved value.
     """
 
     if not records:
         return
 
-    item_codes = [r.item_code for r in records]
+    rows = [
+        (
+            r.item_code,
+            r.name or None,
+            r.manufacturer or None,
+            r.manufacturer_country or None,
+            r.item_type,
+        )
+        for r in records
+    ]
 
     with conn.cursor() as cur:
-        cur.execute(
+        cur.executemany(
             """
-            SELECT
+            INSERT INTO products (
                 item_code,
                 name,
-                name_count,
                 manufacturer,
                 manufacturer_country,
                 item_type
-            FROM products
-            WHERE item_code = ANY(%s)
+            )
+            VALUES (%s, %s, %s, %s, %s)
+
+            ON CONFLICT (item_code)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                manufacturer = COALESCE(
+                    products.manufacturer,
+                    EXCLUDED.manufacturer
+                ),
+                manufacturer_country = COALESCE(
+                    products.manufacturer_country,
+                    EXCLUDED.manufacturer_country
+                ),
+                item_type = EXCLUDED.item_type,
+                updated_at = now()
+
+            WHERE
+                products.name IS DISTINCT FROM EXCLUDED.name
+                OR products.manufacturer IS DISTINCT FROM
+                    COALESCE(products.manufacturer, EXCLUDED.manufacturer)
+                OR products.manufacturer_country IS DISTINCT FROM
+                    COALESCE(
+                        products.manufacturer_country,
+                        EXCLUDED.manufacturer_country
+                    )
+                OR products.item_type IS DISTINCT FROM EXCLUDED.item_type
             """,
-            (item_codes,),
+            rows,
         )
-
-        existing = {
-            row[0]: row[1:]
-            for row in cur.fetchall()
-        }
-
-    insert_rows = []
-    update_rows = []
-
-    for r in records:
-        current = existing.get(r.item_code)
-
-        if current is None:
-            name = r.name or None
-            name_count = 1 if name else 0
-
-            insert_rows.append(
-                (
-                    r.item_code,
-                    name,
-                    name_count,
-                    r.manufacturer or None,
-                    r.manufacturer_country or None,
-                    r.item_type,
-                )
-            )
-
-            continue
-
-        (
-            existing_name,
-            existing_count,
-            existing_mfr,
-            existing_country,
-            existing_type,
-        ) = current
-
-        name, name_count = _resolve_name(
-            existing_name,
-            existing_count,
-            r.name,
-        )
-
-        manufacturer = _resolve_fill_only(
-            existing_mfr,
-            r.manufacturer,
-        )
-
-        manufacturer_country = _resolve_fill_only(
-            existing_country,
-            r.manufacturer_country,
-        )
-
-        if (
-            name != existing_name
-            or name_count != existing_count
-            or manufacturer != existing_mfr
-            or manufacturer_country != existing_country
-            or r.item_type != existing_type
-        ):
-            update_rows.append(
-                (
-                    name,
-                    name_count,
-                    manufacturer,
-                    manufacturer_country,
-                    r.item_type,
-                    r.item_code,
-                )
-            )
-
-    if insert_rows:
-        with conn.cursor() as cur:
-            cur.executemany(
-                """
-                INSERT INTO products (
-                    item_code,
-                    name,
-                    name_count,
-                    manufacturer,
-                    manufacturer_country,
-                    item_type
-                )
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (item_code) DO NOTHING
-                """,
-                insert_rows,
-            )
-
-    if update_rows:
-        with conn.cursor() as cur:
-            cur.executemany(
-                """
-                UPDATE products
-                SET
-                    name = %s,
-                    name_count = %s,
-                    manufacturer = %s,
-                    manufacturer_country = %s,
-                    item_type = %s,
-                    updated_at = now()
-                WHERE item_code = %s
-                """,
-                update_rows,
-            )
-
 
 def upsert_store_products(
     conn,
@@ -316,164 +319,70 @@ def upsert_store_products(
     """
     Upsert non-barcode/internal products.
 
-    store_id is the actual feed store_id TEXT.
-    No stores.id resolution is performed.
+    The name comes directly from the chain/store feed.
+    No name resolution or normalization is performed.
     """
 
     if not records:
         return
 
-    by_chain: dict[str, list[StoreProductRecord]] = defaultdict(list)
+    rows = [
+        (
+            r.chain_id,
+            r.store_id,
+            r.item_code,
+            r.name or None,
+            r.manufacturer or None,
+            r.manufacturer_country or None,
+            r.item_type,
+        )
+        for r in records
+    ]
 
-    for r in records:
-        by_chain[r.chain_id].append(r)
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO store_products (
+                chain_id,
+                store_id,
+                item_code,
+                name,
+                manufacturer,
+                manufacturer_country,
+                item_type
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
 
-    insert_rows = []
-    update_rows = []
-
-    for chain_id, chain_records in by_chain.items():
-
-        item_codes = [r.item_code for r in chain_records]
-        store_ids = [r.store_id for r in chain_records]
-
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    store_id,
-                    item_code,
-                    name,
-                    name_count,
-                    manufacturer,
-                    manufacturer_country,
-                    item_type
-                FROM store_products
-                WHERE chain_id = %s
-                  AND item_code = ANY(%s)
-                  AND store_id = ANY(%s)
-                """,
-                (
-                    chain_id,
-                    item_codes,
-                    store_ids,
+            ON CONFLICT (chain_id, store_id, item_code)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                manufacturer = COALESCE(
+                    store_products.manufacturer,
+                    EXCLUDED.manufacturer
                 ),
-            )
+                manufacturer_country = COALESCE(
+                    store_products.manufacturer_country,
+                    EXCLUDED.manufacturer_country
+                ),
+                item_type = EXCLUDED.item_type,
+                updated_at = now()
 
-            existing = {
-                (row[0], row[1]): row[2:]
-                for row in cur.fetchall()
-            }
-
-        for r in chain_records:
-
-            current = existing.get(
-                (r.store_id, r.item_code)
-            )
-
-            if current is None:
-
-                name = r.name or None
-                name_count = 1 if name else 0
-
-                insert_rows.append(
-                    (
-                        chain_id,
-                        r.store_id,
-                        r.item_code,
-                        name,
-                        name_count,
-                        r.manufacturer or None,
-                        r.manufacturer_country or None,
-                        r.item_type,
+            WHERE
+                store_products.name IS DISTINCT FROM EXCLUDED.name
+                OR store_products.manufacturer IS DISTINCT FROM
+                    COALESCE(
+                        store_products.manufacturer,
+                        EXCLUDED.manufacturer
                     )
-                )
-
-                continue
-
-            (
-                existing_name,
-                existing_count,
-                existing_mfr,
-                existing_country,
-                existing_type,
-            ) = current
-
-            name, name_count = _resolve_name(
-                existing_name,
-                existing_count,
-                r.name,
-            )
-
-            manufacturer = _resolve_fill_only(
-                existing_mfr,
-                r.manufacturer,
-            )
-
-            manufacturer_country = _resolve_fill_only(
-                existing_country,
-                r.manufacturer_country,
-            )
-
-            if (
-                name != existing_name
-                or name_count != existing_count
-                or manufacturer != existing_mfr
-                or manufacturer_country != existing_country
-                or r.item_type != existing_type
-            ):
-                update_rows.append(
-                    (
-                        name,
-                        name_count,
-                        manufacturer,
-                        manufacturer_country,
-                        r.item_type,
-                        chain_id,
-                        r.store_id,
-                        r.item_code,
+                OR store_products.manufacturer_country IS DISTINCT FROM
+                    COALESCE(
+                        store_products.manufacturer_country,
+                        EXCLUDED.manufacturer_country
                     )
-                )
-
-    if insert_rows:
-        with conn.cursor() as cur:
-            cur.executemany(
-                """
-                INSERT INTO store_products (
-                    chain_id,
-                    store_id,
-                    item_code,
-                    name,
-                    name_count,
-                    manufacturer,
-                    manufacturer_country,
-                    item_type
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (chain_id, store_id, item_code)
-                DO NOTHING
-                """,
-                insert_rows,
-            )
-
-    if update_rows:
-        with conn.cursor() as cur:
-            cur.executemany(
-                """
-                UPDATE store_products
-                SET
-                    name = %s,
-                    name_count = %s,
-                    manufacturer = %s,
-                    manufacturer_country = %s,
-                    item_type = %s,
-                    updated_at = now()
-                WHERE chain_id = %s
-                  AND store_id = %s
-                  AND item_code = %s
-                """,
-                update_rows,
-            )
-
+                OR store_products.item_type IS DISTINCT FROM EXCLUDED.item_type
+            """,
+            rows,
+        )
 
 def upsert_prices(
     conn,
@@ -883,10 +792,9 @@ def reconcile_removed_promotion_items(
     PromoFull snapshot.
     """
 
-    current_key_strings = [
-        f"{promotion_id}:{group_id}:{item_code}"
-        for promotion_id, group_id, item_code in current_keys
-    ]
+    current_promotion_ids = [k[0] for k in current_keys]
+    current_group_ids = [k[1] for k in current_keys]
+    current_item_codes = [k[2] for k in current_keys]
 
     with conn.cursor() as cur:
         cur.execute(
@@ -894,16 +802,21 @@ def reconcile_removed_promotion_items(
             DELETE FROM promotion_items
             WHERE chain_id = %s
               AND store_id = %s
-              AND (
-                    promotion_id || ':' ||
-                    group_id || ':' ||
-                    item_code
-                  ) <> ALL(%s)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(%s::text[], %s::text[], %s::text[])
+                      AS t(promotion_id, group_id, item_code)
+                  WHERE t.promotion_id = promotion_items.promotion_id
+                    AND t.group_id = promotion_items.group_id
+                    AND t.item_code = promotion_items.item_code
+              )
             """,
             (
                 chain_id,
                 store_id_text,
-                current_key_strings,
+                current_promotion_ids,
+                current_group_ids,
+                current_item_codes,
             ),
         )
 
@@ -992,10 +905,8 @@ def reconcile_removed_promotion_groups(
     PromoFull snapshot.
     """
 
-    current_key_strings = [
-        f"{promotion_id}:{group_id}"
-        for promotion_id, group_id in current_keys
-    ]
+    current_promotion_ids = [k[0] for k in current_keys]
+    current_group_ids = [k[1] for k in current_keys]
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1003,14 +914,19 @@ def reconcile_removed_promotion_groups(
             DELETE FROM promotion_groups
             WHERE chain_id = %s
               AND store_id = %s
-              AND (
-                    promotion_id || ':' || group_id
-                  ) <> ALL(%s)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(%s::text[], %s::text[])
+                      AS t(promotion_id, group_id)
+                  WHERE t.promotion_id = promotion_groups.promotion_id
+                    AND t.group_id = promotion_groups.group_id
+              )
             """,
             (
                 chain_id,
                 store_id_text,
-                current_key_strings,
+                current_promotion_ids,
+                current_group_ids,
             ),
         )
 
@@ -1039,6 +955,8 @@ def insert_file_tracking(conn, files):
         - downloaded can change from false -> true if the file
           now exists locally.
         - downloaded=true is never reverted.
+        - file_size is set/updated whenever a non-null value comes
+          in; never cleared back to null once known.
         - loaded is never modified.
     """
 
@@ -1050,26 +968,32 @@ def insert_file_tracking(conn, files):
             chain_id,
             sub_chain_id,
             store_id,
+            source,
             file_type,
             filename,
             file_date,
             downloaded,
+            file_size,
             loaded
         )
         VALUES (
             %(chain_id)s,
             %(sub_chain_id)s,
             %(store_id)s,
+            %(source)s,
             %(file_type)s,
             %(filename)s,
             %(file_date)s,
             %(downloaded)s,
+            %(file_size)s,
             false
         )
         ON CONFLICT (chain_id, filename)
         DO UPDATE SET
             downloaded =
-                file_tracking.downloaded OR EXCLUDED.downloaded
+                file_tracking.downloaded OR EXCLUDED.downloaded,
+            file_size =
+                COALESCE(EXCLUDED.file_size, file_tracking.file_size)
     """
 
     with conn.cursor() as cur:
@@ -1175,15 +1099,10 @@ def mark_files_loaded(conn, filenames):
 
 def get_downloaded_promofull_files(conn):
     """
-    Return downloaded but not yet loaded PromoFull files.
+    Return only the newest downloaded PromoFull per chain/store,
+    provided that it has not already been loaded.
 
-    Column order matches scheduler.py:
-        chain_id,
-        sub_chain_id,
-        store_id,
-        file_type,
-        filename,
-        file_date
+    Older PromoFull files are never returned once superseded.
     """
 
     query = """
@@ -1194,9 +1113,18 @@ def get_downloaded_promofull_files(conn):
             file_type,
             filename,
             file_date
-        FROM file_tracking
-        WHERE file_type = 'PromoFull'
-          AND downloaded = true
+        FROM (
+            SELECT
+                ft.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY chain_id, store_id
+                    ORDER BY filename DESC
+                ) AS rn
+            FROM file_tracking ft
+            WHERE file_type = 'PromoFull'
+              AND downloaded = true
+        ) latest
+        WHERE rn = 1
           AND loaded = false
         ORDER BY file_date, filename
     """
@@ -1219,6 +1147,7 @@ def get_downloaded_unloaded_promo_files(conn):
         WHERE p.file_type = 'Promo'
           AND p.downloaded = true
           AND p.loaded = false
+          AND p.file_date = CURRENT_DATE
 
           AND EXISTS (
               SELECT 1
@@ -1238,25 +1167,95 @@ def get_downloaded_unloaded_promo_files(conn):
         return cur.fetchall()
 
 
+def get_downloaded_pricefull_files(conn):
+    """
+    Return only the newest downloaded PriceFull per chain/store.
+
+    Older PriceFull files are never returned, even if they are
+    still marked downloaded but were already superseded physically.
+    """
+
+    query = """
+        SELECT
+            chain_id,
+            sub_chain_id,
+            store_id,
+            file_type,
+            filename,
+            file_date
+        FROM (
+            SELECT
+                ft.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY chain_id, store_id
+                    ORDER BY filename DESC
+                ) AS rn
+            FROM file_tracking ft
+            WHERE file_type = 'PriceFull'
+              AND downloaded = true
+        ) latest
+        WHERE rn = 1
+          AND loaded = false
+        ORDER BY file_date, filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+def get_downloaded_unloaded_price_files(conn):
+    query = """
+        SELECT
+            p.chain_id,
+            p.sub_chain_id,
+            p.store_id,
+            p.file_type,
+            p.filename,
+            p.file_date
+        FROM file_tracking p
+        WHERE p.file_type = 'Price'
+          AND p.downloaded = true
+          AND p.loaded = false
+          AND p.file_date = CURRENT_DATE
+
+          AND EXISTS (
+              SELECT 1
+              FROM file_tracking pf
+              WHERE pf.chain_id = p.chain_id
+                AND pf.store_id = p.store_id
+                AND pf.file_date = p.file_date
+                AND pf.file_type = 'PriceFull'
+                AND pf.loaded = true
+          )
+
+        ORDER BY p.file_date, p.filename
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchall()
+
+
 # --- email ---
 
 def get_nearby_store_ids(
     conn,
-    chain_id: str,
     lat: float,
     lon: float,
     max_distance_km: float,
-) -> list[str]:
+    chain_id: str | None = None,
+) -> list[tuple[str, str]]:
     """
-    Returns store_id values for the given chain within max_distance_km
+    Returns (chain_id, store_id) pairs for stores within max_distance_km
     of (lat, lon), using the existing PostGIS `location` column.
+
+    If chain_id is provided, only stores from that chain are returned.
     """
 
     query = """
-        SELECT store_id
+        SELECT chain_id, store_id
         FROM stores
-        WHERE chain_id = %s
-          AND location IS NOT NULL
+        WHERE location IS NOT NULL
           AND ST_DWithin(
               location,
               ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
@@ -1264,17 +1263,19 @@ def get_nearby_store_ids(
           )
     """
 
+    params = [
+        lon,
+        lat,
+        max_distance_km * 1000,
+    ]
+
+    if chain_id is not None:
+        query += " AND chain_id = %s"
+        params.append(chain_id)
+
     with conn.cursor() as cur:
-        cur.execute(
-            query,
-            (
-                chain_id,
-                lon,
-                lat,
-                max_distance_km * 1000,
-            ),
-        )
-        return [row[0] for row in cur.fetchall()]
+        cur.execute(query, params)
+        return cur.fetchall()
 
 
 def get_promotion_details(

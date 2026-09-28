@@ -1,0 +1,348 @@
+{
+    "5144744100002": {
+        "Chain_name_store_file": "משנת יוסף - קיי טי יבוא ושיווק בע\"מ",
+        "Chain_name_gov_page": "קיי.טי. יבוא ושיווק בע\"מ (משנת יוסף)",
+        "name_he_normalized": "משנת יוסף",
+        "name_en_normalized": "mishnat yosef",
+        "web_site": "https://mishnatyosef.org/",
+        "publishing_in": "https://chp-kt.pages.dev/",
+        "client": "MishnatYosefClient"
+    },
+    "7290000000003": {
+        "Chain_name_store_file": "סיטי מרקט",
+        "Chain_name_gov_page": "סיטי מרקט",
+        "name_he_normalized": "סיטי מרקט",
+        "name_en_normalized": "city market 2",
+        "web_site": "https://www.citymarket-shops.co.il/",
+        "publishing_in": "https://www.citymarket-shops.co.il/",
+        "client": "HtmlFileLinkClient"
+    },
+    "7290027600007": {
+        "Chain_name_store_file": "שופרסל",
+        "Chain_name_gov_page": "שופרסל בע\"מ (כולל רשת BE)",
+        "name_he_normalized": "שופרסל",
+        "name_en_normalized": "shufersal",
+        "web_site": "https://www.shufersal.co.il/online/",
+        "publishing_in" : "https://prices.shufersal.co.il/",
+        "client": "HtmlFileLinkClient"
+    },
+    "7290055700007": {
+        "Chain_name_store_file": "קרפור",
+        "Chain_name_gov_page": "גלובל ריטייל ק.י בע\"מ (קרפור, קוויק, ביתן אונליין)",
+        "name_he_normalized": "קרפור",
+        "name_en_normalized": "carrefour",
+        "web_site": "https://www.carrefour.co.il/",
+        "publishing_in": "https://prices.carrefour.co.il/",
+        "client": "CarrefourClient"
+    },
+    "7290058108879": {
+        "Chain_name_store_file": "אלמשהדאוי קינג סטור בע\"מ",
+        "Chain_name_gov_page": "אלמשהדאוי קינג סטור בע\"מ",
+        "name_he_normalized": "קינג סטור",
+        "name_en_normalized": "king store",
+        "web_site": "",
+        "publishing_in": "https://kingstore.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058134977": {
+        "Chain_name_store_file": "שפע ברכת השם בע\"מ",
+        "Chain_name_gov_page": "שפע ברכת השם בע\"מ",
+        "name_he_normalized": "שפע ברכת השם",
+        "name_en_normalized": "shefa bh",
+        "web_site": "https://shefa-bh.co.il/",
+        "publishing_in": "https://shefabirkathashem.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058140886": {
+        "Chain_name_store_file": "רמי לוי שיווק השקמה",
+        "Chain_name_gov_page": "רשת חנויות רמי לוי שיווק השקמה 2006 בע\"מ (כולל רשת סופר קופיקס וקוויק)",
+        "name_he_normalized": "רמי לוי",
+        "name_en_normalized": "rami levi",
+        "web_site": "https://www.rami-levy.co.il/he",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "RamiLevi",
+            "password": ""
+        }
+    },
+    "7290058148776": {
+        "Chain_name_store_file": "שוק העיר (ט.ע.מ.ס.) בע\"מ",
+        "Chain_name_gov_page": "שוק העיר (ט.ע.מ.ס) בע\"מ",
+        "name_he_normalized": "שוק העיר",
+        "name_en_normalized": "shuk city",
+        "web_site": "https://www.shukcity.co.il/",
+        "publishing_in": "https://shuk-hayir.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058156016": {
+        "Chain_name_store_file": "אבות אברהם בע\"מ",
+        "Chain_name_gov_page": "סופר ספיר בע\"מ",
+        "name_he_normalized": "סופר ספיר",
+        "name_en_normalized": "super sapir",
+        "web_site": "https://www.supersapir.co.il/",
+        "publishing_in": "https://supersapir.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058159628": {
+        "Chain_name_store_file": "ג.מ. מעיין אלפיים (07) בע\"מ",
+        "Chain_name_gov_page": "ג.מ מעיין אלפיים (07) בע\"מ",
+        "name_he_normalized": "מעיין 2000",
+        "name_en_normalized": "maayan2000",
+        "web_site": "https://branches.m2000.co.il/",
+        "publishing_in": "https://maayan2000.binaprojects.com/Main.aspx?",
+        "client": "BinaProjectsClient"
+    },
+    "7290058160839": {
+        "Chain_name_store_file": "נתיב החסד- סופר חסד בע\"מ",
+        "Chain_name_gov_page": "נתיב החסד - סופר חסד בע\"מ (כולל ברכל)",
+        "name_he_normalized": "נתיב החסד",
+        "name_en_normalized": "netiv hesed",
+        "web_site": "barnativ.co.il",
+        "publishing_in": "https://app.netiv-hesed.com/",
+        "client": "HtmlFileLinkClient"
+    },
+    "7290058173198": {
+        "Chain_name_store_file": "זול ובגדול בע\"מ",
+        "Chain_name_gov_page": "זול ובגדול בע\"מ",
+        "name_he_normalized": "זול ובגדול",
+        "name_en_normalized": "zol vbegadol",
+        "web_site": "",
+        "publishing_in": "https://zolvebegadol.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058177776": {
+        "Chain_name_store_file": "סופר יודה",
+        "Chain_name_gov_page": "פז קמעונאות ואנרגיה בע\"מ",
+        "name_he_normalized": "סופר יודה",
+        "name_en_normalized": "super yuda",
+        "web_site": "https://www.yuda.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "yuda_ho",
+            "password": "Yud@147"
+        }
+    },
+    "7290058197699": {
+        "Chain_name_store_file": "גוד פארם בע\"מ",
+        "Chain_name_gov_page": "גוד פארם בע\"מ",
+        "name_he_normalized": "גוד פארם",
+        "name_en_normalized": "good pharm",
+        "web_site": "https://goodpharm.co.il/",
+        "publishing_in": "https://goodpharm.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058249350": {
+        "Chain_name_store_file": "וולט מרקט",
+        "Chain_name_gov_page": "וולט אופריישנס סרוויסס ישראל בע\"מ",
+        "name_he_normalized": "וולט",
+        "name_en_normalized": "wolt",
+        "web_site": "https://explore.wolt.com/he/isr/wolt-market",
+        "publishing_in": "https://wm-gateway.wolt.com/isr-prices/public/v1/index.html",
+        "client": "WoltClient"
+    },
+    "7290058266241": {
+        "Chain_name_store_file": "סיטי צפריר בע\"מ",
+        "Chain_name_gov_page": "סיטי מרקט",
+        "name_he_normalized": "סיטי מרקט",
+        "name_en_normalized": "city market",
+        "web_site": "https://city-market.co.il/",
+        "publishing_in": "https://citymarketkiryatgat.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290058289400": {
+        "Chain_name_store_file": "קי טי יבוא ושווק בע\"מ",
+        "Chain_name_gov_page": "קיי.טי. יבוא ושיווק בע\"מ (משנת יוסף)",
+        "name_he_normalized": "קייטי מרקט",
+        "name_en_normalized": "kt market",
+        "web_site": "",
+        "publishing_in": "https://ktshivuk.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290103152017": {
+        "Chain_name_store_file": "אושר עד",
+        "Chain_name_gov_page": "מרב-מזון כל בע\"מ (אושר עד)",
+        "name_he_normalized": "אושר עד",
+        "name_en_normalized": "osher ad",
+        "web_site": "https://osherad.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "osherad",
+            "password": ""
+        }
+    },
+    "7290172900007": {
+        "Chain_name_store_file": "סופר פארם ישראל",
+        "Chain_name_gov_page": "סופר פארם (ישראל) בע\"מ",
+        "name_he_normalized": "סופר פארם",
+        "name_en_normalized": "super pharm",
+        "web_site": "https://shop.super-pharm.co.il/",
+        "publishing_in": "https://prices.super-pharm.co.il/",
+        "client": "HtmlFileLinkClient"
+    },
+    "7290455000004": {
+        "Chain_name_store_file": "",
+        "Chain_name_gov_page": "ח. כהן סוכנות מזון ומשקאות בע\"מ",
+        "name_he_normalized": "ח. כהן",
+        "name_en_normalized": "h cohen",
+        "web_site": "https://www.h-cohen.co.il/",
+        "publishing_in": "https://laibcatalog.co.il/hcohen/index.html",
+        "client": "LaibcatalogClient"
+    },
+    "7290492000005": {
+        "Chain_name_store_file": "Dor Alon",
+        "Chain_name_gov_page": "דור אלון ניהול מתחמים קמעונאיים בע\"מ",
+        "name_he_normalized": "דור אלון",
+        "name_en_normalized": "dor alon",
+        "web_site": "https://www.doralon.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "doralon",
+            "password": ""
+        }      
+    },
+    "7290526500006": {
+        "Chain_name_store_file": "Dabach",
+        "Chain_name_gov_page": "סאלח דבאח ובניו בע\"מ",
+        "name_he_normalized": "דבאח",
+        "name_en_normalized": "dabach",
+        "web_site": "https://www.bigdabach.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "SalachD",
+            "password": "12345"
+        }      
+    },
+    "7290639000004": {
+        "Chain_name_store_file": "סטופמרקט",
+        "Chain_name_gov_page": "סטופ מרקט בע\"מ",
+        "name_he_normalized": "סטופמרקט",
+        "name_en_normalized": "stopmarket",
+        "web_site": "https://www.stopmarket.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "Stop_Market",
+            "password": ""
+        }  
+    },
+    "7290696200003": {
+        "Chain_name_store_file": "ויקטורי",
+        "Chain_name_gov_page": "ויקטורי רשת סופרמרקטים בע\"מ",
+        "name_he_normalized": "ויקטורי",
+        "name_en_normalized": "victory",
+        "web_site": "https://www.victoryonline.co.il/",
+        "publishing_in": "https://laibcatalog.co.il/victory/index.html",
+        "client": "LaibcatalogClient"
+    },
+    "7290700100008": {
+        "Chain_name_store_file": "",
+        "Chain_name_gov_page": "כל בו חצי חינם בע\"מ",
+        "name_he_normalized": "חצי חינם",
+        "name_en_normalized": "hazi hinam",
+        "web_site": "https://shop.hazi-hinam.co.il/",
+        "publishing_in": "https://shop.hazi-hinam.co.il/Prices?",
+        "client": "HtmlFileLinkClient"
+    },
+    "7290785400000": {
+        "Chain_name_store_file": "קשת טעמים",
+        "Chain_name_gov_page": "קשת טעמים בע\"מ",
+        "name_he_normalized": "קשת טעמים",
+        "name_en_normalized": "keshet teamim",
+        "web_site": "https://www.keshet-teamim.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "Keshet",
+            "password": ""
+        }  
+        
+    },
+    "7290803800003": {
+        "Chain_name_store_file": "מ. יוחננוף ובניו",
+        "Chain_name_gov_page": "מ. יוחננוף ובניו (1988) בע\"מ",
+        "name_he_normalized": "יוחננוף",
+        "name_en_normalized": "yochananof",
+        "web_site": "https://yochananof.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "yohananof",
+            "password": ""
+        }  
+    },
+    "7290873255550": {
+        "Chain_name_store_file": "טיב טעם",
+        "Chain_name_gov_page": "טיב טעם רשתות בע\"מ",
+        "name_he_normalized": "טיב טעם",
+        "name_en_normalized": "tiv taam",
+        "web_site": "https://www.tivtaam.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "TivTaam",
+            "password": ""
+        }  
+    },
+    "7290875100001": {
+        "Chain_name_store_file": "סופר ברקת קמעונאות בע\"מ",
+        "Chain_name_gov_page": "עוף והודו ברקת - חנות המפעל בע\"מ",
+        "name_he_normalized": "סופר ברקת",
+        "name_en_normalized": "super bareket",
+        "web_site": "https://super-bareket.co.il/",
+        "publishing_in": "https://superbareket.binaprojects.com/Main.aspx",
+        "client": "BinaProjectsClient"
+    },
+    "7290876100000": {
+        "Chain_name_store_file": "פרש מרקט",
+        "Chain_name_gov_page": "פז קמעונאות ואנרגיה בע\"מ",
+        "name_he_normalized": "פרש מרקט",
+        "name_en_normalized": "freshmarket",
+        "web_site": "https://www.freshmarket.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "freshmarket",
+            "password": ""
+        }  
+    },
+    "7291059100008": {
+        "Chain_name_store_file": "פוליצר",
+        "Chain_name_gov_page": "פוליצר חדרה (1982) בע\"מ",
+        "name_he_normalized": "פוליצר",
+        "name_en_normalized": "politzer",
+        "web_site": "https://www.politzer-c.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "politzer",
+            "password": ""
+        }  
+    },
+    "7290661400001": {
+        "Chain_name_store_file": "מחסני השוק",
+        "Chain_name_gov_page": "כ.נ מחסני השוק בע\"מ",
+        "name_he_normalized": "מחסני השוק",
+        "name_en_normalized": "machsenei hashuk",
+        "web_site": "https://www.mck.co.il/",
+        "publishing_in": "https://laibcatalog.co.il/mshuk/index.html",
+        "client": "LaibcatalogClient"
+    },
+    "7290644700005": {
+        "Chain_name_store_file": "",
+        "Chain_name_gov_page": "פז קמעונאות ואנרגיה בע\"מ",
+        "name_he_normalized": "יילו",
+        "name_en_normalized": "yellow",
+        "web_site": "https://www.paz.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "Paz_bo",
+            "password": "paz468"
+        }  
+    }
+}

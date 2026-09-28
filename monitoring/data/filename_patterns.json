@@ -1,0 +1,263 @@
+{
+  "metadata": {
+    "file_tracking": "/home/dmin/metziah/data/reference/file_tracking.csv",
+    "total_records": 7953,
+    "unique_structures": 11
+  },
+  "structures": [
+    {
+      "structure": "{file_type}{chain_id}-{number}-{number}-{date}-{time}.gz",
+      "count": 7463,
+      "file_types": {
+        "Price": 2047,
+        "PriceFull": 2311,
+        "Promo": 812,
+        "PromoFull": 2293
+      },
+      "sources": {
+        "rami levi": 684,
+        "super yuda": 80,
+        "osher ad": 62,
+        "dor alon": 320,
+        "dabach": 20,
+        "stopmarket": 44,
+        "keshet teamim": 6,
+        "yochananof": 116,
+        "tiv taam": 122,
+        "freshmarket": 155,
+        "politzer": 38,
+        "yellow": 492,
+        "king store": 180,
+        "shefa bh": 96,
+        "shuk city": 150,
+        "super sapir": 372,
+        "maayan2000": 209,
+        "good pharm": 258,
+        "city market": 58,
+        "kt market": 20,
+        "super bareket": 27,
+        "h cohen": 40,
+        "victory": 539,
+        "machsenei hashuk": 429,
+        "carrefour": 431,
+        "hazi hinam": 81,
+        "super pharm": 623,
+        "shufersal": 1523,
+        "city market 2": 38,
+        "netiv hesed": 182,
+        "wolt": 68
+      },
+      "examples": [
+        "Price7290058140886-001-001-20260924-070011.gz",
+        "Price7290058140886-001-001-20260924-080001.gz",
+        "Price7290058140886-001-002-20260924-070011.gz",
+        "Price7290058140886-001-002-20260924-080001.gz",
+        "Price7290058140886-001-002-20260924-090009.gz",
+        "Price7290058140886-001-003-20260924-070013.gz",
+        "Price7290058140886-001-003-20260924-080018.gz",
+        "Price7290058140886-001-003-20260924-090008.gz",
+        "Price7290058140886-001-005-20260924-070002.gz",
+        "Price7290058140886-001-005-20260924-080012.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{number}.gz",
+      "count": 404,
+      "file_types": {
+        "PriceFull": 65,
+        "PromoFull": 68,
+        "Price": 160,
+        "Promo": 111
+      },
+      "sources": {
+        "rami levi": 2,
+        "super yuda": 15,
+        "keshet teamim": 132,
+        "zol vbegadol": 255
+      },
+      "examples": [
+        "pricefull7290058140886-039-202609240519.gz",
+        "promofull7290058140886-039-202609240519.gz",
+        "Price7290058177776-999-202609240600.gz",
+        "Price7290058177776-999-202609240700.gz",
+        "Price7290058177776-999-202609240800.gz",
+        "Price7290058177776-999-202609240900.gz",
+        "PriceFull7290058177776-999-202609240010.gz",
+        "PriceFull7290058177776-999-202609240110.gz",
+        "Promo7290058177776-999-202609240600.gz",
+        "Promo7290058177776-999-202609240700.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{number}",
+      "count": 54,
+      "file_types": {
+        "Price": 7,
+        "PriceFull": 25,
+        "PromoFull": 22
+      },
+      "sources": {
+        "city market 2": 54
+      },
+      "examples": [
+        "Price7290000000003-037-202609240856",
+        "Price7290000000003-013-202609240837",
+        "PriceFull7290000000003-066-202609240829",
+        "Price7290000000003-001-202609240817",
+        "Price7290000000003-013-202609240737",
+        "PriceFull7290000000003-066-202609240730",
+        "Price7290000000003-001-202609240317",
+        "Price7290000000003-013-202609240137",
+        "Price7290000000003-001-202609240117",
+        "PromoFull7290000000003-017-202609240104"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{date}-{time}.gz",
+      "count": 13,
+      "file_types": {
+        "Stores": 13
+      },
+      "sources": {
+        "king store": 2,
+        "shefa bh": 1,
+        "shuk city": 1,
+        "super sapir": 1,
+        "maayan2000": 1,
+        "good pharm": 1,
+        "city market": 1,
+        "kt market": 1,
+        "super bareket": 1,
+        "super pharm": 1,
+        "netiv hesed": 1,
+        "wolt": 1
+      },
+      "examples": [
+        "Stores7290058108879-000-20260924-043456.GZ",
+        "Stores7290058108879-000-20260924-024615.GZ",
+        "Stores7290058134977-000-20260924-053700.GZ",
+        "Stores7290058148776-000-20260924-053258.GZ",
+        "Stores7290058156016-000-20260924-050217.GZ",
+        "Stores7290058159628-000-20260924-043227.GZ",
+        "Stores7290058197699-000-20260924-043207.GZ",
+        "Stores7290058266241-000-20260924-023214.GZ",
+        "Stores7290058289400-000-20260924-023244.GZ",
+        "Stores7290875100001-000-20260924-043834.GZ"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{date}-{time}.xml",
+      "count": 11,
+      "file_types": {
+        "Stores": 11
+      },
+      "sources": {
+        "rami levi": 1,
+        "osher ad": 1,
+        "dor alon": 1,
+        "dabach": 1,
+        "stopmarket": 1,
+        "keshet teamim": 1,
+        "yochananof": 1,
+        "tiv taam": 1,
+        "politzer": 1,
+        "yellow": 1,
+        "carrefour": 1
+      },
+      "examples": [
+        "Stores7290058140886-000-20260924-050500.xml",
+        "Stores7290103152017-000-20260924-080500.xml",
+        "Stores7290492000005-000-20260924-020000.xml",
+        "Stores7290526500006-000-20260924-090000.xml",
+        "Stores7290639000004-000-20260924-055500.xml",
+        "Stores7290785400000-000-20260924-051000.xml",
+        "Stores7290803800003-000-20260924-010000.xml",
+        "Stores7290873255550-000-20260924-050500.xml",
+        "Stores7291059100008-000-20260924-051500.xml",
+        "Stores7290644700005-000-20260924-060000.xml"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{datetime}-{time}.gz",
+      "count": 3,
+      "file_types": {
+        "Stores": 3
+      },
+      "sources": {
+        "h cohen": 1,
+        "victory": 1,
+        "machsenei hashuk": 1
+      },
+      "examples": [
+        "Stores7290455000004-000-20260924060201-060201.gz",
+        "Stores7290696200003-000-20260924060100-060100.gz",
+        "Stores7290661400001-000-20260924060100-060100.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}Full{chain_id}-{number}-{date}-{time}.gz",
+      "count": 1,
+      "file_types": {
+        "Stores": 1
+      },
+      "sources": {
+        "hazi hinam": 1
+      },
+      "examples": [
+        "StoresFull7290700100008-000-20260924-010750.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}Full{chain_id}-{number}-{number}.gz",
+      "count": 1,
+      "file_types": {
+        "Stores": 1
+      },
+      "sources": {
+        "zol vbegadol": 1
+      },
+      "examples": [
+        "StoresFull7290058173198-000-202609240501.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{date}-{number}.gz",
+      "count": 1,
+      "file_types": {
+        "Stores": 1
+      },
+      "sources": {
+        "shufersal": 1
+      },
+      "examples": [
+        "Stores7290027600007-000-20260924-020.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{date}-{time}.xml.gz",
+      "count": 1,
+      "file_types": {
+        "Stores": 1
+      },
+      "sources": {
+        "mishnat yosef": 1
+      },
+      "examples": [
+        "Stores5144744100002-000-20260924-000000.xml.gz"
+      ]
+    },
+    {
+      "structure": "{file_type}{chain_id}-{number}-{number}-{date}-{time}.xml.gz",
+      "count": 1,
+      "file_types": {
+        "PriceFull": 1
+      },
+      "sources": {
+        "mishnat yosef": 1
+      },
+      "examples": [
+        "PriceFull5144744100002-001-001-20260924-000001.xml.gz"
+      ]
+    }
+  ]
+}

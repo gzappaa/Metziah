@@ -1,3 +1,13 @@
+"""
+models/product.py
+
+Defines the Product data model for supermarket product and price data.
+
+Stores product identity, store and chain information, pricing, quantities,
+manufacturer details, timestamps, and product status/flags.
+"""
+
+
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal

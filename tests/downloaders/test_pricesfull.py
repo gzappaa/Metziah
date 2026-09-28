@@ -1,393 +1,339 @@
-# tests/downloaders/test_pricesfull.py
-from unittest.mock import AsyncMock, MagicMock
+from datetime import date
+from pathlib import Path
 
 import pytest
 
-from downloaders import pricesfull
+from downloaders.pricesfull import (
+    download_pricefull_publishedprices,
+    download_pricefull_binaprojects,
+    download_pricefull_laibcatalog,
+    download_pricefull_carrefour,
+    download_pricefull_html,
+    download_pricefull_mishnatyosef,
+    download_pricefull_wolt,
+)
 
 
-# ---- parse_filename: pure regex logic ----
-
-def test_parse_filename_valid():
-    meta = pricesfull.parse_filename(
-        "PriceFull7290661400001-001-020-20260801-042307.gz"
-    )
-    assert meta == {
-        "chain": "7290661400001",
-        "subchain": "001",
-        "store": "020",
-        "date": "20260801",
-        "time": "042307",
-    }
+TODAY = date.today()
 
 
-def test_parse_filename_invalid_returns_none():
-    assert pricesfull.parse_filename("NotAMatch.gz") is None
-
-
-def test_parse_filename_wrong_prefix_returns_none():
-    # PromoFull, not PriceFull — should not match
-    assert pricesfull.parse_filename(
-        "PromoFull7290661400001-001-020-20260801-042307.gz"
-    ) is None
-
-
-def test_parse_filename_rejects_trailing_content():
-    assert pricesfull.parse_filename(
-        "PriceFull7290661400001-001-020-20260801-042307.gz.bak"
-    ) is None
-
-
-# ---- get_storage_path ----
-
-def test_get_storage_path(tmp_path):
-    meta = {"chain": "7290661400001", "subchain": "001", "store": "020"}
-
-    path = pricesfull.get_storage_path(meta, tmp_path)
-
-    assert path == (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "pricesfull"
+def _filename(chain="7290661400001", store="001", time="120000"):
+    return (
+        f"PriceFull{chain}-001-{store}-"
+        f"{TODAY:%Y%m%d}-{time}.gz"
     )
 
 
-# ---- download_pricefull ----
-
-def make_file_entry(store, date, time_):
+def _latest(filename=None):
+    filename = filename or _filename()
     return {
-        "fileName": f"PriceFull7290661400001-001-{store}-{date}-{time_}.gz"
+        "filename": filename,
+        "chain_id": "7290661400001",
+        "store_id": "1",
+        "file_date": TODAY,
     }
 
 
-@pytest.fixture
-def mock_client_class(monkeypatch):
-    instance = MagicMock()
-    instance.get_files = AsyncMock()
-    instance.build_download_url = MagicMock(
-        side_effect=lambda filename: f"https://fake/{filename}"
+def test_download_pricefull_publishedprices(monkeypatch, tmp_path):
+    class FakeClient:
+        BASE_URL = "https://example.com"
+
+        def __init__(self, username, password):
+            pass
+
+        def login(self):
+            pass
+
+        def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.PublishedPricesClient",
+        FakeClient,
     )
-    instance.download_file = AsyncMock(return_value=b"fake gz bytes")
-
-    client_class = MagicMock(return_value=instance)
-    monkeypatch.setattr(pricesfull, "LaibcatalogClient", client_class)
-
-    return instance
-
-
-@pytest.mark.asyncio
-async def test_downloads_new_file(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
-
-    await pricesfull.download_pricefull()
-
-    dest = (
-        tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-        / "PriceFull7290661400001-001-020-20260801-042307.gz"
+    monkeypatch.setattr(
+        "downloaders.pricesfull.list_publishedprices_entries_recursive",
+        lambda client: [],
     )
-    assert dest.exists()
-    assert dest.read_bytes() == b"fake gz bytes"
-
-
-@pytest.mark.asyncio
-async def test_skips_already_downloaded_file(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-    folder.mkdir(parents=True)
-    existing = folder / "PriceFull7290661400001-001-020-20260801-042307.gz"
-    existing.write_bytes(b"already here")
-
-    await pricesfull.download_pricefull()
-
-    assert existing.read_bytes() == b"already here"
-    mock_client_class.download_file.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_keeps_only_latest_per_store_per_day(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("020", "20260801", "090000"),
-        make_file_entry("020", "20260801", "050000"),
-    ]
-
-    await pricesfull.download_pricefull()
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-    remaining = list(folder.glob("PriceFull*.gz"))
-
-    assert len(remaining) == 1
-    assert "090000" in remaining[0].name
-
-
-@pytest.mark.asyncio
-async def test_removes_older_same_day_file_when_newer_downloaded(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-    folder.mkdir(parents=True)
-    old_file = folder / "PriceFull7290661400001-001-020-20260801-040000.gz"
-    old_file.write_bytes(b"stale")
-
-    await pricesfull.download_pricefull()
-
-    assert not old_file.exists()
-    new_file = folder / "PriceFull7290661400001-001-020-20260801-090000.gz"
-    assert new_file.exists()
-
-
-@pytest.mark.asyncio
-async def test_ignores_unmatched_filenames(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        {"fileName": "PriceFull_totally_wrong_format.gz"},
-    ]
-
-    await pricesfull.download_pricefull()
-
-    assert list(tmp_path.rglob("*.gz")) == []
-
-
-@pytest.mark.asyncio
-async def test_ignores_non_pricefull_files(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-        {"fileName": "PromoFull7290661400001-001-020-20260801-042307.gz"},
-    ]
-
-    await pricesfull.download_pricefull()
-
-    all_gz = list(tmp_path.rglob("*.gz"))
-    assert len(all_gz) == 1
-    assert "PriceFull" in all_gz[0].name
-
-
-@pytest.mark.asyncio
-async def test_dedup_is_per_store_not_global(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("020", "20260801", "090000"),
-        make_file_entry("021", "20260801", "050000"),
-        make_file_entry("021", "20260801", "060000"),
-        make_file_entry("022", "20260801", "070000"),
-    ]
-
-    await pricesfull.download_pricefull()
-
-    for store, expected_time in [("020", "090000"), ("021", "060000"), ("022", "070000")]:
-        folder = tmp_path / "7290661400001" / "001" / store / "pricesfull"
-        remaining = list(folder.glob("PriceFull*.gz"))
-        assert len(remaining) == 1
-        assert expected_time in remaining[0].name
-
-
-@pytest.mark.asyncio
-async def test_download_failure_does_not_block_remaining_files(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-        make_file_entry("021", "20260801", "042307"),
-        make_file_entry("022", "20260801", "042307"),
-    ]
-    mock_client_class.download_file.side_effect = [
-        b"ok bytes",
-        Exception("boom"),
-        b"ok bytes too",
-    ]
-
-    await pricesfull.download_pricefull()
-
-    assert (tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-            / "PriceFull7290661400001-001-020-20260801-042307.gz").exists()
-    assert not (tmp_path / "7290661400001" / "001" / "021" / "pricesfull"
-                / "PriceFull7290661400001-001-021-20260801-042307.gz").exists()
-    assert (tmp_path / "7290661400001" / "001" / "022" / "pricesfull"
-            / "PriceFull7290661400001-001-022-20260801-042307.gz").exists()
-
-
-@pytest.mark.asyncio
-async def test_old_same_day_file_preserved_when_download_fails(
-    monkeypatch, tmp_path, mock_client_class
-):
-    # Regression test for the ordering bug: old file must NOT be deleted
-    # if the new download fails.
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
-    mock_client_class.download_file.side_effect = Exception("boom")
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-    folder.mkdir(parents=True)
-    old_file = folder / "PriceFull7290661400001-001-020-20260801-040000.gz"
-    old_file.write_bytes(b"still valid")
-
-    await pricesfull.download_pricefull()
-
-    assert old_file.exists()
-    assert old_file.read_bytes() == b"still valid"
-
-
-@pytest.mark.asyncio
-async def test_get_files_failure_returns_early(monkeypatch, tmp_path, mock_client_class):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.side_effect = Exception("api down")
-
-    await pricesfull.download_pricefull()
-
-    assert list(tmp_path.rglob("*.gz")) == []
-
-
-@pytest.mark.asyncio
-async def test_previous_day_file_not_removed_by_same_day_cleanup(
-    monkeypatch, tmp_path, mock_client_class
-):
-    # Cleanup only targets same-day files; a prior day's PriceFull
-    # should survive (it's the historical record, per your
-    # valid_from/valid_to design).
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "090000"),
-    ]
-
-    folder = tmp_path / "7290661400001" / "001" / "020" / "pricesfull"
-    folder.mkdir(parents=True)
-    yesterday_file = folder / "PriceFull7290661400001-001-020-20260731-230000.gz"
-    yesterday_file.write_bytes(b"yesterday")
-
-    await pricesfull.download_pricefull()
-
-    assert yesterday_file.exists()
-
-
-@pytest.mark.asyncio
-async def test_test_mode_uses_test_data_dir_and_keeps_five_files(
-    monkeypatch, tmp_path, mock_client_class
-):
-    test_data_dir = tmp_path / "test_feeds"
-
-    monkeypatch.setattr(pricesfull, "TEST_DATA_DIR", test_data_dir)
-
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "040000"),
-        make_file_entry("021", "20260801", "040000"),
-        make_file_entry("022", "20260801", "040000"),
-        make_file_entry("023", "20260801", "040000"),
-        make_file_entry("024", "20260801", "040000"),
-        make_file_entry("025", "20260801", "040000"),
-    ]
-
-    downloaded = await pricesfull.download_pricefull(test=True)
-
-    assert len(downloaded) == 5
-    assert all(path.is_relative_to(test_data_dir) for path in downloaded)
-
-    stores = sorted(
-        path.parts[-3]
-        for path in test_data_dir.rglob("PriceFull*.gz")
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file",
+        lambda **kwargs: Path(tmp_path / kwargs["filename"]),
     )
 
-    assert stores == ["020", "021", "022", "023", "024"]
-
-@pytest.mark.asyncio
-async def test_test_mode_deletes_existing_test_data(
-    monkeypatch, tmp_path, mock_client_class
-):
-    test_data_dir = tmp_path / "test_feeds"
-    old_file = test_data_dir / "old" / "old.gz"
-
-    old_file.parent.mkdir(parents=True)
-    old_file.write_bytes(b"old data")
-
-    monkeypatch.setattr(pricesfull, "TEST_DATA_DIR", test_data_dir)
-
-    mock_client_class.get_files.return_value = [
-        make_file_entry("020", "20260801", "042307"),
-    ]
-
-    await pricesfull.download_pricefull(test=True)
-
-    assert not old_file.exists()
-
-    new_file = (
-        test_data_dir
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "pricesfull"
-        / "PriceFull7290661400001-001-020-20260801-042307.gz"
+    result = download_pricefull_publishedprices(
+        "Test",
+        "user",
+        "pass",
     )
 
-    assert new_file.exists()
+    assert result == [tmp_path / _filename()]
 
-@pytest.mark.asyncio
-async def test_returns_downloaded_paths(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
 
-    filename = "PriceFull7290661400001-001-020-20260801-042307.gz"
+def test_download_pricefull_publishedprices_login_failure(monkeypatch):
+    class FakeClient:
+        def __init__(self, username, password):
+            pass
 
-    mock_client_class.get_files.return_value = [
-        {"fileName": filename},
-    ]
+        def login(self):
+            raise RuntimeError("login failed")
 
-    result = await pricesfull.download_pricefull()
-
-    expected = (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "pricesfull"
-        / filename
+    monkeypatch.setattr(
+        "downloaders.pricesfull.PublishedPricesClient",
+        FakeClient,
     )
 
-    assert result == [expected]
-
-
-@pytest.mark.asyncio
-async def test_skipped_file_is_not_returned(
-    monkeypatch, tmp_path, mock_client_class
-):
-    monkeypatch.setattr(pricesfull, "DATA_DIR", tmp_path)
-
-    filename = "PriceFull7290661400001-001-020-20260801-042307.gz"
-
-    mock_client_class.get_files.return_value = [
-        {"fileName": filename},
-    ]
-
-    folder = (
-        tmp_path
-        / "7290661400001"
-        / "001"
-        / "020"
-        / "pricesfull"
+    result = download_pricefull_publishedprices(
+        "Test",
+        "user",
+        "pass",
     )
-    folder.mkdir(parents=True)
-
-    (folder / filename).write_bytes(b"existing")
-
-    result = await pricesfull.download_pricefull()
 
     assert result == []
+
+
+def test_download_pricefull_binaprojects(monkeypatch, tmp_path):
+    class FakeClient:
+        def __init__(self, url):
+            pass
+
+        def get_hok_files(self, file_type):
+            assert file_type == 4
+            return []
+
+        def download_file(self, filename):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.BinaProjectsClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.filter_ignored_bina_stores",
+        lambda files, *args: files,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file",
+        lambda **kwargs: Path(tmp_path / kwargs["filename"]),
+    )
+
+    result = download_pricefull_binaprojects("Test", "url")
+
+    assert result == [tmp_path / _filename()]
+
+
+@pytest.mark.asyncio
+async def test_download_pricefull_laibcatalog(monkeypatch, tmp_path):
+    class FakeClient:
+        def __init__(self, chain_id):
+            pass
+
+        async def get_files(self):
+            return []
+
+        def build_download_url(self, filename):
+            return "https://example.com/" + filename
+
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.LaibcatalogClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file_async",
+        lambda **kwargs: _async_path(tmp_path, kwargs["filename"]),
+    )
+
+    result = await download_pricefull_laibcatalog(
+        "Test",
+        "url",
+        "7290661400001",
+    )
+
+    assert result == [tmp_path / _filename()]
+
+
+@pytest.mark.asyncio
+async def test_download_pricefull_carrefour(monkeypatch, tmp_path):
+    class FakeClient:
+        base_url = "https://example.com"
+
+        async def get_files(self):
+            return {
+                "path": "/files",
+                "files": [],
+            }
+
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.CarrefourClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.normalize_carrefour_listing",
+        lambda files: files,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file_async",
+        lambda **kwargs: _async_path(tmp_path, kwargs["filename"]),
+    )
+
+    result = await download_pricefull_carrefour()
+
+    assert result == [tmp_path / _filename()]
+
+
+@pytest.mark.asyncio
+async def test_download_pricefull_html(monkeypatch, tmp_path):
+    class Candidate:
+        def __init__(self):
+            self.filename = _filename()
+            self.href = "https://example.com/file.gz"
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.HtmlFileLinkClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull._load_html_cache",
+        lambda name: [Candidate()],
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.parse_filename",
+        lambda filename: {
+            "file_type": "PriceFull",
+            "chain_id": "7290661400001",
+            "store_id": "1",
+            "file_date": TODAY,
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file_async",
+        lambda **kwargs: _async_path(tmp_path, kwargs["filename"]),
+    )
+
+    result = await download_pricefull_html(
+        {
+            "name": "Test",
+            "listing": {"base_url": "https://example.com"},
+            "extraction_mode": "test",
+            "filename_source": "test",
+        }
+    )
+
+    assert result == [tmp_path / _filename()]
+
+
+@pytest.mark.asyncio
+async def test_download_pricefull_mishnatyosef(monkeypatch, tmp_path):
+    class FakeClient:
+        async def get_files(self):
+            return []
+
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.MishnatYosefClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.normalize_mishnatyosef_listing",
+        lambda *args: ([{"filename": _filename()}], {
+            _filename(): "https://example.com/file.gz"
+        }),
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file_async",
+        lambda **kwargs: _async_path(tmp_path, kwargs["filename"]),
+    )
+
+    result = await download_pricefull_mishnatyosef()
+
+    assert result == [tmp_path / _filename()]
+
+
+@pytest.mark.asyncio
+async def test_download_pricefull_wolt(monkeypatch, tmp_path):
+    class FakeClient:
+        async def get_date_pages(self):
+            return ["2026-09-23"]
+
+        async def get_files(self, page):
+            return ["https://example.com/" + _filename()]
+
+        async def download_file(self, url):
+            return b"data"
+
+    monkeypatch.setattr(
+        "downloaders.pricesfull.WoltClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.normalize_wolt_file_urls",
+        lambda urls: (
+            [{"filename": _filename()}],
+            {_filename(): "https://example.com/" + _filename()},
+        ),
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.find_latest_full_files_per_store",
+        lambda *args, **kwargs: {
+            ("chain", "store"): _latest()
+        },
+    )
+    monkeypatch.setattr(
+        "downloaders.pricesfull.save_full_file_async",
+        lambda **kwargs: _async_path(tmp_path, kwargs["filename"]),
+    )
+
+    result = await download_pricefull_wolt()
+
+    assert result == [tmp_path / _filename()]
+
+
+async def _async_path(tmp_path, filename):
+    return tmp_path / filename

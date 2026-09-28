@@ -30,7 +30,9 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- ============================================================
 
 CREATE TABLE chains (
-    chain_id TEXT PRIMARY KEY
+    chain_id           TEXT PRIMARY KEY,
+    name_he_normalized TEXT NOT NULL,
+    name_en_normalized TEXT NOT NULL
 );
 
 
@@ -126,6 +128,7 @@ CREATE TABLE file_tracking (
     chain_id      TEXT NOT NULL REFERENCES chains(chain_id),
     sub_chain_id  TEXT,
     store_id      TEXT,
+    source        TEXT NOT NULL,
     file_type     TEXT NOT NULL CHECK (
         file_type IN (
             'PriceFull',
@@ -140,6 +143,7 @@ CREATE TABLE file_tracking (
     downloaded    BOOLEAN NOT NULL DEFAULT false,
     loaded        BOOLEAN NOT NULL DEFAULT false,
     updated_at    TIMESTAMPTZ DEFAULT now(),
+    file_size BIGINT,
 
     CHECK (
         (file_type = 'Stores' AND store_id IS NULL)
@@ -149,7 +153,6 @@ CREATE TABLE file_tracking (
 
     UNIQUE (chain_id, filename)
 );
-
 
 -- Promo delta files:
 -- multiple files per store/day are allowed.
@@ -179,7 +182,6 @@ WHERE loaded = false;
 CREATE TABLE products (
     item_code             TEXT PRIMARY KEY,
     name                  TEXT,
-    name_count            INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,
@@ -276,15 +278,6 @@ ON prices (store_id, item_code);
 
 CREATE INDEX idx_prices_item_store
 ON prices (item_code, store_id);
-
-
--- ============================================================
--- PRICES PARTITIONS
--- ============================================================
-
-CREATE TABLE prices_7290661400001
-PARTITION OF prices
-FOR VALUES IN ('7290661400001');
 
 
 -- ============================================================
@@ -414,11 +407,3 @@ ON promotion_items (store_id, item_code);
 CREATE INDEX idx_promotion_items_item_store
 ON promotion_items (item_code, store_id);
 
-
--- ============================================================
--- PROMOTION_ITEMS PARTITIONS
--- ============================================================
-
-CREATE TABLE promotion_items_7290661400001
-PARTITION OF promotion_items
-FOR VALUES IN ('7290661400001');

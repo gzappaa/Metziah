@@ -1,304 +1,549 @@
-# tests/clients/test_laibcatalog.py
+from unittest.mock import AsyncMock, Mock, call
+
 import httpx
 import pytest
-import respx
 
 from clients.laibcatalog import LaibcatalogClient
 
 
-CHAIN_ID = "7290661400001"
-GETFILES_URL = "https://laibcatalog.co.il/webapi/api/getfiles"
-
-
-@pytest.fixture(autouse=True)
-def no_real_sleep(monkeypatch):
-    async def fake_sleep(seconds):
-        pass
-    monkeypatch.setattr("clients.laibcatalog.asyncio.sleep", fake_sleep)
-
-
 @pytest.fixture
 def client():
-    return LaibcatalogClient(CHAIN_ID)
+    return LaibcatalogClient(
+        "7290661400001"
+    )
 
 
-# ---- build_download_url: pure logic, no mocking ----
+def make_response(
+    *,
+    content=b"",
+    json_data=None,
+    status_code=200,
+    url="https://laibcatalog.co.il",
+):
+    response = Mock(spec=httpx.Response)
 
-def test_build_download_url(client):
-    url = client.build_download_url("PriceFull7290661400001-001-001.gz")
-    assert url == (
+    response.content = content
+    response.status_code = status_code
+    response.url = httpx.URL(url)
+
+    if json_data is not None:
+        response.json.return_value = json_data
+
+    return response
+
+
+def setup_async_client(
+    monkeypatch,
+    get,
+):
+    async_client = Mock()
+
+    async_client.__aenter__ = AsyncMock(
+        return_value=async_client
+    )
+    async_client.__aexit__ = AsyncMock(
+        return_value=None
+    )
+    async_client.get = get
+
+    async_client_class = Mock(
+        return_value=async_client
+    )
+
+    monkeypatch.setattr(
+        "clients.laibcatalog.httpx.AsyncClient",
+        async_client_class,
+    )
+
+    return async_client, async_client_class
+
+
+def test_init(client):
+    assert client.chain_id == "7290661400001"
+    assert client.source_url == (
         "https://laibcatalog.co.il"
-        "/webapi/7290661400001/PriceFull7290661400001-001-001.gz"
     )
 
 
-# ---- get_files ----
-
 @pytest.mark.asyncio
-@respx.mock
-async def test_get_files_sends_edi_param(client):
-    route = respx.get(GETFILES_URL).mock(
-        return_value=httpx.Response(200, json={"files": []})
+async def test_get_with_retry_success(
+    client,
+    monkeypatch,
+):
+    response = make_response(
+        status_code=200,
     )
 
-    await client.get_files()
+    response.raise_for_status = Mock()
 
-    assert route.called
-    request = route.calls[0].request
-    assert request.url.params["edi"] == CHAIN_ID
-    assert "branchNumber" not in request.url.params
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_includes_branch_number_when_given(client):
-    route = respx.get(GETFILES_URL).mock(
-        return_value=httpx.Response(200, json={"files": []})
+    get = AsyncMock(
+        return_value=response
     )
 
-    await client.get_files(branch_number="020")
-
-    request = route.calls[0].request
-    assert request.url.params["branchNumber"] == "020"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_returns_parsed_json(client):
-    respx.get(GETFILES_URL).mock(
-        return_value=httpx.Response(200, json={"files": [{"name": "x.gz"}]})
+    async_client, async_client_class = (
+        setup_async_client(
+            monkeypatch,
+            get,
+        )
     )
 
-    result = await client.get_files()
-
-    assert result == {"files": [{"name": "x.gz"}]}
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_raises_on_http_error(client):
-    respx.get(GETFILES_URL).mock(return_value=httpx.Response(500))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await client.get_files()
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_raises_on_network_error(client):
-    respx.get(GETFILES_URL).mock(side_effect=httpx.ConnectError("boom"))
-
-    with pytest.raises(httpx.ConnectError):
-        await client.get_files()
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_raises_on_malformed_json(client):
-    # 200 status but a body that isn't valid JSON (e.g. an HTML error page)
-    respx.get(GETFILES_URL).mock(
-        return_value=httpx.Response(200, content=b"<html>not json</html>")
+    result = await client._get_with_retry(
+        "https://example.com/test",
     )
 
-    with pytest.raises(ValueError):  # httpx raises json.JSONDecodeError, a ValueError subclass
-        await client.get_files()
+    assert result is response
 
+    async_client_class.assert_called_once_with(
+        timeout=client.TIMEOUT
+    )
 
-# ---- download_file ----
+    get.assert_awaited_once_with(
+        "https://example.com/test",
+        params=None,
+    )
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_download_file_returns_bytes(client):
-    url = "https://laibcatalog.co.il/webapi/7290661400001/Price.gz"
-    respx.get(url).mock(return_value=httpx.Response(200, content=b"gzipbytes"))
+    response.raise_for_status.assert_called_once()
 
-    content = await client.download_file(url)
-
-    assert content == b"gzipbytes"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_download_file_raises_on_http_error(client):
-    url = "https://laibcatalog.co.il/webapi/7290661400001/Price.gz"
-    respx.get(url).mock(return_value=httpx.Response(404))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await client.download_file(url)
+    async_client.__aenter__.assert_awaited_once()
+    async_client.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_download_file_raises_on_network_error(client):
-    url = "https://laibcatalog.co.il/webapi/7290661400001/Price.gz"
-    respx.get(url).mock(side_effect=httpx.ConnectError("boom"))
+async def test_get_with_retry_passes_params(
+    client,
+    monkeypatch,
+):
+    response = make_response()
 
-    with pytest.raises(httpx.ConnectError):
-        await client.download_file(url)
+    response.raise_for_status = Mock()
 
-# ---- retry behavior ----
+    get = AsyncMock(
+        return_value=response
+    )
+
+    setup_async_client(
+        monkeypatch,
+        get,
+    )
+
+    params = {
+        "edi": "7290661400001",
+        "branchNumber": "123",
+    }
+
+    result = await client._get_with_retry(
+        "https://example.com/test",
+        params=params,
+    )
+
+    assert result is response
+
+    get.assert_awaited_once_with(
+        "https://example.com/test",
+        params=params,
+    )
+
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_get_files_retries_then_succeeds(client):
-    route = respx.get(GETFILES_URL).mock(
+async def test_get_with_retry_retries_timeout(
+    client,
+    monkeypatch,
+):
+    response = make_response()
+
+    response.raise_for_status = Mock()
+
+    get = AsyncMock(
         side_effect=[
-            httpx.ConnectError("boom"),
-            httpx.ConnectError("boom"),
-            httpx.Response(200, json={"files": []}),
+            httpx.TimeoutException("timeout"),
+            httpx.TimeoutException("timeout"),
+            response,
         ]
     )
 
-    result = await client.get_files()
-
-    assert result == {"files": []}
-    assert route.call_count == 3
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_gives_up_after_max_retries(client):
-    route = respx.get(GETFILES_URL).mock(
-        side_effect=httpx.ConnectError("boom")
+    setup_async_client(
+        monkeypatch,
+        get,
     )
 
-    with pytest.raises(httpx.ConnectError):
-        await client.get_files()
-
-    assert route.call_count == client.MAX_RETRIES
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_does_not_retry_on_http_status_error(client):
-    route = respx.get(GETFILES_URL).mock(return_value=httpx.Response(500))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await client.get_files()
-
-    assert route.call_count == 1  # no retry on 4xx/5xx
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_retries_on_timeout_too(client):
-    route = respx.get(GETFILES_URL).mock(
-        side_effect=[
-            httpx.ReadTimeout("timed out"),
-            httpx.Response(200, json={"files": []}),
-        ]
-    )
-
-    result = await client.get_files()
-
-    assert result == {"files": []}
-    assert route.call_count == 2
-
-
-# same shape for download_file
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_download_file_retries_then_succeeds(client):
-    url = "https://laibcatalog.co.il/webapi/7290661400001/Price.gz"
-    route = respx.get(url).mock(
-        side_effect=[
-            httpx.ConnectError("boom"),
-            httpx.Response(200, content=b"gzipbytes"),
-        ]
-    )
-
-    content = await client.download_file(url)
-
-    assert content == b"gzipbytes"
-    assert route.call_count == 2
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_download_file_does_not_retry_on_http_status_error(client):
-    url = "https://laibcatalog.co.il/webapi/7290661400001/Price.gz"
-    route = respx.get(url).mock(return_value=httpx.Response(404))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await client.download_file(url)
-
-    assert route.call_count == 1
-
-# ---- retry backoff ----
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_get_files_uses_configured_backoff(client, monkeypatch):
-    sleep_calls = []
-
-    async def fake_sleep(seconds):
-        sleep_calls.append(seconds)
+    sleep = AsyncMock()
 
     monkeypatch.setattr(
         "clients.laibcatalog.asyncio.sleep",
-        fake_sleep,
+        sleep,
     )
 
-    respx.get(GETFILES_URL).mock(
+    result = await client._get_with_retry(
+        "https://example.com/test",
+    )
+
+    assert result is response
+
+    assert get.await_count == 3
+
+    assert sleep.await_args_list == [
+        call(2),
+        call(4),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_with_retry_retries_connect_error(
+    client,
+    monkeypatch,
+):
+    response = make_response()
+
+    response.raise_for_status = Mock()
+
+    get = AsyncMock(
         side_effect=[
-            httpx.ConnectError("boom"),
-            httpx.ConnectError("boom"),
-            httpx.Response(200, json={"files": []}),
+            httpx.ConnectError(
+                "connection failed"
+            ),
+            response,
         ]
     )
 
-    await client.get_files()
+    setup_async_client(
+        monkeypatch,
+        get,
+    )
 
-    assert sleep_calls == [2, 4]
+    sleep = AsyncMock()
 
-# ---- logging behavior ----
+    monkeypatch.setattr(
+        "clients.laibcatalog.asyncio.sleep",
+        sleep,
+    )
+
+    result = await client._get_with_retry(
+        "https://example.com/test",
+    )
+
+    assert result is response
+
+    assert get.await_count == 2
+
+    sleep.assert_awaited_once_with(2)
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_retry_logs_warning(client, caplog):
-    respx.get(GETFILES_URL).mock(
-        side_effect=[
-            httpx.ConnectError("boom"),
-            httpx.Response(200, json={"files": []}),
-        ]
+async def test_get_with_retry_raises_after_all_retries(
+    client,
+    monkeypatch,
+):
+    error = httpx.TimeoutException(
+        "timeout"
     )
 
-    with caplog.at_level("WARNING", logger="clients.laibcatalog"):
-        await client.get_files()
+    get = AsyncMock(
+        side_effect=error
+    )
 
-    assert "Attempt 1/3 failed" in caplog.text
-    assert GETFILES_URL in caplog.text
-    assert "boom" in caplog.text
+    setup_async_client(
+        monkeypatch,
+        get,
+    )
+
+    sleep = AsyncMock()
+
+    monkeypatch.setattr(
+        "clients.laibcatalog.asyncio.sleep",
+        sleep,
+    )
+
+    with pytest.raises(
+        httpx.TimeoutException,
+        match="timeout",
+    ):
+        await client._get_with_retry(
+            "https://example.com/test",
+        )
+
+    assert get.await_count == 3
+
+    assert sleep.await_args_list == [
+        call(2),
+        call(4),
+    ]
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_all_retries_failed_logs_error(client, caplog):
-    respx.get(GETFILES_URL).mock(
-        side_effect=httpx.ConnectError("boom")
+async def test_get_with_retry_does_not_retry_http_error(
+    client,
+    monkeypatch,
+):
+    response = make_response(
+        status_code=404,
     )
 
-    with caplog.at_level("ERROR", logger="clients.laibcatalog"):
-        with pytest.raises(httpx.ConnectError):
-            await client.get_files()
+    error = httpx.HTTPStatusError(
+        "404",
+        request=Mock(),
+        response=response,
+    )
 
-    assert "All 3 attempts failed" in caplog.text
-    assert GETFILES_URL in caplog.text
+    response.raise_for_status = Mock(
+        side_effect=error
+    )
+
+    get = AsyncMock(
+        return_value=response
+    )
+
+    setup_async_client(
+        monkeypatch,
+        get,
+    )
+
+    sleep = AsyncMock()
+
+    monkeypatch.setattr(
+        "clients.laibcatalog.asyncio.sleep",
+        sleep,
+    )
+
+    with pytest.raises(
+        httpx.HTTPStatusError,
+        match="404",
+    ):
+        await client._get_with_retry(
+            "https://example.com/test",
+        )
+
+    get.assert_awaited_once_with(
+        "https://example.com/test",
+        params=None,
+    )
+
+    sleep.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_http_error_logs_error(client, caplog):
-    respx.get(GETFILES_URL).mock(
-        return_value=httpx.Response(500)
+async def test_get_files_without_branch(
+    client,
+    monkeypatch,
+):
+    expected = [
+        {
+            "FileNm": "price.xml",
+            "FileType": 2,
+        },
+        {
+            "FileNm": "pricefull.xml",
+            "FileType": 4,
+        },
+    ]
+
+    response = make_response(
+        json_data=expected,
     )
 
-    with caplog.at_level("ERROR", logger="clients.laibcatalog"):
-        with pytest.raises(httpx.HTTPStatusError):
-            await client.get_files()
+    get = AsyncMock(
+        return_value=response
+    )
 
-    assert "HTTP error for" in caplog.text
-    assert GETFILES_URL in caplog.text
+    get_with_retry = AsyncMock(
+        return_value=response
+    )
+
+    monkeypatch.setattr(
+        client,
+        "_get_with_retry",
+        get_with_retry,
+    )
+
+    result = await client.get_files()
+
+    assert result == expected
+
+    get_with_retry.assert_awaited_once_with(
+        "https://laibcatalog.co.il"
+        "/webapi/api/getfiles",
+        params={
+            "edi": "7290661400001",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_files_with_branch(
+    client,
+    monkeypatch,
+):
+    expected = [
+        {
+            "FileNm": "price.xml",
+            "Branch": "123",
+        }
+    ]
+
+    response = make_response(
+        json_data=expected,
+    )
+
+    get_with_retry = AsyncMock(
+        return_value=response
+    )
+
+    monkeypatch.setattr(
+        client,
+        "_get_with_retry",
+        get_with_retry,
+    )
+
+    result = await client.get_files(
+        branch_number="123"
+    )
+
+    assert result == expected
+
+    get_with_retry.assert_awaited_once_with(
+        "https://laibcatalog.co.il"
+        "/webapi/api/getfiles",
+        params={
+            "edi": "7290661400001",
+            "branchNumber": "123",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "branch_number",
+    [
+        None,
+        "",
+        0,
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_files_omits_falsy_branch_number(
+    client,
+    monkeypatch,
+    branch_number,
+):
+    response = make_response(
+        json_data=[],
+    )
+
+    get_with_retry = AsyncMock(
+        return_value=response
+    )
+
+    monkeypatch.setattr(
+        client,
+        "_get_with_retry",
+        get_with_retry,
+    )
+
+    result = await client.get_files(
+        branch_number=branch_number
+    )
+
+    assert result == []
+
+    get_with_retry.assert_awaited_once_with(
+        "https://laibcatalog.co.il"
+        "/webapi/api/getfiles",
+        params={
+            "edi": "7290661400001",
+        },
+    )
+
+
+def test_build_download_url(client):
+    result = client.build_download_url(
+        "price.xml"
+    )
+
+    assert result == (
+        "https://laibcatalog.co.il"
+        "/webapi/7290661400001/price.xml"
+    )
+
+
+def test_build_download_url_with_path(
+    client,
+):
+    result = client.build_download_url(
+        "folder/price.xml"
+    )
+
+    assert result == (
+        "https://laibcatalog.co.il"
+        "/webapi/7290661400001/"
+        "folder/price.xml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_file(
+    client,
+    monkeypatch,
+):
+    response = make_response(
+        content=b"file contents",
+    )
+
+    get_with_retry = AsyncMock(
+        return_value=response
+    )
+
+    monkeypatch.setattr(
+        client,
+        "_get_with_retry",
+        get_with_retry,
+    )
+
+    url = (
+        "https://laibcatalog.co.il"
+        "/webapi/7290661400001/price.xml"
+    )
+
+    result = await client.download_file(
+        url
+    )
+
+    assert result == b"file contents"
+
+    get_with_retry.assert_awaited_once_with(
+        url
+    )
+
+
+@pytest.mark.asyncio
+async def test_check(
+    client,
+    monkeypatch,
+):
+    files = [
+        {
+            "FileNm": "price.xml",
+            "FileType": 2,
+        },
+        {
+            "FileNm": "pricefull.xml",
+            "FileType": 4,
+        },
+    ]
+
+    get_files = AsyncMock(
+        return_value=files
+    )
+
+    monkeypatch.setattr(
+        client,
+        "get_files",
+        get_files,
+    )
+
+    result = await client.check()
+
+    assert result == {
+        "chain_id": "7290661400001",
+        "url": "https://laibcatalog.co.il",
+        "files": files,
+    }
+
+    get_files.assert_awaited_once_with()
