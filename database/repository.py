@@ -1099,15 +1099,10 @@ def mark_files_loaded(conn, filenames):
 
 def get_downloaded_promofull_files(conn):
     """
-    Return downloaded but not yet loaded PromoFull files.
+    Return only the newest downloaded PromoFull per chain/store,
+    provided that it has not already been loaded.
 
-    Column order matches scheduler.py:
-        chain_id,
-        sub_chain_id,
-        store_id,
-        file_type,
-        filename,
-        file_date
+    Older PromoFull files are never returned once superseded.
     """
 
     query = """
@@ -1118,9 +1113,18 @@ def get_downloaded_promofull_files(conn):
             file_type,
             filename,
             file_date
-        FROM file_tracking
-        WHERE file_type = 'PromoFull'
-          AND downloaded = true
+        FROM (
+            SELECT
+                ft.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY chain_id, store_id
+                    ORDER BY filename DESC
+                ) AS rn
+            FROM file_tracking ft
+            WHERE file_type = 'PromoFull'
+              AND downloaded = true
+        ) latest
+        WHERE rn = 1
           AND loaded = false
         ORDER BY file_date, filename
     """
@@ -1165,15 +1169,10 @@ def get_downloaded_unloaded_promo_files(conn):
 
 def get_downloaded_pricefull_files(conn):
     """
-    Return downloaded but not yet loaded PriceFull files.
+    Return only the newest downloaded PriceFull per chain/store.
 
-    Column order matches scheduler.py:
-        chain_id,
-        sub_chain_id,
-        store_id,
-        file_type,
-        filename,
-        file_date
+    Older PriceFull files are never returned, even if they are
+    still marked downloaded but were already superseded physically.
     """
 
     query = """
@@ -1184,9 +1183,18 @@ def get_downloaded_pricefull_files(conn):
             file_type,
             filename,
             file_date
-        FROM file_tracking
-        WHERE file_type = 'PriceFull'
-          AND downloaded = true
+        FROM (
+            SELECT
+                ft.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY chain_id, store_id
+                    ORDER BY filename DESC
+                ) AS rn
+            FROM file_tracking ft
+            WHERE file_type = 'PriceFull'
+              AND downloaded = true
+        ) latest
+        WHERE rn = 1
           AND loaded = false
         ORDER BY file_date, filename
     """
@@ -1194,7 +1202,6 @@ def get_downloaded_pricefull_files(conn):
     with conn.cursor() as cur:
         cur.execute(query)
         return cur.fetchall()
-
 
 def get_downloaded_unloaded_price_files(conn):
     query = """

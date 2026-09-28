@@ -392,7 +392,7 @@ def test_mark_files_loaded_only_flips_unloaded(conn, test_store):
     assert mark_files_loaded(conn, [filename]) == 0
 
 
-def test_get_downloaded_pricefull_files_filters_type_downloaded_loaded(
+def test_get_downloaded_pricefull_files_returns_only_newest_unloaded(
     conn,
     test_store,
 ):
@@ -423,7 +423,7 @@ def test_get_downloaded_pricefull_files_filters_type_downloaded_loaded(
                 "PriceFull_003.gz",
                 store_id,
                 downloaded=True,
-                loaded=True,
+                loaded=False,
                 file_type="PriceFull",
             ),
             _file_record(
@@ -445,7 +445,7 @@ def test_get_downloaded_pricefull_files_filters_type_downloaded_loaded(
         if row[0] == chain_id and row[2] == store_id
     }
 
-    assert filenames == {"PriceFull_001.gz", "PriceFull_003.gz"}
+    assert filenames == {"PriceFull_003.gz"}
 
 
 def test_get_latest_downloaded_price_files_picks_newest_when_nothing_loaded(

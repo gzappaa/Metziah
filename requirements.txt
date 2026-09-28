@@ -13,8 +13,8 @@ lxml==6.1.1
 
 # Testing
 pytest==9.1.1
-pytest-asyncio
-respx
+pytest-asyncio==1.4.0
+respx==0.23.1
 
 # Monitoring / HTML parsing
 beautifulsoup4==4.15.0

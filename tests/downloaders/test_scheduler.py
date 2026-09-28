@@ -563,6 +563,32 @@ def test_run_prices_passes_test_flag(monkeypatch):
         download,
     )
 
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(return_value=set()),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=[]),
+    )
+
     scheduler.run_prices_and_load()
 
     download.assert_awaited_once_with(test=True)
@@ -581,6 +607,32 @@ def test_run_prices_passes_test_false(monkeypatch):
         scheduler,
         "download_prices",
         download,
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_chain_metadata",
+        MagicMock(return_value={}),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_load_ignored_price_stores",
+        MagicMock(return_value=set()),
+    )
+
+    mock_conn(monkeypatch)
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_pricefull_files",
+        MagicMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_downloaded_unloaded_price_files",
+        MagicMock(return_value=[]),
     )
 
     scheduler.run_prices_and_load()
