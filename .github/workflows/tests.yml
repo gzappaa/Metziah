@@ -96,4 +96,4 @@ jobs:
             -f database/migrations/002_chain_partitions.sql
 
       - name: Run tests
-        run: pytest
+        run: pytest --import-mode=importlib
