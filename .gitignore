@@ -32,3 +32,6 @@ monitoring/data/filename_chains.json
 monitoring/data/store_duplicates.json
 monitoring/data/stores_missing_from_registry.json
 python_tree.py
+shufersal/
+raw/
+inspection/data_quality/reports

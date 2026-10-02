@@ -18,3 +18,9 @@ respx==0.23.1
 
 # Monitoring / HTML parsing
 beautifulsoup4==4.15.0
+
+# Inspection / Data Analysis
+openpyxl
+
+# Scraping
+playwright

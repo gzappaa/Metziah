@@ -1,4 +1,26 @@
 {
+        "7290873255550": {
+        "Chain_name_store_file": "טיב טעם",
+        "Chain_name_gov_page": "טיב טעם רשתות בע\"מ",
+        "name_he_normalized": "טיב טעם",
+        "name_en_normalized": "tiv taam",
+        "web_site": "https://www.tivtaam.co.il/",
+        "publishing_in": "https://publishedprices.co.il/",
+        "client": "PublishedPricesClient",
+        "credentials": {
+            "username": "TivTaam",
+            "password": ""
+        }  
+    }, 
+    "7290058160839": {
+        "Chain_name_store_file": "נתיב החסד- סופר חסד בע\"מ",
+        "Chain_name_gov_page": "נתיב החסד - סופר חסד בע\"מ (כולל ברכל)",
+        "name_he_normalized": "נתיב החסד",
+        "name_en_normalized": "netiv hesed",
+        "web_site": "barnativ.co.il",
+        "publishing_in": "https://app.netiv-hesed.com/",
+        "client": "HtmlFileLinkClient"
+    },
     "5144744100002": {
         "Chain_name_store_file": "משנת יוסף - קיי טי יבוא ושיווק בע\"מ",
         "Chain_name_gov_page": "קיי.טי. יבוא ושיווק בע\"מ (משנת יוסף)",
@@ -13,7 +35,7 @@
         "Chain_name_gov_page": "סיטי מרקט",
         "name_he_normalized": "סיטי מרקט",
         "name_en_normalized": "city market 2",
-        "web_site": "https://www.citymarket-shops.co.il/",
+        "web_site": "https://city-market.co.il/",
         "publishing_in": "https://www.citymarket-shops.co.il/",
         "client": "HtmlFileLinkClient"
     },
@@ -92,15 +114,6 @@
         "web_site": "https://branches.m2000.co.il/",
         "publishing_in": "https://maayan2000.binaprojects.com/Main.aspx?",
         "client": "BinaProjectsClient"
-    },
-    "7290058160839": {
-        "Chain_name_store_file": "נתיב החסד- סופר חסד בע\"מ",
-        "Chain_name_gov_page": "נתיב החסד - סופר חסד בע\"מ (כולל ברכל)",
-        "name_he_normalized": "נתיב החסד",
-        "name_en_normalized": "netiv hesed",
-        "web_site": "barnativ.co.il",
-        "publishing_in": "https://app.netiv-hesed.com/",
-        "client": "HtmlFileLinkClient"
     },
     "7290058173198": {
         "Chain_name_store_file": "זול ובגדול בע\"מ",
@@ -272,19 +285,6 @@
         "client": "PublishedPricesClient",
         "credentials": {
             "username": "yohananof",
-            "password": ""
-        }  
-    },
-    "7290873255550": {
-        "Chain_name_store_file": "טיב טעם",
-        "Chain_name_gov_page": "טיב טעם רשתות בע\"מ",
-        "name_he_normalized": "טיב טעם",
-        "name_en_normalized": "tiv taam",
-        "web_site": "https://www.tivtaam.co.il/",
-        "publishing_in": "https://publishedprices.co.il/",
-        "client": "PublishedPricesClient",
-        "credentials": {
-            "username": "TivTaam",
             "password": ""
         }  
     },

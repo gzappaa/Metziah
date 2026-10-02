@@ -859,3 +859,498 @@ def test_invalid_promotion_item_is_skipped_and_valid_item_is_parsed(
     assert group.items[0].reward_type is None
     assert group.items[1].item_code == "222"
     assert group.items[1].reward_type == 3
+
+
+# ============================================================
+# XML tag normalization
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "PromotionID",
+        "PromotionId",
+        "promotionid",
+        "Promotionid",
+        "PROMOTIONID",
+    ],
+)
+def test_parse_promotion_id_is_case_insensitive(parser, tag):
+    promo_xml = f"""
+<Promotion>
+    <{tag}>12345</{tag}>
+    <PromotionDescription>Test promotion</PromotionDescription>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotions = parser.parse_promo_file(xml)
+
+    assert len(promotions) == 1
+    assert promotions[0].promotion_id == "12345"
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        ("ChainID", "SubChainID", "StoreID"),
+        ("ChainId", "SubChainId", "StoreId"),
+        ("chainid", "subchainid", "storeid"),
+        ("CHAINID", "SUBCHAINID", "STOREID"),
+    ],
+)
+def test_parse_root_metadata_is_case_insensitive(
+    parser,
+    tags,
+):
+    chain_tag, sub_chain_tag, store_tag = tags
+
+    xml = f"""
+<Root>
+    <{chain_tag}>123</{chain_tag}>
+    <{sub_chain_tag}>456</{sub_chain_tag}>
+    <{store_tag}>789</{store_tag}>
+    <Items>
+        <Item>
+            <ItemCode>111</ItemCode>
+            <ItemPrice>5</ItemPrice>
+        </Item>
+    </Items>
+</Root>
+""".encode()
+
+    product = parser.parse_price_file(xml)[0]
+
+    assert product.chain_id == "123"
+    assert product.sub_chain_id == "456"
+    assert product.store_id == "789"
+
+
+def test_parse_promotion_id_with_mixed_case(parser):
+    promo_xml = """
+<Promotion>
+    <PromotionId>1554</PromotionId>
+    <PromotionDescription>Test promotion</PromotionDescription>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotions = parser.parse_promo_file(xml)
+
+    assert len(promotions) == 1
+    assert promotions[0].promotion_id == "1554"
+
+
+def test_parse_group_and_item_tags_case_insensitive(parser):
+    promo_xml = """
+<Promotion>
+    <promotionid>100</promotionid>
+
+    <GROUPS>
+        <gRoUp>
+            <gRoUpId>1</gRoUpId>
+
+            <PROMOTIONITEMS>
+                <pRoMoTiOnItEm>
+                    <iTeMcOdE>123</iTeMcOdE>
+                    <iTeMtYpE>1</iTeMtYpE>
+                    <rEwArDtYpE>3</rEwArDtYpE>
+                </pRoMoTiOnItEm>
+            </PROMOTIONITEMS>
+        </gRoUp>
+    </GROUPS>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotions = parser.parse_promo_file(xml)
+
+    assert len(promotions) == 1
+
+    promotion = promotions[0]
+
+    assert promotion.promotion_id == "100"
+    assert len(promotion.groups) == 1
+
+    group = promotion.groups[0]
+
+    assert group.group_id == "1"
+    assert len(group.items) == 1
+    assert group.items[0].item_code == "123"
+
+# ============================================================
+# Promotion normalization without explicit groups
+# ============================================================
+
+
+def test_parse_promotion_items_without_groups(parser):
+    promo_xml = """
+<Promotion>
+    <PromotionId>14</PromotionId>
+    <PromotionDescription>מבצע מילקי 4 ב 12</PromotionDescription>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>72940761</ItemCode>
+            <ItemType>1</ItemType>
+            <IsGiftItem>1</IsGiftItem>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+        sub_chain_id="001",
+        store_id="002",
+    )
+
+    promotions = parser.parse_promo_file(xml)
+
+    assert len(promotions) == 1
+
+    promotion = promotions[0]
+
+    assert promotion.promotion_id == "14"
+    assert len(promotion.groups) == 1
+
+    group = promotion.groups[0]
+
+    assert group.group_id == "1"
+    assert len(group.items) == 1
+    assert group.items[0].item_code == "72940761"
+
+
+def test_parse_multiple_direct_promotion_items_into_group_one(
+    parser,
+):
+    promo_xml = """
+<Promotion>
+    <PromotionId>23</PromotionId>
+    <PromotionDescription>מבצע בוטני סבבה 4 ב-10</PromotionDescription>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>111</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+        <Item>
+            <ItemCode>222</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+        <Item>
+            <ItemCode>333</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+        <Item>
+            <ItemCode>444</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotions = parser.parse_promo_file(xml)
+
+    assert len(promotions) == 1
+
+    promotion = promotions[0]
+
+    assert len(promotion.groups) == 1
+
+    group = promotion.groups[0]
+
+    assert group.group_id == "1"
+    assert len(group.items) == 4
+
+    assert [
+        item.item_code
+        for item in group.items
+    ] == [
+        "111",
+        "222",
+        "333",
+        "444",
+    ]
+
+
+def test_parse_direct_promotion_item_values_from_promotion(
+    parser,
+):
+    promo_xml = """
+<Promotion>
+    <PromotionId>14</PromotionId>
+    <PromotionDescription>מבצע מילקי 4 ב 12</PromotionDescription>
+
+    <RewardType>1</RewardType>
+    <MinQty>4</MinQty>
+    <MaxQty>0</MaxQty>
+    <DiscountRate>10.5</DiscountRate>
+    <DiscountedPrice>12.00</DiscountedPrice>
+    <DiscountedPricePerMida>3.00</DiscountedPricePerMida>
+    <IsWeightedPromo>1</IsWeightedPromo>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>72940761</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotion = parser.parse_promo_file(xml)[0]
+    item = promotion.groups[0].items[0]
+
+    assert item.item_code == "72940761"
+    assert item.item_type == 1
+    assert item.reward_type == 1
+    assert item.min_qty == Decimal("4")
+    assert item.max_qty == Decimal("0")
+    assert item.discount_rate == Decimal("10.5")
+    assert item.discounted_price == Decimal("12.00")
+    assert item.discounted_price_per_mida == Decimal("3.00")
+    assert item.is_weighted is True
+
+
+def test_parse_direct_promotion_item_values_override_promotion_values(
+    parser,
+):
+    promo_xml = """
+<Promotion>
+    <PromotionId>100</PromotionId>
+
+    <RewardType>1</RewardType>
+    <MinQty>4</MinQty>
+    <DiscountRate>10</DiscountRate>
+    <DiscountedPrice>20</DiscountedPrice>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>111</ItemCode>
+            <ItemType>1</ItemType>
+            <RewardType>3</RewardType>
+            <MinQty>2</MinQty>
+            <DiscountRate>5</DiscountRate>
+            <DiscountedPrice>15</DiscountedPrice>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    item = parser.parse_promo_file(xml)[0].groups[0].items[0]
+
+    assert item.reward_type == 3
+    assert item.min_qty == Decimal("2")
+    assert item.discount_rate == Decimal("5")
+    assert item.discounted_price == Decimal("15")
+
+
+def test_parse_promotion_update_date(parser):
+    promo_xml = """
+<Promotion>
+    <PromotionId>188700</PromotionId>
+    <PromotionDescription>באגט אפיה במקום אנג'ל 3 ב 13.9שח</PromotionDescription>
+    <PromotionUpdateDate>2025-12-31 14:24:00</PromotionUpdateDate>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>7290004869793</ItemCode>
+            <ItemType>1</ItemType>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotion = parser.parse_promo_file(xml)[0]
+
+    assert promotion.update_time == datetime.fromisoformat(
+        "2025-12-31 14:24:00"
+    )
+
+
+def test_parse_promotion_date_and_hour_fallback(parser):
+    promo_xml = """
+<Promotion>
+    <PromotionId>188700</PromotionId>
+
+    <PromotionStartDate>2026-01-01</PromotionStartDate>
+    <PromotionStartHour>00:00:00</PromotionStartHour>
+
+    <PromotionEndDate>2026-12-31</PromotionEndDate>
+    <PromotionEndHour>23:59:00</PromotionEndHour>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>7290004869793</ItemCode>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    promotion = parser.parse_promo_file(xml)[0]
+
+    assert promotion.start_datetime == datetime.fromisoformat(
+        "2026-01-01 00:00:00"
+    )
+
+    assert promotion.end_datetime == datetime.fromisoformat(
+        "2026-12-31 23:59:00"
+    )
+
+
+def test_parse_min_no_of_items_offered_typo_variants(parser):
+    for tag in (
+        "MinNoOfItemOffered",
+        "MinNoOfItemsOffered",
+        "MinNoOfItemOfered",
+    ):
+        promo_xml = f"""
+<Promotion>
+    <PromotionId>100</PromotionId>
+    <{tag}>99999</{tag}>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>111</ItemCode>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+        xml = make_xml(
+            promo_xml,
+            section="Promotions",
+        )
+
+        promotion = parser.parse_promo_file(xml)[0]
+
+        assert promotion.min_no_of_items_offered == 99999
+
+
+def test_parse_blweighted_variants(parser):
+    promo_xml = """
+<Promotion>
+    <PromotionId>100</PromotionId>
+
+    <PromotionItems>
+        <Item>
+            <ItemCode>111</ItemCode>
+            <blsWeighted>1</blsWeighted>
+        </Item>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+    )
+
+    item = parser.parse_promo_file(xml)[0].groups[0].items[0]
+
+    assert item.is_weighted is True
+
+
+def test_parse_promotion_with_promotion_item_element_without_groups(
+    parser,
+):
+    promo_xml = """
+<Promotion>
+    <PromotionId>883089</PromotionId>
+    <PromotionDescription>
+        40.00 יין לבן רמת סירין סובניון בלאן
+    </PromotionDescription>
+
+    <PromotionItems>
+        <PromotionItem>
+            <ItemCode>7290103682279</ItemCode>
+            <ItemType>1</ItemType>
+            <RewardType>3</RewardType>
+            <MinQty>2</MinQty>
+            <MaxQty>2</MaxQty>
+            <DiscountRate>22.93</DiscountRate>
+            <DiscountedPrice>40.00</DiscountedPrice>
+            <DiscountedPricePerMida>40.00</DiscountedPricePerMida>
+            <bIsWeighted>0</bIsWeighted>
+        </PromotionItem>
+
+        <PromotionItem>
+            <ItemCode>7290103682262</ItemCode>
+            <ItemType>1</ItemType>
+            <RewardType>3</RewardType>
+            <MinQty>2</MinQty>
+            <MaxQty>2</MaxQty>
+            <DiscountRate>22.93</DiscountRate>
+            <DiscountedPrice>40.00</DiscountedPrice>
+            <DiscountedPricePerMida>40.00</DiscountedPricePerMida>
+            <bIsWeighted>0</bIsWeighted>
+        </PromotionItem>
+    </PromotionItems>
+</Promotion>
+"""
+
+    xml = make_xml(
+        promo_xml,
+        section="Promotions",
+        sub_chain_id="000",
+        store_id="006",
+    )
+
+    promotion = parser.parse_promo_file(xml)[0]
+
+    assert promotion.promotion_id == "883089"
+
+    assert len(promotion.groups) == 1
+
+    group = promotion.groups[0]
+
+    assert group.group_id == "1"
+    assert len(group.items) == 2
+
+    assert [
+        item.item_code
+        for item in group.items
+    ] == [
+        "7290103682279",
+        "7290103682262",
+    ]

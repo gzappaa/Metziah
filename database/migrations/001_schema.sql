@@ -216,7 +216,6 @@ CREATE TABLE store_products (
     store_id              TEXT NOT NULL,
     item_code             TEXT NOT NULL,
     name                  TEXT,
-    name_count            INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,

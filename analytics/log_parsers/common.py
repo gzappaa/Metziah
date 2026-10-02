@@ -76,21 +76,24 @@ def iter_log_entries(path: Path) -> Iterator[LogEntry]:
         yield current
 
 
-def find_rotated_logs(logs_dir: Path, base_name: str) -> list[Path]:
+def find_rotated_logs(
+    logs_dir: Path,
+    base_name: str,
+    date_str: str | None = None,
+) -> list[Path]:
     """
-    Matches `{base_name}.log` and `{base_name}.log.<digits>` (current test
-    rotation) plus `{base_name}.log.<YYYY-MM-DD>` (future rotation scheme).
-    Explicitly excludes `{base_name}.test.log`.
+    Returns the current log when no date is supplied, or the rotated log
+    for the requested date when date_str is supplied.
     """
-    pattern = re.compile(
-        rf"^{re.escape(base_name)}\.log(\.\d+|\.\d{{4}}-\d{{2}}-\d{{2}})?$"
-    )
     if not logs_dir.exists():
         return []
-    return sorted(
-        p for p in logs_dir.glob(f"{base_name}*")
-        if p.is_file() and pattern.match(p.name)
-    )
+
+    if date_str:
+        path = logs_dir / f"{base_name}.log.{date_str}"
+        return [path] if path.is_file() else []
+
+    path = logs_dir / f"{base_name}.log"
+    return [path] if path.is_file() else []
 
 
 def format_timedelta(seconds: float) -> str:
