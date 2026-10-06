@@ -36,6 +36,15 @@ Product metadata is normalized before loading. Empty or known-unknown
 metadata values are treated as missing so they do not overwrite useful
 existing metadata.
 
+Pharmacy stores (data/reference/chains_pharm.json) are routed differently:
+
+    - non-barcode items       -> pharmacy_store_products (always)
+    - barcode already known   -> nothing to do here (product exists)
+    - barcode not known       -> pharmacy_products (quarantine, no products row)
+
+"Known" means present in `products`, or coming from a non-pharmacy store in
+the same run, so file scan order does not matter.
+
 This module does NOT load prices.
 """
 
@@ -47,7 +56,10 @@ from pathlib import Path
 from database.records import split_product
 from database.repository import (
     ensure_chain,
+    load_known_barcodes,
     update_store_subchain,
+    upsert_pharmacy_products,
+    upsert_pharmacy_store_products,
     upsert_products,
     upsert_store_products,
 )
@@ -63,6 +75,9 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 CHAINS_FILE = BASE_DIR / "data" / "reference" / "chains.json"
 CHAINS_EXTRA_FILE = (
     BASE_DIR / "data" / "reference" / "chains_extra.json"
+)
+CHAINS_PHARM_FILE = (
+    BASE_DIR / "data" / "reference" / "chains_pharm.json"
 )
 
 UNKNOWN_METADATA_VALUES = {
@@ -102,6 +117,54 @@ def _load_chain_metadata():
         chains.update(extra_chains)
 
     return chains
+
+# ---------------------------------------------------------------------------
+# Pharmacy helpers
+# ---------------------------------------------------------------------------
+
+def _load_pharmacy_stores() -> dict[str, set[str] | None]:
+    """
+    Load pharmacy chain/store configuration.
+
+    A value of None means all stores for that chain are pharmacy stores.
+    Otherwise, only the listed store IDs are pharmacy stores.
+    """
+    with CHAINS_PHARM_FILE.open(
+        "r",
+        encoding="utf-8",
+    ) as f:
+        chains = json.load(f)
+
+    pharmacy_stores = {}
+
+    for chain_id, chain in chains.items():
+        stores = chain.get("stores")
+
+        if stores == "all":
+            pharmacy_stores[chain_id] = None
+        else:
+            pharmacy_stores[chain_id] = {
+                str(store_id)
+                for store_id in stores
+            }
+
+    return pharmacy_stores
+
+
+def _is_pharmacy_store(
+    pharmacy_stores,
+    chain_id: str,
+    store_id: str,
+) -> bool:
+    """
+    Return whether a chain/store belongs to the pharmacy feed.
+    """
+    if chain_id not in pharmacy_stores:
+        return False
+
+    stores = pharmacy_stores[chain_id]
+
+    return stores is None or store_id in stores
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +308,7 @@ def load_files(
     """
     parser = StoreXmlParser()
     chain_metadata = _load_chain_metadata()
+    pharmacy_stores = _load_pharmacy_stores()
 
     observations = defaultdict(
         lambda: defaultdict(
@@ -254,6 +318,8 @@ def load_files(
 
     product_metadata = {}
     store_product_records = []
+    pharmacy_product_candidates = defaultdict(dict)
+    pharmacy_store_product_records = []
     successful_files = []
     scanned_files = 0
 
@@ -306,6 +372,15 @@ def load_files(
                 # Store directories are now canonicalized when files are
                 # written, so the directory name is the DB store_id.
                 store_id_text = path_store_id.strip()
+
+                # Pharmacy stores go through the same chain/sub-chain
+                # bookkeeping as every other store (the pharmacy tables
+                # have an FK to chains); only product routing differs.
+                is_pharmacy = _is_pharmacy_store(
+                    pharmacy_stores,
+                    str(chain_id),
+                    store_id_text,
+                )
 
                 filename_info = parse_filename(
                     filepath.name
@@ -388,6 +463,22 @@ def load_files(
                         chain_id,
                         store_id_text,
                     )
+
+                    if is_pharmacy:
+                        # Decided after the scan, once every non-pharmacy
+                        # barcode of this run is known.
+                        if product_record is not None:
+                            pharmacy_product_candidates[chain_id].setdefault(
+                                product_record.item_code,
+                                product_record,
+                            )
+
+                        if store_product_record is not None:
+                            pharmacy_store_product_records.append(
+                                store_product_record
+                            )
+
+                        continue
 
                     if product_record is not None:
                         item_code = product_record.item_code
@@ -503,6 +594,33 @@ def load_files(
             store_product_records,
         )
 
+    # Pharmacy barcodes: a barcode is "known" if it is already in products
+    # or was scanned from a non-pharmacy store in this run. Known barcodes
+    # need nothing here. Unknown ones are quarantined with no products row.
+    quarantined_barcodes = 0
+
+    if pharmacy_product_candidates:
+        known_barcodes = load_known_barcodes(conn) | set(observations)
+
+        for pharm_chain_id, candidates in pharmacy_product_candidates.items():
+            quarantine = [
+                record
+                for item_code, record in candidates.items()
+                if item_code not in known_barcodes
+            ]
+
+            quarantined_barcodes += upsert_pharmacy_products(
+                conn,
+                pharm_chain_id,
+                quarantine,
+            )
+
+    if pharmacy_store_product_records:
+        upsert_pharmacy_store_products(
+            conn,
+            pharmacy_store_product_records,
+        )
+
     conn.commit()
 
     # file_tracking.loaded currently means PRICE data has been loaded.
@@ -511,10 +629,13 @@ def load_files(
     # should be tracked separately.
 
     logger.info(
-        "Product loading complete: products=%d store_products=%d files=%d",
+        "Product loading complete: products=%d store_products=%d files=%d "
+        "pharmacy_barcodes_quarantined=%d pharmacy_store_products=%d",
         len(product_records),
         len(store_product_records),
         len(successful_files),
+        quarantined_barcodes,
+        len(pharmacy_store_product_records),
     )
 
     return successful_files
@@ -546,9 +667,12 @@ def discover_new_products(
       upsert_store_products() -- last file wins, as usual.
     """
     parser = StoreXmlParser()
+    pharmacy_stores = _load_pharmacy_stores()
 
     candidate_products = {}
     store_product_records = []
+    pharmacy_product_candidates = defaultdict(dict)
+    pharmacy_store_product_records = []
 
     for filepath in filepaths:
         try:
@@ -572,6 +696,12 @@ def discover_new_products(
                 xml_chain_id = xml_chain_id.strip() if xml_chain_id else None
                 chain_id = xml_chain_id or path_chain_id
 
+                is_pharmacy = _is_pharmacy_store(
+                    pharmacy_stores,
+                    str(chain_id),
+                    store_id_text,
+                )
+
                 for product in products:
                     product.manufacturer = normalize_metadata_value(
                         product.manufacturer
@@ -589,6 +719,22 @@ def discover_new_products(
                         chain_id,
                         store_id_text,
                     )
+
+                    if is_pharmacy:
+                        # Never a new global product from a pharmacy.
+                        # Resolved against `products` after the scan.
+                        if product_record is not None:
+                            pharmacy_product_candidates[chain_id].setdefault(
+                                product_record.item_code,
+                                product_record,
+                            )
+
+                        if store_product_record is not None:
+                            pharmacy_store_product_records.append(
+                                store_product_record
+                            )
+
+                        continue
 
                     if (
                         product_record is not None
@@ -614,12 +760,21 @@ def discover_new_products(
     # -----------------------------------------------------------------
 
     new_products = []
+    existing_codes = set()
 
-    if candidate_products:
+    pharmacy_codes = {
+        item_code
+        for candidates in pharmacy_product_candidates.values()
+        for item_code in candidates
+    }
+
+    all_codes = set(candidate_products) | pharmacy_codes
+
+    if all_codes:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT item_code FROM products WHERE item_code = ANY(%s)",
-                (list(candidate_products.keys()),),
+                (list(all_codes),),
             )
             existing_codes = {row[0] for row in cur.fetchall()}
 
@@ -639,14 +794,45 @@ def discover_new_products(
     if store_product_records:
         upsert_store_products(conn, store_product_records)
 
+    # -----------------------------------------------------------------
+    # Pharmacy: a barcode already in products (or arriving from a
+    # supermarket in this batch) needs nothing. Unknown barcodes are
+    # quarantined. Non-barcode items always go to pharmacy_store_products.
+    # -----------------------------------------------------------------
+
+    quarantined_barcodes = 0
+
+    for pharm_chain_id, candidates in pharmacy_product_candidates.items():
+        quarantine = [
+            record
+            for item_code, record in candidates.items()
+            if item_code not in existing_codes
+            and item_code not in candidate_products
+        ]
+
+        quarantined_barcodes += upsert_pharmacy_products(
+            conn,
+            pharm_chain_id,
+            quarantine,
+        )
+
+    if pharmacy_store_product_records:
+        upsert_pharmacy_store_products(
+            conn,
+            pharmacy_store_product_records,
+        )
+
     conn.commit()
 
     logger.info(
         "New-product discovery: %d new product(s), %d store_product "
         "record(s) from %d file(s) (%d candidate item_code(s) already "
-        "existed)",
+        "existed); pharmacy: %d barcode(s) quarantined, %d store_product "
+        "record(s)",
         len(new_products),
         len(store_product_records),
         len(filepaths),
         len(candidate_products) - len(new_products),
+        quarantined_barcodes,
+        len(pharmacy_store_product_records),
     )

@@ -303,6 +303,16 @@ def cleanup_test_chains(conn):
                 "DELETE FROM store_products WHERE chain_id = %s",
                 (chain_id,),
             )
+            # --- new ---
+            cur.execute(
+                "DELETE FROM pharmacy_products WHERE chain_id = %s",
+                (chain_id,),
+            )
+            cur.execute(
+                "DELETE FROM pharmacy_store_products WHERE chain_id = %s",
+                (chain_id,),
+            )
+            # -----------
             cur.execute(
                 "DELETE FROM file_tracking WHERE chain_id = %s",
                 (chain_id,),

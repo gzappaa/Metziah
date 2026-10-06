@@ -39,6 +39,7 @@ Usage:
     python utils/prices/load_prices.py
     python utils/prices/load_prices.py --dev
     python utils/prices/load_prices.py --test
+    python utils/prices/load_prices.py --prod
     python utils/prices/load_prices.py --feeds-dir data/feeds
 """
 
@@ -134,6 +135,12 @@ def main():
     )
 
     parser_args.add_argument(
+        "--prod",
+        action="store_true",
+        help="Allow loading into the production database",
+    )
+
+    parser_args.add_argument(
         "--feeds-dir",
         type=Path,
         default=DEFAULT_FEEDS_DIR,
@@ -156,9 +163,24 @@ def main():
             "--dev was provided, but the configured environment is not dev."
         )
 
-    if args.test and settings.ENV != "test":
+    if settings.ENV == "test" and not args.test:
+        raise RuntimeError(
+            "Test database selected. Run with --test to confirm."
+        )
+
+    if settings.ENV != "test" and args.test:
         raise RuntimeError(
             "--test was provided, but the configured environment is not test."
+        )
+
+    if settings.ENV == "prod" and not args.prod:
+        raise RuntimeError(
+            "Production database selected. Run with --prod to confirm."
+        )
+
+    if settings.ENV != "prod" and args.prod:
+        raise RuntimeError(
+            "--prod was provided, but the configured environment is not prod."
         )
 
     # ------------------------------------------------------------------

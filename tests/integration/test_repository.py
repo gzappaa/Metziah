@@ -5,6 +5,9 @@
 # make the repository suite unnecessarily large and redundant.
 
 
+import psycopg
+import pytest
+
 from models.store import Store
 
 from decimal import Decimal
@@ -36,6 +39,10 @@ from database.repository import (
     reconcile_removed_promotion_groups,
     reconcile_removed_promotion_items,
     get_promotion_details,
+    load_known_barcodes,
+    upsert_pharmacy_products,
+    upsert_pharmacy_store_products,
+    delete_promoted_pharmacy_products,
 )
 
 
@@ -805,3 +812,342 @@ def test_get_promotion_details_returns_none_when_missing(conn):
         "MISSING_GROUP",
         "MISSING_ITEM",
     ) is None
+
+# ---- pharmacy: store_type, pharmacy_products, pharmacy_store_products ----
+#
+# All item codes used here start with PHARMTEST so the cleanup fixture can
+# remove exactly what these tests created, without touching other data.
+
+_PHARM_PREFIX = "PHARMTEST%"
+
+
+@pytest.fixture
+def pharmacy_clean(conn):
+    """
+    Remove PHARMTEST rows before and after the test.
+
+    Setup deliberately does NOT rollback or commit: fixtures such as
+    test_store insert their chain/store rows (uncommitted) before this one
+    runs, and the test needs them. Teardown rolls back first, because a
+    failed test can leave the transaction aborted, then deletes and commits
+    anything that code under test committed (load_files commits).
+    """
+
+    def _delete():
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM pharmacy_products WHERE item_code LIKE %s",
+                (_PHARM_PREFIX,),
+            )
+            cur.execute(
+                "DELETE FROM pharmacy_store_products WHERE item_code LIKE %s",
+                (_PHARM_PREFIX,),
+            )
+            cur.execute(
+                "DELETE FROM store_products WHERE item_code LIKE %s",
+                (_PHARM_PREFIX,),
+            )
+            cur.execute(
+                "DELETE FROM products WHERE item_code LIKE %s",
+                (_PHARM_PREFIX,),
+            )
+
+    _delete()
+
+    yield
+
+    conn.rollback()
+    _delete()
+    conn.commit()
+
+
+def _pharm_product(item_code, name="Pharm Product"):
+    return ProductRecord(
+        item_code=item_code,
+        name=name,
+        manufacturer="Acme",
+        manufacturer_country="IL",
+        item_type=1,
+    )
+
+
+def _pharm_store_product(chain_id, store_id, item_code, name="Pharm Item"):
+    return StoreProductRecord(
+        chain_id=chain_id,
+        store_id=store_id,
+        item_code=item_code,
+        name=name,
+        manufacturer="Acme",
+        manufacturer_country="IL",
+        item_type=0,
+    )
+
+
+def _count(conn, sql, params):
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return cur.fetchone()[0]
+
+
+def test_store_type_defaults_to_supermarket(conn, test_store):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT store_type FROM stores WHERE chain_id = %s AND store_id = %s",
+            (test_store["chain_id"], test_store["store_id_text"]),
+        )
+        assert cur.fetchone()[0] == "supermarket"
+
+
+def test_store_type_rejects_unknown_value(conn, test_store):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE stores SET store_type = 'bogus' "
+                "WHERE chain_id = %s AND store_id = %s",
+                (test_store["chain_id"], test_store["store_id_text"]),
+            )
+
+    conn.rollback()
+
+
+def test_load_known_barcodes_returns_existing_products(conn, pharmacy_clean):
+    upsert_products(conn, [_pharm_product("PHARMTEST_KNOWN_001")])
+
+    known = load_known_barcodes(conn)
+
+    assert "PHARMTEST_KNOWN_001" in known
+    assert "PHARMTEST_MISSING_001" not in known
+
+
+def test_upsert_pharmacy_products_inserts_new(conn, test_store, pharmacy_clean):
+    chain_id = test_store["chain_id"]
+
+    written = upsert_pharmacy_products(
+        conn,
+        chain_id,
+        [_pharm_product("PHARMTEST_BC_001", name="שמפו")],
+    )
+
+    assert written == 1
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, manufacturer, manufacturer_country, item_type "
+            "FROM pharmacy_products WHERE chain_id = %s AND item_code = %s",
+            (chain_id, "PHARMTEST_BC_001"),
+        )
+        assert cur.fetchone() == ("שמפו", "Acme", "IL", 1)
+
+
+def test_upsert_pharmacy_products_empty_list_is_noop(conn):
+    assert upsert_pharmacy_products(conn, "ANY_CHAIN", []) == 0
+
+
+def test_upsert_pharmacy_products_does_not_touch_products_table(
+    conn, test_store, pharmacy_clean,
+):
+    upsert_pharmacy_products(
+        conn,
+        test_store["chain_id"],
+        [_pharm_product("PHARMTEST_BC_002")],
+    )
+
+    assert _count(
+        conn,
+        "SELECT COUNT(*) FROM products WHERE item_code = %s",
+        ("PHARMTEST_BC_002",),
+    ) == 0
+
+
+def test_upsert_pharmacy_products_updates_existing_and_keeps_first_seen(
+    conn, test_store, pharmacy_clean,
+):
+    chain_id = test_store["chain_id"]
+    code = "PHARMTEST_BC_003"
+
+    upsert_pharmacy_products(conn, chain_id, [_pharm_product(code, "ישן")])
+
+    # Age the row so last_seen can visibly move forward within one transaction.
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE pharmacy_products "
+            "SET first_seen = '2020-06-15 12:00+00', "
+            "    last_seen  = '2020-06-15 12:00+00' "
+            "WHERE chain_id = %s AND item_code = %s",
+            (chain_id, code),
+        )
+
+    upsert_pharmacy_products(conn, chain_id, [_pharm_product(code, "חדש")])
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, first_seen, last_seen FROM pharmacy_products "
+            "WHERE chain_id = %s AND item_code = %s",
+            (chain_id, code),
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 1
+    name, first_seen, last_seen = rows[0]
+    assert name == "חדש"
+    assert first_seen.year == 2020
+    assert last_seen > first_seen
+
+
+def test_upsert_pharmacy_products_same_barcode_in_two_chains_kept_separately(
+    conn, create_store, pharmacy_clean,
+):
+    create_store("PHARMTEST_CHAIN_A", "1")
+    create_store("PHARMTEST_CHAIN_B", "1")
+
+    code = "PHARMTEST_BC_004"
+
+    upsert_pharmacy_products(conn, "PHARMTEST_CHAIN_A", [_pharm_product(code)])
+    upsert_pharmacy_products(conn, "PHARMTEST_CHAIN_B", [_pharm_product(code)])
+
+    assert _count(
+        conn,
+        "SELECT COUNT(*) FROM pharmacy_products WHERE item_code = %s",
+        (code,),
+    ) == 2
+
+
+def test_upsert_pharmacy_store_products_inserts_new(
+    conn, test_store, pharmacy_clean,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    written = upsert_pharmacy_store_products(
+        conn,
+        [_pharm_store_product(chain_id, store_id, "PHARMTEST_SP_001", "משחה")],
+    )
+
+    assert written == 1
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, manufacturer, manufacturer_country, item_type "
+            "FROM pharmacy_store_products "
+            "WHERE chain_id = %s AND store_id = %s AND item_code = %s",
+            (chain_id, store_id, "PHARMTEST_SP_001"),
+        )
+        assert cur.fetchone() == ("משחה", "Acme", "IL", 0)
+
+
+def test_upsert_pharmacy_store_products_empty_list_is_noop(conn):
+    assert upsert_pharmacy_store_products(conn, []) == 0
+
+
+def test_upsert_pharmacy_store_products_does_not_touch_store_products(
+    conn, test_store, pharmacy_clean,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+
+    upsert_pharmacy_store_products(
+        conn,
+        [_pharm_store_product(chain_id, store_id, "PHARMTEST_SP_002")],
+    )
+
+    assert _count(
+        conn,
+        "SELECT COUNT(*) FROM store_products WHERE item_code = %s",
+        ("PHARMTEST_SP_002",),
+    ) == 0
+
+
+def test_upsert_pharmacy_store_products_updates_existing(
+    conn, test_store, pharmacy_clean,
+):
+    chain_id = test_store["chain_id"]
+    store_id = test_store["store_id_text"]
+    code = "PHARMTEST_SP_003"
+
+    upsert_pharmacy_store_products(
+        conn, [_pharm_store_product(chain_id, store_id, code, "ישן")],
+    )
+    upsert_pharmacy_store_products(
+        conn, [_pharm_store_product(chain_id, store_id, code, "חדש")],
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT name FROM pharmacy_store_products "
+            "WHERE chain_id = %s AND store_id = %s AND item_code = %s",
+            (chain_id, store_id, code),
+        )
+        rows = cur.fetchall()
+
+    assert rows == [("חדש",)]
+
+
+def test_upsert_pharmacy_store_products_same_code_in_two_stores_kept_separately(
+    conn, create_store, pharmacy_clean,
+):
+    chain_id = "PHARMTEST_CHAIN_C"
+    create_store(chain_id, "1")
+    create_store(chain_id, "2")
+
+    code = "PHARMTEST_SP_004"
+
+    upsert_pharmacy_store_products(
+        conn,
+        [
+            _pharm_store_product(chain_id, "1", code),
+            _pharm_store_product(chain_id, "2", code),
+        ],
+    )
+
+    assert _count(
+        conn,
+        "SELECT COUNT(*) FROM pharmacy_store_products WHERE item_code = %s",
+        (code,),
+    ) == 2
+
+
+def test_delete_promoted_pharmacy_products_removes_only_known_barcodes(
+    conn, test_store, pharmacy_clean,
+):
+    chain_id = test_store["chain_id"]
+
+    upsert_products(conn, [_pharm_product("PHARMTEST_PROMOTED_001")])
+    upsert_pharmacy_products(
+        conn,
+        chain_id,
+        [
+            _pharm_product("PHARMTEST_PROMOTED_001"),
+            _pharm_product("PHARMTEST_STILL_PHARMACY_001"),
+        ],
+    )
+
+    deleted = delete_promoted_pharmacy_products(conn)
+
+    assert deleted >= 1
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT item_code FROM pharmacy_products WHERE item_code LIKE %s",
+            (_PHARM_PREFIX,),
+        )
+        remaining = {row[0] for row in cur.fetchall()}
+
+    assert remaining == {"PHARMTEST_STILL_PHARMACY_001"}
+
+
+def test_delete_promoted_pharmacy_products_noop_when_nothing_promoted(
+    conn, test_store, pharmacy_clean,
+):
+    upsert_pharmacy_products(
+        conn,
+        test_store["chain_id"],
+        [_pharm_product("PHARMTEST_STILL_PHARMACY_002")],
+    )
+
+    delete_promoted_pharmacy_products(conn)
+
+    assert _count(
+        conn,
+        "SELECT COUNT(*) FROM pharmacy_products WHERE item_code = %s",
+        ("PHARMTEST_STILL_PHARMACY_002",),
+    ) == 1

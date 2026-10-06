@@ -18,7 +18,7 @@ def make_product(
     *,
     item_code="7290000000001",
     name="Test Product",
-    chain_id="999999999999",
+    chain_id="9999999999999",
     store_id="1",
     manufacturer="Manufacturer",
     manufacturer_country="Israel",
@@ -124,6 +124,67 @@ class DummyConnection:
 
     def commit(self):
         self.commit_count += 1
+
+def pharmacy_filepath(feeds_dir):
+    return (
+        feeds_dir
+        / "9999999999999"
+        / "2"
+        / "pricesfull"
+        / "PriceFull9999999999999-001-002-20260101-000000.gz"
+    )
+
+
+def setup_pharmacy_test(monkeypatch, tmp_path):
+    feeds_dir = tmp_path / "feeds"
+
+    chain_id = "9999999999999"
+    store_id = "2"
+
+    filepath = (
+        feeds_dir
+        / chain_id
+        / store_id
+        / "pricesfull"
+        / f"PriceFull{chain_id}-001-002-20260101-000000.gz"
+    )
+
+    filepath.parent.mkdir(parents=True)
+    filepath.touch()
+
+    monkeypatch.setattr(
+        module,
+        "_load_chain_metadata",
+        lambda: {
+            chain_id: {
+                "name_he_normalized": "Test Pharmacy",
+                "name_en_normalized": "Test Pharmacy",
+                "sub_chains": {},
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_load_pharmacy_stores",
+        lambda: {
+            chain_id: {store_id},
+        },
+    )
+
+    monkeypatch.setattr(
+        module,
+        "ensure_chain",
+        lambda *args: None,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "update_store_subchain",
+        lambda *args: None,
+    )
+
+    return feeds_dir, filepath
 
 
 # ---------------------------------------------------------------------------
@@ -1088,3 +1149,240 @@ def test_discover_new_products_normalizes_metadata(
 
     assert captured[0].manufacturer is None
     assert captured[0].manufacturer_country == "Israel"
+
+def test_load_files_pharmacy_known_barcode_is_not_quarantined(
+    monkeypatch,
+    tmp_path,
+):
+    feeds_dir, filepath = setup_pharmacy_test(
+        monkeypatch,
+        tmp_path,
+    )
+
+    product = make_product(
+        item_code="111",
+        chain_id="9999999999999",
+        store_id="2",
+        name="Pharmacy Coke",
+    )
+
+    product_record = make_product_record(
+        item_code="111",
+        name="Pharmacy Coke",
+    )
+
+    monkeypatch.setattr(
+        module.StoreXmlParser,
+        "parse_price_file",
+        lambda self, xml: [product],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "split_product",
+        lambda *args: (product_record, None, None),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "load_known_barcodes",
+        lambda conn: {"111"},
+    )
+
+    pharmacy_products = []
+    pharmacy_store_products = []
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_products",
+        lambda conn, chain_id, records: (
+            pharmacy_products.extend(records),
+            len(records),
+        )[1],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_store_products",
+        lambda conn, records: pharmacy_store_products.extend(records),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_products",
+        lambda *args: None,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_store_products",
+        lambda *args: None,
+    )
+
+    conn = DummyConnection()
+
+    module.load_files(
+        conn,
+        [filepath],
+        feeds_dir,
+    )
+
+    assert pharmacy_products == []
+    assert pharmacy_store_products == []
+
+def test_load_files_quarantines_pharmacy_only_barcode(
+    monkeypatch,
+    tmp_path,
+):
+    feeds_dir, filepath = setup_pharmacy_test(
+        monkeypatch,
+        tmp_path,
+    )
+
+    product = make_product(
+        item_code="999",
+        chain_id="9999999999999",
+        store_id="2",
+        name="Pharmacy Only",
+    )
+
+    product_record = make_product_record(
+        item_code="999",
+        name="Pharmacy Only",
+    )
+
+    monkeypatch.setattr(
+        module.StoreXmlParser,
+        "parse_price_file",
+        lambda self, xml: [product],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "split_product",
+        lambda *args: (product_record, None, None),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "load_known_barcodes",
+        lambda conn: set(),
+    )
+
+    pharmacy_products = []
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_products",
+        lambda conn, chain_id, records: pharmacy_products.extend(records) or len(records),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_store_products",
+        lambda *args: None,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_products",
+        lambda *args: pytest.fail(
+            "Pharmacy product must not enter products"
+        ),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_store_products",
+        lambda *args: pytest.fail(
+            "Pharmacy product must not enter store_products"
+        ),
+    )
+
+    conn = DummyConnection()
+
+    module.load_files(
+        conn,
+        [filepath],
+        feeds_dir,
+    )
+
+    assert len(pharmacy_products) == 1
+    assert pharmacy_products[0].item_code == "999"
+
+def test_load_files_pharmacy_store_product_goes_to_pharmacy_table(
+    monkeypatch,
+    tmp_path,
+):
+    feeds_dir, filepath = setup_pharmacy_test(
+        monkeypatch,
+        tmp_path,
+    )
+
+    product = make_product(
+        item_code="12345",
+        chain_id="9999999999999",
+        store_id="2",
+        name="Pharmacy Store Item",
+    )
+
+    store_product = make_store_product_record(
+        item_code="12345",
+        name="Pharmacy Store Item",
+        chain_id="9999999999999",
+        store_id="2",
+    )
+
+    monkeypatch.setattr(
+        module.StoreXmlParser,
+        "parse_price_file",
+        lambda self, xml: [product],
+    )
+
+    monkeypatch.setattr(
+        module,
+        "split_product",
+        lambda *args: (None, store_product, None),
+    )
+
+    pharmacy_store_products = []
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_store_products",
+        lambda conn, records: pharmacy_store_products.extend(records),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_pharmacy_products",
+        lambda *args: None,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_products",
+        lambda *args: pytest.fail(
+            "Pharmacy item must not enter products"
+        ),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "upsert_store_products",
+        lambda *args: pytest.fail(
+            "Pharmacy item must not enter supermarket store_products"
+        ),
+    )
+
+    conn = DummyConnection()
+
+    module.load_files(
+        conn,
+        [filepath],
+        feeds_dir,
+    )
+
+    assert len(pharmacy_store_products) == 1
+    assert pharmacy_store_products[0].chain_id == "9999999999999"
+    assert pharmacy_store_products[0].store_id == "2"

@@ -101,6 +101,24 @@ def patch_reconciliation(monkeypatch):
         Mock(return_value=0),
     )
 
+def patch_prod_filter(monkeypatch, filtered_promotions, stats=None):
+    monkeypatch.setattr(
+        module,
+        "_apply_prod_filter",
+        Mock(
+            return_value=(
+                filtered_promotions,
+                stats
+                or {
+                    "null_price_items": 0,
+                    "unknown_items": 0,
+                    "empty_groups": 0,
+                    "empty_promotions": 0,
+                },
+            )
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # load_one_file - validation
@@ -347,3 +365,208 @@ def test_path_chain_and_store_are_authoritative(
         promotion.store_id == "004"
         for promotion in promotions
     )
+
+
+def test_promo_prod_filter_is_applied(
+    monkeypatch,
+):
+    conn = Mock()
+
+    patch_common(monkeypatch)
+    patch_upserts(monkeypatch)
+    patch_reconciliation(monkeypatch)
+
+    parser = StoreXmlParser()
+
+    # Parse normally first so we have real Promotion objects.
+    promotions = parser.parse(
+        PROMO_FILE.read_bytes()
+    )
+
+    # Keep only the first promotion.
+    filtered_promotions = promotions[:1]
+
+    patch_prod_filter(
+        monkeypatch,
+        filtered_promotions,
+    )
+
+    module.load_one_file(
+        conn=conn,
+        parser=parser,
+        filepath=PROMO_FILE,
+        feeds_dir=FEEDS_DIR,
+        file_type="Promo",
+        chain_metadata=CHAIN_METADATA,
+        log_changes=False,
+        prod_filter=True,
+    )
+
+    module._apply_prod_filter.assert_called_once()
+
+    loaded_promotions = (
+        module.upsert_promotions.call_args.args[1]
+    )
+
+    assert {
+        promotion.promotion_id
+        for promotion in loaded_promotions
+    } == {"0000000001"}
+
+    module.reconcile_removed_promotions.assert_not_called()
+
+def test_promo_without_prod_filter_loads_all(
+    monkeypatch,
+):
+    conn = Mock()
+
+    patch_common(monkeypatch)
+    patch_upserts(monkeypatch)
+    patch_reconciliation(monkeypatch)
+
+    prod_filter = Mock()
+    monkeypatch.setattr(
+        module,
+        "_apply_prod_filter",
+        prod_filter,
+    )
+
+    module.load_one_file(
+        conn=conn,
+        parser=StoreXmlParser(),
+        filepath=PROMO_FILE,
+        feeds_dir=FEEDS_DIR,
+        file_type="Promo",
+        chain_metadata=CHAIN_METADATA,
+        log_changes=False,
+        prod_filter=False,
+    )
+
+    prod_filter.assert_not_called()
+
+    promotions = module.upsert_promotions.call_args.args[1]
+
+    assert len(promotions) == 2
+
+
+    
+def test_promofull_prod_filter_empty_snapshot_still_reconciles(
+    monkeypatch,
+):
+    conn = Mock()
+
+    patch_common(monkeypatch)
+    patch_upserts(monkeypatch)
+    patch_reconciliation(monkeypatch)
+
+    parser = StoreXmlParser()
+
+    patch_prod_filter(
+        monkeypatch,
+        [],
+        {
+            "null_price_items": 2,
+            "unknown_items": 0,
+            "empty_groups": 2,
+            "empty_promotions": 2,
+        },
+    )
+
+    module.load_one_file(
+        conn=conn,
+        parser=parser,
+        filepath=PROMOFULL_FILE,
+        feeds_dir=FEEDS_DIR,
+        file_type="PromoFull",
+        chain_metadata=CHAIN_METADATA,
+        log_changes=False,
+        prod_filter=True,
+    )
+
+    # Nothing survives the filter.
+    module.upsert_promotions.assert_called_once_with(
+        conn,
+        [],
+    )
+    module.upsert_promotion_groups.assert_called_once_with(
+        conn,
+        [],
+    )
+    module.upsert_promotion_items.assert_called_once_with(
+        conn,
+        [],
+    )
+
+    # Empty filtered snapshot is authoritative.
+    module.reconcile_removed_promotions.assert_called_once_with(
+        conn,
+        CHAIN_ID,
+        STORE_ID,
+        set(),
+    )
+
+    module.reconcile_removed_promotion_groups.assert_called_once_with(
+        conn,
+        CHAIN_ID,
+        STORE_ID,
+        set(),
+    )
+
+    module.reconcile_removed_promotion_items.assert_called_once_with(
+        conn,
+        CHAIN_ID,
+        STORE_ID,
+        set(),
+    )
+
+    conn.commit.assert_called_once()
+
+def test_promo_prod_filter_is_applied(
+    monkeypatch,
+):
+    conn = Mock()
+
+    patch_common(monkeypatch)
+    patch_upserts(monkeypatch)
+    patch_reconciliation(monkeypatch)
+
+    captured = {}
+
+    def fake_filter(conn, promotions, chain_id, store_id):
+        captured["promotions"] = promotions
+
+        return (
+            promotions[:1],
+            {
+                "null_price_items": 0,
+                "unknown_items": 1,
+                "empty_groups": 0,
+                "empty_promotions": 0,
+            },
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_apply_prod_filter",
+        fake_filter,
+    )
+
+    module.load_one_file(
+        conn=conn,
+        parser=StoreXmlParser(),
+        filepath=PROMO_FILE,
+        feeds_dir=FEEDS_DIR,
+        file_type="Promo",
+        chain_metadata=CHAIN_METADATA,
+        log_changes=False,
+        prod_filter=True,
+    )
+
+    assert len(captured["promotions"]) == 2
+
+    promotions = module.upsert_promotions.call_args.args[1]
+
+    assert {
+        promotion.promotion_id
+        for promotion in promotions
+    } == {"0000000001"}

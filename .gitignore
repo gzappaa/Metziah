@@ -35,3 +35,8 @@ python_tree.py
 shufersal/
 raw/
 inspection/data_quality/reports
+shufersal_nutrition.json
+monitoring/data/scraper_coverage.json
+inspection/sheets
+data/parsed
+data/images

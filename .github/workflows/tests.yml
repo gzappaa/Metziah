@@ -95,5 +95,13 @@ jobs:
             -d metziah_test \
             -f database/migrations/002_chain_partitions.sql
 
+      - name: Apply pharmacy schema
+        run: |
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -f database/migrations/003_pharmacies.sql
+
       - name: Run tests
         run: pytest --import-mode=importlib

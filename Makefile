@@ -1,4 +1,4 @@
-.PHONY: help test setup setup-test \
+.PHONY: help test setup setup-test setup-prod \
 	docker-up docker-down docker-logs docker-reset \
 	migrate migrate-test
 
@@ -12,6 +12,7 @@ help:
 	@echo "Setup:"
 	@echo "  make setup         First-time standard setup"
 	@echo "  make setup-test    First-time test setup"
+	@echo "  make setup-prod    First-time production setup"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make docker-up     Start PostgreSQL"
@@ -72,6 +73,9 @@ migrate-test:
 	docker compose --env-file .env.dev exec -T db \
 		psql -U "$$PGUSER" -d metziah_test \
 		< database/migrations/002_chain_partitions.sql
+	docker compose --env-file .env.dev exec -T db \
+		psql -U "$$PGUSER" -d metziah_test \
+		< database/migrations/003_pharmacies.sql
 	@echo "=== Test database migrated ==="
 
 
@@ -197,3 +201,68 @@ setup-test:
 	ENV=test python -m downloaders.scheduler --test
 
 	@echo "=== Test setup complete ==="
+
+
+# ---------------------------------------------------------------------------
+# Production setup
+# ---------------------------------------------------------------------------
+
+setup-prod:
+	@echo "=== Production setup: ENV=prod ==="
+
+	@echo "=== 1. Download Stores ==="
+	ENV=prod python -m downloaders.stores
+
+	@echo "=== 2. Build initial store JSON ==="
+	ENV=prod python -m utils.stores.get_stores
+
+	@echo "=== 3. Load file-tracking history ==="
+	ENV=prod python -m utils.file_tracking.load_file_tracking --report
+
+	@echo "=== 4. Resolve hidden/ambiguous chains ==="
+	ENV=prod python -m monitoring.chains_missing
+
+	@echo "=== 5. Normalize chain IDs ==="
+	ENV=prod python -m utils.stores.chains_id_normalizer
+
+	@echo "=== 6. Normalize city metadata ==="
+	ENV=prod python -m utils.stores.data_enrichment.normalize_store_cities
+
+	@echo "=== 7. Clean City Market addresses ==="
+	ENV=prod python -m utils.stores.data_enrichment.citymarket_addresses
+
+	@echo "=== 8. Geocode stores ==="
+	ENV=prod python -m utils.stores.data_enrichment.geocode_google
+
+	@echo "=== 9. Seed normal stores ==="
+	ENV=prod python -m utils.stores.seed_stores
+
+	@echo "=== 10. Find stores missing from Stores.xml ==="
+	ENV=prod python -m monitoring.stores_missing
+
+	@echo "=== 11. Add unregistered stores ==="
+	ENV=prod python -m utils.stores.add_unregistered_stores
+
+	@echo "=== 12. Load file tracking ==="
+	ENV=prod python -m utils.file_tracking.load_file_tracking
+
+	@echo "=== 13. Load PriceFull snapshots ==="
+	ENV=prod python -m downloaders.pricesfull
+
+	@echo "=== 14. Load PromoFull snapshots ==="
+	ENV=prod python -m utils.file_tracking.cache
+	ENV=prod python -m downloaders.promosfull
+
+	@echo "=== 15. Load/resolve products ==="
+	ENV=prod python -m utils.products.load_products --prod
+
+	@echo "=== 16. Load prices ==="
+	ENV=prod python -m utils.prices.load_prices --prod
+
+	@echo "=== 17. Load promotions ==="
+	ENV=prod python -m utils.promos.load_promos --prod
+
+	@echo "=== 18. Run scheduler ==="
+	ENV=prod python -m downloaders.scheduler
+
+	@echo "=== Production setup complete ==="

@@ -11,7 +11,7 @@ Sections:
     Promotions         -- upsert_promotions/_groups/_items and their
                            reconcile_removed_* counterparts (store-scoped,
                            run in dependency order: promotions -> groups -> items)
-    File tracking       -- insert_file_tracking, mark_files_downloaded,
+    File tracking      -- insert_file_tracking, mark_files_downloaded,
                            mark_files_loaded, get_latest_downloaded_price_files,
                            get_downloaded_promofull_files,
                            get_downloaded_unloaded_promo_files
@@ -21,6 +21,9 @@ Sections:
     Source configuration -- get_publishing_sources (reads
                            supermarket_sources.json and returns source
                            configuration by publishing type)
+    Pharmacy           -- load_known_barcodes, upsert_pharmacy_products,
+                           upsert_pharmacy_store_products,
+                           delete_promoted_pharmacy_products
 
 NAME HANDLING:
     products.name:
@@ -1383,3 +1386,123 @@ def get_promotion_details(
         "start_datetime": start_datetime,
         "end_datetime": end_datetime,
     }
+
+def load_known_barcodes(conn) -> set[str]:
+    """
+    All barcodes currently in `products`.
+ 
+    Load once at loader start and keep in memory. After inserting new
+    products during the run, add their item_codes to the same set.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_code FROM products")
+        return {row[0] for row in cur.fetchall()}
+ 
+ 
+def upsert_pharmacy_products(
+    conn,
+    chain_id: str,
+    records: list[ProductRecord],
+) -> int:
+    """
+    Quarantine barcodes seen only in pharmacy stores.
+ 
+    New rows get first_seen = now(); existing rows only refresh
+    last_seen and the descriptive fields.
+    """
+    if not records:
+        return 0
+ 
+    rows = [
+        (
+            chain_id,
+            r.item_code,
+            r.name,
+            r.manufacturer,
+            r.manufacturer_country,
+            r.item_type,
+        )
+        for r in records
+    ]
+ 
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO pharmacy_products (
+                chain_id, item_code, name, manufacturer,
+                manufacturer_country, item_type
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chain_id, item_code) DO UPDATE SET
+                name                 = EXCLUDED.name,
+                manufacturer         = EXCLUDED.manufacturer,
+                manufacturer_country = EXCLUDED.manufacturer_country,
+                item_type            = EXCLUDED.item_type,
+                last_seen            = now()
+            """,
+            rows,
+        )
+ 
+    return len(rows)
+ 
+ 
+def upsert_pharmacy_store_products(
+    conn,
+    records: list[StoreProductRecord],
+) -> int:
+    """
+    Store every non-barcode item from pharmacy stores.
+    Records already carry chain_id and store_id.
+    """
+    if not records:
+        return 0
+ 
+    rows = [
+        (
+            r.chain_id,
+            r.store_id,
+            r.item_code,
+            r.name,
+            r.manufacturer,
+            r.manufacturer_country,
+            r.item_type,
+        )
+        for r in records
+    ]
+ 
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO pharmacy_store_products (
+                chain_id, store_id, item_code, name, manufacturer,
+                manufacturer_country, item_type
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chain_id, store_id, item_code) DO UPDATE SET
+                name                 = EXCLUDED.name,
+                manufacturer         = EXCLUDED.manufacturer,
+                manufacturer_country = EXCLUDED.manufacturer_country,
+                item_type            = EXCLUDED.item_type,
+                last_seen            = now()
+            """,
+            rows,
+        )
+ 
+    return len(rows)
+ 
+ 
+def delete_promoted_pharmacy_products(conn) -> int:
+    """
+    Remove quarantine rows whose barcode now exists in `products`
+    (a supermarket started carrying it). Run daily.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM pharmacy_products pp
+            USING products p
+            WHERE pp.item_code = p.item_code
+            """
+        )
+        return cur.rowcount
+ 
