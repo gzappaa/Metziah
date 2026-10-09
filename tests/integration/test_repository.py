@@ -20,6 +20,7 @@ from models.promo import Promotion, PromotionGroup, PromotionItem
 from database.repository import (
     update_store_subchain,
     ensure_chain,
+    ensure_chain_brands,
     upsert_stores,
     upsert_store_products,
     upsert_prices,
@@ -43,7 +44,11 @@ from database.repository import (
     upsert_pharmacy_products,
     upsert_pharmacy_store_products,
     delete_promoted_pharmacy_products,
+    insert_product_enrichment,
+    update_product_enrichment_missing,
 )
+
+from psycopg.types.json import Jsonb
 
 
 
@@ -97,6 +102,98 @@ def test_ensure_chain_is_idempotent(conn):
         )
         assert cur.fetchone()[0] == 1
 
+def test_ensure_chain_brands(conn):
+    chain_id = "TEST_CHAIN_BRANDS"
+
+    ensure_chain(
+        conn,
+        chain_id,
+        "Test Chain HE",
+        "Test Chain EN",
+    )
+
+    ensure_chain_brands(
+        conn,
+        chain_id,
+        ["Brand A", "Brand B", "Brand C"],
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT brands FROM chains WHERE chain_id = %s",
+            (chain_id,),
+        )
+        assert cur.fetchone()[0] == [
+            "Brand A",
+            "Brand B",
+            "Brand C",
+        ]
+
+
+def test_ensure_chain_brands_cleans_and_deduplicates(conn):
+    chain_id = "TEST_CHAIN_BRANDS_CLEAN"
+
+    ensure_chain(
+        conn,
+        chain_id,
+        "Test Chain HE",
+        "Test Chain EN",
+    )
+
+    ensure_chain_brands(
+        conn,
+        chain_id,
+        [
+            " Brand A ",
+            "Brand B",
+            "Brand A",
+            "",
+            "   ",
+            None,
+            " Brand C ",
+        ],
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT brands FROM chains WHERE chain_id = %s",
+            (chain_id,),
+        )
+        assert cur.fetchone()[0] == [
+            "Brand A",
+            "Brand B",
+            "Brand C",
+        ]
+
+
+def test_ensure_chain_brands_none_sets_empty_list(conn):
+    chain_id = "TEST_CHAIN_BRANDS_NONE"
+
+    ensure_chain(
+        conn,
+        chain_id,
+        "Test Chain HE",
+        "Test Chain EN",
+    )
+
+    ensure_chain_brands(
+        conn,
+        chain_id,
+        ["Brand A"],
+    )
+
+    ensure_chain_brands(
+        conn,
+        chain_id,
+        None,
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT brands FROM chains WHERE chain_id = %s",
+            (chain_id,),
+        )
+        assert cur.fetchone()[0] == []
 
 def test_upsert_stores(conn):
     chain_id = "TEST_CHAIN"
@@ -1151,3 +1248,94 @@ def test_delete_promoted_pharmacy_products_noop_when_nothing_promoted(
         "SELECT COUNT(*) FROM pharmacy_products WHERE item_code = %s",
         ("PHARMTEST_STILL_PHARMACY_002",),
     ) == 1
+
+
+# ---- product_enrichment ----
+
+def test_insert_product_enrichment_inserts_new(conn):
+    insert_product_enrichment(
+        conn,
+        item_code="ENRICH_TEST_001",
+        source="test_source",
+        source_file="products_parsed.jsonl",
+        local_name="Test Product",
+        name_he="מוצר בדיקה",
+        name_en="Test Product",
+        brand_he="מותג",
+        category_he="מזון",
+        nutrition_raw={"calories": 120},
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                source,
+                source_file,
+                local_name,
+                name_he,
+                name_en,
+                brand_he,
+                category_he,
+                nutrition_raw
+            FROM product_enrichment
+            WHERE item_code = %s
+            """,
+            ("ENRICH_TEST_001",),
+        )
+
+        row = cur.fetchone()
+
+    assert row == (
+        "test_source",
+        "products_parsed.jsonl",
+        "Test Product",
+        "מוצר בדיקה",
+        "Test Product",
+        "מותג",
+        "מזון",
+        {"calories": 120},
+    )
+
+
+def test_update_product_enrichment_missing_fills_empty_fields(conn):
+    insert_product_enrichment(
+        conn,
+        item_code="ENRICH_TEST_002",
+        source="test_source",
+        local_name="",
+        name_he=None,
+        name_en="Existing English Name",
+        brand_he=None,
+        category_he="מזון",
+    )
+
+    update_product_enrichment_missing(
+        conn,
+        item_code="ENRICH_TEST_002",
+        local_name="New Local Name",
+        name_he="שם חדש",
+        name_en="Replacement English Name",
+        brand_he="מותג חדש",
+        category_he="קטגוריה חדשה",
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT local_name, name_he, name_en, brand_he, category_he
+            FROM product_enrichment
+            WHERE item_code = %s
+            """,
+            ("ENRICH_TEST_002",),
+        )
+
+        row = cur.fetchone()
+
+    assert row == (
+        "New Local Name",
+        "שם חדש",
+        "Existing English Name",
+        "מותג חדש",
+        "מזון",
+    )

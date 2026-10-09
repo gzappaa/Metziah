@@ -4,7 +4,8 @@ database/repository.py
 DB read/write layer for the ingestion pipeline.
 
 Sections:
-    Chains & stores    -- ensure_chain, upsert_stores, update_store_subchain
+    Chains & stores    -- ensure_chain, upsert_stores, update_store_subchain, 
+                           ensure_chain_brands
     Products & prices  -- upsert_products (barcode), upsert_store_products
                            (internal-code, scoped to chain_id+store_id+item_code),
                            upsert_prices, reconcile_removed_items
@@ -42,7 +43,7 @@ MANUFACTURER / MANUFACTURER_COUNTRY:
 
 import logging
 
-
+from psycopg.types.json import Jsonb
 from models.promo import Promotion, PromotionGroup, PromotionItem
 from database.records import PriceRecord, ProductRecord, StoreProductRecord
 
@@ -219,6 +220,14 @@ def ensure_chain(
                 name_he_normalized,
                 name_en_normalized,
             ),
+        )
+
+def ensure_chain_brands(conn, chain_id: str, brands: list[str] | None) -> None:
+    cleaned = list(dict.fromkeys(b.strip() for b in (brands or []) if b and b.strip()))
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE chains SET brands = %s WHERE chain_id = %s",
+            (cleaned, chain_id),
         )
 
 
@@ -1505,4 +1514,239 @@ def delete_promoted_pharmacy_products(conn) -> int:
             """
         )
         return cur.rowcount
- 
+
+
+def insert_product_enrichment(
+    conn,
+    *,
+    item_code,
+    source,
+    source_file=None,
+    local_name=None,
+    name_he=None,
+    name_en=None,
+    brand_he=None,
+    brand_en=None,
+    family_he=None,
+    family_en=None,
+    department_he=None,
+    category_path_he=None,
+    category_path_en=None,
+    category_he=None,
+    subcategory_he=None,
+    ingredients_he=None,
+    ingredients_en=None,
+    description_he=None,
+    description_en=None,
+    nutrition_raw=None,
+):
+    """
+    Insert a new product enrichment record.
+
+    Used when the item_code does not exist yet.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO product_enrichment (
+                item_code,
+                source,
+                source_file,
+                local_name,
+                name_he,
+                name_en,
+                brand_he,
+                brand_en,
+                family_he,
+                family_en,
+                department_he,
+                category_path_he,
+                category_path_en,
+                category_he,
+                subcategory_he,
+                ingredients_he,
+                ingredients_en,
+                description_he,
+                description_en,
+                nutrition_raw
+            )
+            VALUES (
+                %(item_code)s,
+                %(source)s,
+                %(source_file)s,
+                %(local_name)s,
+                %(name_he)s,
+                %(name_en)s,
+                %(brand_he)s,
+                %(brand_en)s,
+                %(family_he)s,
+                %(family_en)s,
+                %(department_he)s,
+                %(category_path_he)s,
+                %(category_path_en)s,
+                %(category_he)s,
+                %(subcategory_he)s,
+                %(ingredients_he)s,
+                %(ingredients_en)s,
+                %(description_he)s,
+                %(description_en)s,
+                %(nutrition_raw)s
+            )
+            """,
+            {
+                "item_code": item_code,
+                "source": source,
+                "source_file": source_file,
+                "local_name": local_name,
+                "name_he": name_he,
+                "name_en": name_en,
+                "brand_he": brand_he,
+                "brand_en": brand_en,
+                "family_he": family_he,
+                "family_en": family_en,
+                "department_he": department_he,
+                "category_path_he": category_path_he,
+                "category_path_en": category_path_en,
+                "category_he": category_he,
+                "subcategory_he": subcategory_he,
+                "ingredients_he": ingredients_he,
+                "ingredients_en": ingredients_en,
+                "description_he": description_he,
+                "description_en": description_en,
+                "nutrition_raw": (
+                    Jsonb(nutrition_raw)
+                    if nutrition_raw is not None
+                    else None
+                ),
+            },
+        )
+
+
+def update_product_enrichment_missing(
+    conn,
+    *,
+    item_code,
+    local_name=None,
+    name_he=None,
+    name_en=None,
+    brand_he=None,
+    brand_en=None,
+    family_he=None,
+    family_en=None,
+    department_he=None,
+    category_path_he=None,
+    category_path_en=None,
+    category_he=None,
+    subcategory_he=None,
+    ingredients_he=None,
+    ingredients_en=None,
+    description_he=None,
+    description_en=None,
+    nutrition_raw=None,
+):
+    """
+    Fill only missing enrichment fields.
+
+    Existing non-empty values are never overwritten.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE product_enrichment
+            SET
+                local_name = COALESCE(
+                    NULLIF(local_name, ''),
+                    %(local_name)s
+                ),
+                name_he = COALESCE(
+                    NULLIF(name_he, ''),
+                    %(name_he)s
+                ),
+                name_en = COALESCE(
+                    NULLIF(name_en, ''),
+                    %(name_en)s
+                ),
+                brand_he = COALESCE(
+                    NULLIF(brand_he, ''),
+                    %(brand_he)s
+                ),
+                brand_en = COALESCE(
+                    NULLIF(brand_en, ''),
+                    %(brand_en)s
+                ),
+                family_he = COALESCE(
+                    NULLIF(family_he, ''),
+                    %(family_he)s
+                ),
+                family_en = COALESCE(
+                    NULLIF(family_en, ''),
+                    %(family_en)s
+                ),
+                department_he = COALESCE(
+                    NULLIF(department_he, ''),
+                    %(department_he)s
+                ),
+                category_path_he = COALESCE(
+                    category_path_he,
+                    %(category_path_he)s
+                ),
+                category_path_en = COALESCE(
+                    category_path_en,
+                    %(category_path_en)s
+                ),
+                category_he = COALESCE(
+                    NULLIF(category_he, ''),
+                    %(category_he)s
+                ),
+                subcategory_he = COALESCE(
+                    NULLIF(subcategory_he, ''),
+                    %(subcategory_he)s
+                ),
+                ingredients_he = COALESCE(
+                    NULLIF(ingredients_he, ''),
+                    %(ingredients_he)s
+                ),
+                ingredients_en = COALESCE(
+                    NULLIF(ingredients_en, ''),
+                    %(ingredients_en)s
+                ),
+                description_he = COALESCE(
+                    NULLIF(description_he, ''),
+                    %(description_he)s
+                ),
+                description_en = COALESCE(
+                    NULLIF(description_en, ''),
+                    %(description_en)s
+                ),
+                nutrition_raw = COALESCE(
+                    nutrition_raw,
+                    %(nutrition_raw)s
+                ),
+                updated_at = now()
+            WHERE item_code = %(item_code)s
+            """,
+            {
+                "item_code": item_code,
+                "local_name": local_name,
+                "name_he": name_he,
+                "name_en": name_en,
+                "brand_he": brand_he,
+                "brand_en": brand_en,
+                "family_he": family_he,
+                "family_en": family_en,
+                "department_he": department_he,
+                "category_path_he": category_path_he,
+                "category_path_en": category_path_en,
+                "category_he": category_he,
+                "subcategory_he": subcategory_he,
+                "ingredients_he": ingredients_he,
+                "ingredients_en": ingredients_en,
+                "description_he": description_he,
+                "description_en": description_en,
+                "nutrition_raw": (
+                    Jsonb(nutrition_raw)
+                    if nutrition_raw is not None
+                    else None
+                ),
+            },
+        )

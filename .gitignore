@@ -39,4 +39,6 @@ shufersal_nutrition.json
 monitoring/data/scraper_coverage.json
 inspection/sheets
 data/parsed
-data/images
+data/images/*
+!data/images/brands/
+!data/images/brands/**

@@ -103,5 +103,21 @@ jobs:
             -d metziah_test \
             -f database/migrations/003_pharmacies.sql
 
+      - name: Apply product enrichment schema
+        run: |
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -f database/migrations/004_product_enrichment.sql
+
+      - name: Apply store product categories schema
+        run: |
+          PGPASSWORD=metziah psql \
+            -h localhost \
+            -U metziah \
+            -d metziah_test \
+            -f database/migrations/005_store_product_categories.sql
+
       - name: Run tests
         run: pytest --import-mode=importlib

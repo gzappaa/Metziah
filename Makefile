@@ -231,8 +231,8 @@ setup-prod:
 	@echo "=== 7. Clean City Market addresses ==="
 	ENV=prod python -m utils.stores.data_enrichment.citymarket_addresses
 
-	@echo "=== 8. Geocode stores ==="
-	ENV=prod python -m utils.stores.data_enrichment.geocode_google
+	# @echo "=== 8. Geocode stores ==="
+	# ENV=prod python -m utils.stores.data_enrichment.geocode_google
 
 	@echo "=== 9. Seed normal stores ==="
 	ENV=prod python -m utils.stores.seed_stores

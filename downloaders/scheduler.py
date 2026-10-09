@@ -49,6 +49,7 @@ from downloaders.common import normalize_store_id
 from utils.products.update_products import discover_new_products
 from utils.file_tracking.cache import refresh_html_caches
 from utils.file_tracking.data_enrichment.populate_file_sizes import main as populate_file_sizes
+from utils.processing.delete_suspicious_products import main as delete_suspicious_products
 
 FEEDS_DIR = (
     PROJECT_DIR / "data" / "test_feeds"
@@ -637,6 +638,7 @@ def main():
             run_file_tracking()
             run_all()
             populate_file_sizes()
+            delete_suspicious_products()
 
         else:
             logger.error(
@@ -649,6 +651,7 @@ def main():
     run_file_tracking()
     run_all()
     populate_file_sizes()
+    delete_suspicious_products()
 
 
 if __name__ == "__main__":

@@ -372,3 +372,114 @@ def mock_chain_metadata(monkeypatch):
         )
 
     return TEST_CHAIN_METADATA
+
+# ---------------------------------------------------------------------------
+# Added for product_enrichment / product_nutrition loader integration tests
+# ---------------------------------------------------------------------------
+
+# Every fixture barcode is 590123456789 + one digit. Setup refuses to run if
+# such rows already exist (so we never delete real data), and teardown deletes
+# anything matching, so a test can never leave rows behind.
+ENRICHMENT_TEST_CODE_LIKE = "590123456789_"
+
+
+class NoCommitConnection:
+    """
+    Wraps the rolled-back-at-teardown `conn` fixture so the production loaders
+    can run unmodified:
+
+      * commit()         -> no-op, so nothing the loader writes is ever durable
+      * `with conn:`     -> does NOT close the connection (psycopg's own
+                            context manager would)
+      * everything else  -> delegated to the real connection
+    """
+
+    def __init__(self, real):
+        self._real = real
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _autocommit_connection():
+    return psycopg.connect(
+        host=settings.PGHOST,
+        port=settings.PGPORT,
+        user=settings.PGUSER,
+        password=settings.PGPASSWORD,
+        dbname=settings.PGDATABASE,
+        autocommit=True,
+    )
+
+
+@pytest.fixture
+def isolated_db(conn, monkeypatch):
+    """
+    Everything the loaders write through `db.get_connection()` lives in one
+    transaction that is rolled back at teardown.
+
+    Safety nets, because "delete everything" matters:
+      1. setup  - refuse to run if fixture barcodes already exist in the DB
+      2. teardown - rollback first (releases the TRUNCATE lock), then delete
+                    anything matching the fixture barcodes on a separate
+                    autocommit connection. If that finds rows, a loader
+                    committed behind our back -> the test errors loudly.
+    """
+    import db  # same module the loaders import
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT to_regclass('product_enrichment'), to_regclass('product_nutrition')"
+        )
+        enrichment_tbl, nutrition_tbl = cur.fetchone()
+
+        if enrichment_tbl is None or nutrition_tbl is None:
+            pytest.skip("004_product_enrichment.sql has not been applied to the test DB")
+
+        cur.execute(
+            "SELECT count(*) FROM product_enrichment WHERE item_code LIKE %s",
+            (ENRICHMENT_TEST_CODE_LIKE,),
+        )
+        (existing,) = cur.fetchone()
+
+    if existing:
+        pytest.fail(
+            f"Refusing to run: {existing} product_enrichment rows already match the "
+            f"test barcode pattern {ENRICHMENT_TEST_CODE_LIKE!r}. Remove them first."
+        )
+
+    proxy = NoCommitConnection(conn)
+    monkeypatch.setattr(db, "get_connection", lambda: proxy)
+
+    yield proxy
+
+    conn.rollback()
+
+    cleanup = _autocommit_connection()
+    try:
+        with cleanup.cursor() as cur:
+            # product_nutrition rows go with them (ON DELETE CASCADE)
+            cur.execute(
+                "DELETE FROM product_enrichment WHERE item_code LIKE %s",
+                (ENRICHMENT_TEST_CODE_LIKE,),
+            )
+            leaked = cur.rowcount
+    finally:
+        cleanup.close()
+
+    assert leaked == 0, (
+        f"{leaked} test rows were COMMITTED by a loader (now deleted). "
+        "NoCommitConnection should have prevented this."
+    )
