@@ -101,7 +101,9 @@
                         onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
                     >
                     <span class="receipt-store-brand">{{ item.resolved_brand }}</span>
-                    <span class="receipt-store-sub">({{ item.store_name }})</span>
+                    {% if item.store_name %}
+                        <span class="receipt-store-sub">({{ item.store_name }})</span>
+                    {% endif %}
                     {% if is_lowest %}
                         <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">הזול ביותר</span>
                     {% endif %}
@@ -147,7 +149,7 @@
                     </div>
 
                     <div style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">
-                        סניף: {{ promo.resolved_brand }} ({{ promo.store_name }})
+                        סניף: {{ promo.resolved_brand }}{% if promo.store_name %} ({{ promo.store_name }}){% endif %}
                         {% if promo.min_qty and promo.min_qty > 1 %} • מינימום {{ promo.min_qty }} יח׳{% endif %}
                         {% if promo.remarks %} • {{ promo.remarks }}{% endif %}
                     </div>
@@ -171,69 +173,181 @@
 </section>
 {% endif %}
 
-<!-- 4. PRODUCT DESCRIPTION, INGREDIENTS AND NUTRITION -->
+
+<!-- 4. ENRICHED PRODUCT DATA AND NUTRITION -->
 {% if product.enrichment %}
-<section style="margin-bottom: 24px;">
+{% set enrichment = product.enrichment %}
+<section style="margin-bottom: 32px;">
     <h2 style="font-size: 22px; margin-bottom: 12px;">נתונים מועשרים וסימון תזונתי</h2>
 
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
-        <div>
-            {% if product.enrichment.description_he %}
-                <div style="margin-bottom: 16px;">
-                    <div style="font-family: var(--receipt-mono); font-size: 12px; font-weight: 700; color: var(--ink-secondary);">
-                        // תיאור המוצר
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px;">
+
+        <!-- Product information -->
+        <div style="background: #fff; border: 1px solid var(--paper-border); border-radius: 4px; padding: 18px;">
+            <h3 style="font-size: 17px; margin-bottom: 14px;">פרטי המוצר</h3>
+
+            {% set details = [
+                ('שם מקורי', enrichment.local_name),
+                ('שם בעברית', enrichment.name_he),
+                ('שם באנגלית', enrichment.name_en),
+                ('מותג בעברית', enrichment.brand_he),
+                ('מותג באנגלית', enrichment.brand_en),
+                ('יצרן', product.manufacturer),
+                ('משפחה', enrichment.family_he),
+                ('מחלקה', enrichment.department_he),
+                ('קטגוריה', enrichment.category_he),
+                ('תת־קטגוריה', enrichment.subcategory_he),
+            ] %}
+
+            {% for label, value in details %}
+                {% if value %}
+                <div style="display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px dashed var(--paper-dashed);">
+                    <span style="font-size: 13px; color: var(--ink-secondary); flex-shrink: 0;">{{ label }}</span>
+                    <span style="font-size: 13px; text-align: left; overflow-wrap: anywhere;">{{ value }}</span>
+                </div>
+                {% endif %}
+            {% endfor %}
+
+            {% if enrichment.category_path_he %}
+                <div style="margin-top: 12px;">
+                    <div style="font-size: 12px; color: var(--ink-secondary); margin-bottom: 6px;">היררכיית קטגוריות</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                        {% for category in enrichment.category_path_he %}
+                            {% if category %}
+                            <span style="font-size: 12px; padding: 4px 8px; background: var(--paper-sheet-alt); border: 1px solid var(--paper-border); border-radius: 3px;">
+                                {{ category }}
+                            </span>
+                            {% endif %}
+                        {% endfor %}
                     </div>
-                    <p style="font-size: 14px; margin-top: 4px; line-height: 1.6;">
-                        {{ product.enrichment.description_he }}
-                    </p>
                 </div>
             {% endif %}
 
-            {% if product.enrichment.ingredients_he %}
-                <div style="margin-bottom: 16px;">
-                    <div style="font-family: var(--receipt-mono); font-size: 12px; font-weight: 700; color: var(--ink-secondary);">
-                        // רכיבים
-                    </div>
-                    <p style="font-size: 13px; margin-top: 4px; line-height: 1.6; color: var(--ink-secondary);">
-                        {{ product.enrichment.ingredients_he }}
+            {% if enrichment.category_path_en %}
+                <details style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 12px; color: var(--ink-secondary);">Category hierarchy (English)</summary>
+                    <p style="font-size: 12px; margin-top: 8px;">
+                        {{ enrichment.category_path_en|join(' › ') }}
                     </p>
+                </details>
+            {% endif %}
+
+            {% if enrichment.source %}
+                <div style="font-size: 11px; color: var(--ink-muted); margin-top: 14px;">
+                    מקור הנתונים: {{ enrichment.source }}
+                    {% if enrichment.source_file %} · {{ enrichment.source_file }}{% endif %}
                 </div>
             {% endif %}
         </div>
 
-        {% if product.enrichment.nutrients %}
-        <div>
-            <div class="nutrition-receipt">
-                <div class="nutrition-receipt-title">
-                   סימון תזונתי 
-                </div>
+        <!-- Description and ingredients -->
+        <div style="background: #fff; border: 1px solid var(--paper-border); border-radius: 4px; padding: 18px;">
+            <h3 style="font-size: 17px; margin-bottom: 14px;">תיאור ורכיבים</h3>
 
-                {% for nut in product.enrichment.nutrients %}
-                    <div class="nutrition-row">
-                        <div>
-                            <span>{{ nut.raw_label }}</span>
-                            {% if nut.is_high_sodium %}
-                                <span class="stamp-badge" style="font-size: 8px; padding: 0 4px; margin-right: 4px;">נתרן גבוה</span>
-                            {% endif %}
-                            {% if nut.is_high_saturated_fat %}
-                                <span class="stamp-badge" style="font-size: 8px; padding: 0 4px; margin-right: 4px;">שומן רווי גבוה</span>
-                            {% endif %}
+            {% if enrichment.description_he or enrichment.description_en %}
+                <div style="margin-bottom: 18px;">
+                    <div style="font-size: 12px; font-weight: 700; color: var(--ink-secondary);">תיאור המוצר</div>
+                    {% if enrichment.description_he %}
+                        <p dir="rtl" style="font-size: 14px; margin-top: 6px; line-height: 1.7; overflow-wrap: anywhere;">{{ enrichment.description_he }}</p>
+                    {% endif %}
+                    {% if enrichment.description_en %}
+                        <details style="margin-top: 8px;">
+                            <summary style="cursor: pointer; font-size: 12px; color: var(--ink-secondary);">Description in English</summary>
+                            <p dir="ltr" style="font-size: 13px; margin-top: 6px; line-height: 1.6;">{{ enrichment.description_en }}</p>
+                        </details>
+                    {% endif %}
+                </div>
+            {% endif %}
+
+            {% if enrichment.ingredients_he or enrichment.ingredients_en %}
+                <div style="margin-bottom: 18px;">
+                    <div style="font-size: 12px; font-weight: 700; color: var(--ink-secondary);">רכיבים</div>
+                    {% if enrichment.ingredients_he %}
+                        <p dir="rtl" style="font-size: 13px; color: var(--ink-secondary); margin-top: 6px; line-height: 1.8; overflow-wrap: anywhere;">{{ enrichment.ingredients_he }}</p>
+                    {% endif %}
+                    {% if enrichment.ingredients_en %}
+                        <details style="margin-top: 8px;">
+                            <summary style="cursor: pointer; font-size: 12px; color: var(--ink-secondary);">Ingredients in English</summary>
+                            <p dir="ltr" style="font-size: 13px; color: var(--ink-secondary); margin-top: 6px; line-height: 1.7;">{{ enrichment.ingredients_en }}</p>
+                        </details>
+                    {% endif %}
+                </div>
+            {% endif %}
+
+            {% if enrichment.nutrition_raw %}
+                <details style="margin-top: 12px;">
+                    <summary style="cursor: pointer; font-size: 12px; color: var(--ink-secondary);">נתונים תזונתיים מקוריים</summary>
+                    <pre dir="auto" style="white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin-top: 8px;">{{ enrichment.nutrition_raw | tojson(indent=2) }}</pre>
+                </details>
+            {% endif %}
+
+            {% if not enrichment.description_he and not enrichment.description_en and not enrichment.ingredients_he and not enrichment.ingredients_en and not enrichment.nutrition_raw %}
+                <p style="font-size: 13px; color: var(--ink-muted);">אין תיאור או רשימת רכיבים זמינים למוצר זה.</p>
+            {% endif %}
+        </div>
+
+        <!-- Nutrition facts -->
+        <div style="background: #fff; border: 1px solid var(--paper-border); border-radius: 4px; padding: 18px;">
+            <h3 style="font-size: 17px; margin-bottom: 4px;">סימון תזונתי</h3>
+            <p style="font-size: 12px; color: var(--ink-secondary); margin-bottom: 12px;">
+                הערכים מוצגים לפי בסיס המדידה שסופק במקור.
+            </p>
+
+            {% if enrichment.nutrition %}
+                <div class="nutrition-receipt">
+                    <div class="nutrition-receipt-title">ערכים תזונתיים</div>
+
+                    {% for nut in enrichment.nutrition %}
+                        <div class="nutrition-row">
+                            <div style="min-width: 0;">
+                                <span>{{ nut.raw_label }}</span>
+
+                                {% if nut.nutrient %}
+                                    <div style="font-size: 10px; color: var(--ink-muted);">{{ nut.nutrient }}</div>
+                                {% endif %}
+
+                                {% if nut.flags %}
+                                    <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                                        {% for flag in nut.flags %}
+                                            <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">{{ flag }}</span>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <div style="text-align: left; flex-shrink: 0;">
+                                <div class="mono-nums" style="font-weight: 700;">
+                                    {% if nut.bound %}{{ nut.bound }}{% endif %}{{ nut.amount if nut.amount is not none else '—' }}{% if nut.unit %} {{ nut.unit }}{% endif %}
+                                </div>
+                                {% if nut.basis and nut.basis != 'unknown' %}
+                                    <small style="font-size: 10px; color: var(--ink-secondary);">
+                                        {{ nut.basis }}{% if nut.basis_raw %} · {{ nut.basis_raw }}{% endif %}
+                                    </small>
+                                {% elif nut.basis_raw %}
+                                    <small style="font-size: 10px; color: var(--ink-secondary);">{{ nut.basis_raw }}</small>
+                                {% endif %}
+                            </div>
                         </div>
-                        <span class="mono-nums" style="font-weight: 700;">
-                            {{ nut.amount }} {{ nut.unit }}
-                            {% if nut.basis %}<small>({{ nut.basis }})</small>{% endif %}
-                        </span>
-                    </div>
-                {% endfor %}
-            </div>
+                    {% endfor %}
+                </div>
+
+                {% if enrichment.nutrition | selectattr('is_canonical') | list %}
+                    <details style="margin-top: 12px;">
+                        <summary style="cursor: pointer; font-size: 12px; color: var(--ink-secondary);">מידע על הנתונים</summary>
+                        <p style="font-size: 11px; color: var(--ink-secondary); margin-top: 8px; line-height: 1.6;">
+                            נתונים מנורמלים מזוהים לפי שם הרכיב התזונתי. ייתכנו ערכים נוספים שהתקבלו מהמקור ושלא ניתן היה לנרמל.
+                        </p>
+                    </details>
+                {% endif %}
+            {% else %}
+                <p style="font-size: 13px; color: var(--ink-muted);">אין סימון תזונתי מובנה זמין למוצר זה.</p>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
 </section>
 {% else %}
-<div style="background-color: var(--paper-sheet-alt); border: 1px dashed var(--paper-dashed); padding: 16px; border-radius: 4px; text-align: center; color: var(--ink-secondary); font-size: 13px;">
+<div style="background-color: var(--paper-sheet-alt); border: 1px dashed var(--paper-dashed); padding: 16px; border-radius: 4px; text-align: center; color: var(--ink-secondary); font-size: 13px; margin-bottom: 24px;">
     // פרטי המוצר המורחבים אינם זמינים כרגע • ההשוואה בין המחירים זמינה במלואה.
 </div>
 {% endif %}
-
 {% endblock %}

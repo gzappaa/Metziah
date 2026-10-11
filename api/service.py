@@ -7,7 +7,6 @@ from api.schemas import (
     ProductDetail,
     ProductEnrichment,
     Promotion,
-    SearchResult,
     StoreProduct,
     StoreProductCategory,
     StoreProductSearchResult,
@@ -67,6 +66,7 @@ def get_product_detail(barcode: str) -> ProductDetail | None:
     )
 
 
+
 def search_products(
     q: str,
     limit: int = 20,
@@ -76,14 +76,20 @@ def search_products(
     result = queries.search(q, limit=limit, offset=offset)
     products = []
 
+    item_codes = [
+        item["item_code"]
+        for item in result["items"]
+    ]
+    prices_by_item = queries.get_prices_for_products(item_codes)
+
     for item in result["items"]:
         product = Product.model_validate(item)
-        prices = queries.get_prices(product.item_code)
+        prices = prices_by_item.get(product.item_code, [])
 
         available_prices = [
             price["price"]
             for price in prices
-            if price.get("price") is not None
+            if price["price"] is not None and price["price"] > 0
         ]
 
         products.append(
@@ -114,6 +120,7 @@ def search_products(
         "offset": result["offset"],
     }
 
+
 def get_store_product_categories() -> list[StoreProductCategory]:
     """Return store-product categories in display order."""
     return [
@@ -131,35 +138,6 @@ def get_store_product_subcategories(
         for row in queries.get_store_product_subcategories(category_id)
     ]
 
-
-def get_store_products_by_subcategory(
-    subcategory_id: int,
-    limit: int = 20,
-    offset: int = 0,
-) -> StoreProductSearchResult:
-    """Return store products matched to a subcategory."""
-    result = queries.get_store_products_by_subcategory(
-        subcategory_id,
-        limit=limit,
-        offset=offset,
-    )
-
-    items = []
-    for row in result["items"]:
-        row = dict(row)
-        row["shopper_brand"] = resolve_shopper_brand(
-            row.get("store_name"),
-            row.get("brands"),
-            row.get("chain_name_he"),
-        )
-        items.append(StoreProduct.model_validate(row))
-
-    return StoreProductSearchResult(
-        items=items,
-        total=result["total"],
-        limit=result["limit"],
-        offset=result["offset"],
-    )
 
 
 def search_store_products(

@@ -13,6 +13,10 @@ class APIModel(BaseModel):
 
 class Product(BaseModel):
     item_code: str
+    name: str | None = None
+    manufacturer: str | None = None
+    manufacturer_country: str | None = None
+    item_type: int | None = None
     name_he: str | None = None
     name_en: str | None = None
     brand_he: str | None = None
@@ -100,6 +104,7 @@ class Nutrition(BaseModel):
 
 
 class ProductEnrichment(Product):
+    local_name: str | None = None
     source: str
     source_file: str | None = None
     category_path_he: list[str] | None = None

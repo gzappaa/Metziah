@@ -6,28 +6,35 @@ from datetime import datetime, timezone
 
 
 def get_product(barcode: str) -> dict | None:
-    """Return an enriched product by barcode, or None if not found."""
+    """Return core product data with optional enrichment fields."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT
-                    item_code,
-                    name_he,
-                    name_en,
-                    brand_he,
-                    brand_en,
-                    family_he,
-                    family_en,
-                    department_he,
-                    category_he,
-                    subcategory_he,
-                    description_he,
-                    description_en,
-                    ingredients_he,
-                    ingredients_en
-                FROM product_enrichment
-                WHERE item_code = %s
+                    p.item_code,
+                    p.name,
+                    p.manufacturer,
+                    p.manufacturer_country,
+                    p.item_type,
+                    pe.local_name,
+                    pe.name_he,
+                    pe.name_en,
+                    pe.brand_he,
+                    pe.brand_en,
+                    pe.family_he,
+                    pe.family_en,
+                    pe.department_he,
+                    pe.category_he,
+                    pe.subcategory_he,
+                    pe.description_he,
+                    pe.description_en,
+                    pe.ingredients_he,
+                    pe.ingredients_en
+                FROM products AS p
+                LEFT JOIN product_enrichment AS pe
+                    ON pe.item_code = p.item_code
+                WHERE p.item_code = %s
                 """,
                 (barcode,),
             )
@@ -84,6 +91,51 @@ def get_prices(barcode: str) -> list[dict]:
 
             columns = [column.name for column in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+
+def get_prices_for_products(item_codes: list[str]) -> dict[str, list[dict]]:
+    """Return current prices grouped by product barcode in one query."""
+    if not item_codes:
+        return {}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    p.item_code,
+                    p.chain_id,
+                    p.store_id,
+                    p.price
+                FROM prices AS p
+                WHERE p.item_code = ANY(%s)
+                  AND p.price > 0
+                ORDER BY
+                    p.item_code,
+                    p.price ASC,
+                    p.chain_id,
+                    p.store_id
+                """,
+                (item_codes,),
+            )
+
+            prices_by_item: dict[str, list[dict]] = {
+                item_code: [] for item_code in item_codes
+            }
+
+            for item_code, chain_id, store_id, price in cur.fetchall():
+                prices_by_item[item_code].append(
+                    {
+                        "item_code": item_code,
+                        "chain_id": chain_id,
+                        "store_id": store_id,
+                        "price": price,
+                    }
+                )
+
+            return prices_by_item
+
 
 
 def get_promotions(barcode: str) -> list[dict]:
@@ -221,7 +273,9 @@ def search(
     if offset < 0:
         raise ValueError("offset must be non-negative")
 
-    pattern = f"%{q}%"
+    escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped_q}%"
+
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -229,13 +283,14 @@ def search(
                 """
                 SELECT COUNT(*)
                 FROM product_enrichment
-                WHERE item_code ILIKE %s
-                   OR name_he ILIKE %s
-                   OR name_en ILIKE %s
+                WHERE item_code ILIKE %s ESCAPE E'\\\\'
+                   OR name_he ILIKE %s ESCAPE E'\\\\'
+                   OR name_en ILIKE %s ESCAPE E'\\\\'
                 """,
                 (pattern, pattern, pattern),
             )
             total = cur.fetchone()[0]
+
 
             cur.execute(
                 """
@@ -248,9 +303,9 @@ def search(
                     category_he,
                     subcategory_he
                 FROM product_enrichment
-                WHERE item_code ILIKE %s
-                   OR name_he ILIKE %s
-                   OR name_en ILIKE %s
+                WHERE item_code ILIKE %s ESCAPE E'\\\\'
+                   OR name_he ILIKE %s ESCAPE E'\\\\'
+                   OR name_en ILIKE %s ESCAPE E'\\\\'
                 ORDER BY
                     CASE WHEN item_code = %s THEN 0 ELSE 1 END,
                     name_he NULLS LAST,
@@ -271,14 +326,21 @@ def search(
     }
 
 def get_store_product_categories() -> list[dict]:
-    """Return store-product categories in display order."""
+    """Return store-product categories in display order with product counts."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, sort_order
-                FROM store_product_categories
-                ORDER BY sort_order, name
+                SELECT
+                    c.id,
+                    c.name,
+                    c.sort_order,
+                    COUNT(DISTINCT m.item_code) AS count
+                FROM store_product_categories AS c
+                LEFT JOIN store_product_category_matches AS m
+                    ON m.category_id = c.id
+                GROUP BY c.id, c.name, c.sort_order
+                ORDER BY c.sort_order, c.name
                 """
             )
             columns = [column.name for column in cur.description]
@@ -288,7 +350,7 @@ def get_store_product_categories() -> list[dict]:
 def get_store_product_subcategories(
     category_id: int | None = None,
 ) -> list[dict]:
-    """Return store-product subcategories, optionally filtered by category."""
+    """Return store-product subcategories with product counts."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -298,17 +360,29 @@ def get_store_product_subcategories(
                     sc.category_id,
                     c.name AS category,
                     sc.name,
-                    sc.sort_order
+                    sc.sort_order,
+                    COUNT(DISTINCT (m.chain_id, m.store_id, m.item_code)) AS count
                 FROM store_product_subcategories AS sc
                 JOIN store_product_categories AS c
                     ON c.id = sc.category_id
+                LEFT JOIN store_product_category_matches AS m
+                    ON m.subcategory_id = sc.id
                 WHERE (%s::SMALLINT IS NULL OR sc.category_id = %s::SMALLINT)
+                GROUP BY
+                    sc.id,
+                    sc.category_id,
+                    c.name,
+                    sc.name,
+                    sc.sort_order,
+                    c.sort_order
                 ORDER BY c.sort_order, sc.sort_order, sc.name
                 """,
                 (category_id, category_id),
             )
             columns = [column.name for column in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 
 
 
@@ -368,7 +442,9 @@ def get_store_products_by_subcategory(
                         MIN(price) FILTER (
                             WHERE price > 0
                         ) AS lowest_price,
-                        MIN(promo_price) AS cheapest_promotion
+                        MIN(promo_price) FILTER (
+                            WHERE promo_price > 0
+                        ) AS cheapest_promotion
                     FROM matched
                     GROUP BY product_name
                 )
@@ -420,12 +496,19 @@ def get_store_products_by_subcategory(
                     MIN(price) FILTER (
                         WHERE price > 0
                     ) AS lowest_price,
-                    MIN(promo_price) AS cheapest_promotion
+                    MIN(promo_price) FILTER (
+                        WHERE promo_price > 0
+                    ) AS cheapest_promotion
                 FROM matched
                 GROUP BY product_name
                 ORDER BY
-                    product_name,
-                    lowest_price NULLS LAST
+                    CASE WHEN MIN(price) FILTER (
+                        WHERE price > 0
+                    ) IS NULL THEN 1 ELSE 0 END,
+                    MIN(price) FILTER (
+                        WHERE price > 0
+                    ) ASC,
+                    product_name ASC
                 LIMIT %s OFFSET %s
                 """,
                 (subcategory_id, limit, offset),
@@ -443,6 +526,7 @@ def get_store_products_by_subcategory(
         "limit": limit,
         "offset": offset,
     }
+
 
 def search_store_products(
     q: str,
@@ -464,7 +548,8 @@ def search_store_products(
             "offset": offset,
         }
 
-    pattern = f"%{q}%"
+    escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped_q}%"
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -472,8 +557,8 @@ def search_store_products(
                 """
                 SELECT COUNT(*)
                 FROM store_products
-                WHERE name ILIKE %s
-                   OR item_code ILIKE %s
+                WHERE name ILIKE %s ESCAPE E'\\\\'
+                   OR item_code ILIKE %s ESCAPE E'\\\\'
                 """,
                 (pattern, pattern),
             )
@@ -500,11 +585,11 @@ def search_store_products(
                 JOIN stores AS s
                     ON s.chain_id = sp.chain_id
                    AND s.store_id = sp.store_id
-                WHERE sp.name ILIKE %s
-                   OR sp.item_code ILIKE %s
+                WHERE sp.name ILIKE %s ESCAPE E'\\\\'
+                   OR sp.item_code ILIKE %s ESCAPE E'\\\\'
                 ORDER BY
                     CASE
-                        WHEN sp.name ILIKE %s THEN 0
+                        WHEN sp.name ILIKE %s ESCAPE E'\\\\' THEN 0
                         ELSE 1
                     END,
                     sp.name,
@@ -650,7 +735,13 @@ def get_fresh_product_detail(
                  AND p.item_code = m.item_code
                 WHERE m.product_name = %s
                   AND m.subcategory_id = %s
-                ORDER BY p.price ASC NULLS LAST, c.name_he_normalized, s.store_name
+                ORDER BY
+                    CASE WHEN p.price > 0 THEN 0 ELSE 1 END,
+                    p.price ASC NULLS LAST,
+                    c.name_he_normalized NULLS LAST,
+                    s.store_name NULLS LAST,
+                    m.chain_id,
+                    m.store_id
                 """,
                 (now, now, product_name, subcategory_id),
             )

@@ -28,8 +28,12 @@ PLACEHOLDER_IMAGE = (
     Path(__file__).resolve().parent / "static" / "image-placeholder.svg"
 )
 
-templates = Jinja2Templates(directory="api/templates")
-
+templates = Jinja2Templates(
+    directory=str(Path(__file__).resolve().parent / "templates")
+)
+templates.env.policies["json.dumps_kwargs"]["ensure_ascii"] = False
+templates.env.globals["app_version"] = "0.3.0-PROD"
+templates.env.globals["data_updated"] = "2026-10-09"
 
 def find_product_image(item_code: str) -> Path | None:
     """Find a product image using its item code across known sources."""
@@ -94,21 +98,21 @@ def product_image(item_code: str) -> FileResponse:
 @router.get("/brand-logo/{brand_name}", include_in_schema=False)
 def brand_logo(brand_name: str) -> FileResponse:
     """Serve a brand logo or the neutral image placeholder."""
-    if (
-        not brand_name
-        or "/" in brand_name
-        or "\\" in brand_name
-        or brand_name in {".", ".."}
-    ):
+    brand_name = brand_name.strip()
+
+    if "\x00" in brand_name:
         return FileResponse(PLACEHOLDER_IMAGE, media_type="image/svg+xml")
 
-    candidate = (BRAND_IMAGES_DIR / f"{brand_name}.jpg").resolve()
+    try:
+        candidate = (BRAND_IMAGES_DIR / f"{brand_name}.jpg").resolve()
 
-    if (
-        candidate.parent == BRAND_IMAGES_DIR.resolve()
-        and candidate.is_file()
-    ):
-        return FileResponse(candidate, media_type="image/jpeg")
+        if (
+            candidate.parent == BRAND_IMAGES_DIR.resolve()
+            and candidate.is_file()
+        ):
+            return FileResponse(candidate, media_type="image/jpeg")
+    except (ValueError, OSError):
+        pass
 
     return FileResponse(PLACEHOLDER_IMAGE, media_type="image/svg+xml")
 
@@ -270,8 +274,10 @@ def product_detail(request: Request, barcode: str) -> HTMLResponse:
         "item_code": product.item_code,
         "name": (
             (enrichment.name_he if enrichment else None)
+            or (enrichment.local_name if enrichment else None)
             or product.name_he
             or product.name_en
+            or product.name
             or product.item_code
         ),
         "brand": (
@@ -290,9 +296,15 @@ def product_detail(request: Request, barcode: str) -> HTMLResponse:
             or product.subcategory_he
             or ""
         ),
-        "quantity": None,
-        "unit_qty": None,
-        "manufacturer": None,
+        "quantity": next(
+            (p.get("quantity") for p in prices_view if p.get("quantity") is not None),
+            None,
+        ),
+        "unit_qty": next(
+            (p.get("unit_qty") for p in prices_view if p.get("unit_qty")),
+            None,
+        ),
+        "manufacturer": product.manufacturer,
         "prices": prices_view,
         "promotions": promotions_view,
         "enrichment": enrichment,
@@ -360,6 +372,7 @@ def fresh_product_detail(
         else None
     )
 
+
     return templates.TemplateResponse(
         request=request,
         name="fresh_product_detail.html",
@@ -370,7 +383,9 @@ def fresh_product_detail(
             "category": first_store["category"],
             "subcategory": first_store["subcategory"],
             "stores": stores,
+            "promotions": promotions,
             "lowest_price": lowest_price,
             "lowest_promotion": lowest_promotion,
         },
     )
+
