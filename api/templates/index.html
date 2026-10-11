@@ -1,0 +1,465 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+
+<style>
+    .home-search {
+        margin-bottom: 24px;
+    }
+
+    .home-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        padding: 20px 0;
+        margin-bottom: 0;
+        border-top: 1px solid var(--paper-border);
+        border-bottom: 1px solid var(--paper-border);
+    }
+
+    .home-stat {
+        display: block;
+        padding: 20px 12px;
+        text-align: center;
+        text-decoration: none;
+        color: var(--ink-primary);
+        background: var(--paper-sheet-alt);
+        border: 1px solid var(--paper-border);
+        border-radius: 8px;
+    }
+
+    .home-stat-value {
+        display: block;
+        font-size: clamp(25px, 4vw, 36px);
+        line-height: 1.2;
+        font-weight: 800;
+        margin-bottom: 8px;
+        color: var(--ink-stamp-red);
+    }
+
+    .home-stat-label {
+        display: block;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--ink-secondary);
+    }
+
+    .home-tabs {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        padding: 24px 0;
+        margin: 0 0 28px;
+        border-bottom: 1px dashed var(--paper-border);
+    }
+
+    .home-tab {
+        flex: 1;
+        max-width: 340px;
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 16px 22px;
+        border: 1px solid var(--paper-border);
+        border-radius: 8px;
+        background: var(--paper-sheet, #fff);
+        color: var(--ink-primary);
+        text-decoration: none;
+        font-size: 18px;
+        font-weight: 800;
+        transition: background 150ms ease, border-color 150ms ease;
+    }
+
+    .home-tab:hover {
+        background: var(--paper-sheet-alt);
+        border-color: var(--ink-stamp-red);
+    }
+
+    .home-tab.active {
+        background: var(--ink-primary);
+        color: var(--paper-sheet, #fff);
+        border-color: var(--ink-primary);
+    }
+
+    .home-tab-icon {
+        font-size: 25px;
+    }
+
+    .home-section-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 20px 0 16px;
+    }
+
+    .home-section-heading h2 {
+        font-size: 22px;
+        margin: 0;
+    }
+
+    @media (max-width: 600px) {
+        .home-stats {
+            gap: 6px;
+            padding: 14px 0;
+        }
+
+        .home-stat {
+            padding: 14px 4px;
+        }
+
+        .home-stat-value {
+            font-size: clamp(20px, 5vw, 28px);
+        }
+
+        .home-stat-label {
+            font-size: 12px;
+        }
+
+        .home-tabs {
+            gap: 8px;
+            padding: 18px 0;
+        }
+
+        .home-tab {
+            min-height: 60px;
+            padding: 12px 8px;
+            gap: 6px;
+            font-size: 15px;
+        }
+
+        .home-tab-icon {
+            font-size: 20px;
+        }
+    }
+</style>
+
+<!-- 1. SEARCH -->
+
+<section class="home-search">
+    <div style="font-family: var(--receipt-mono); font-size: 13px; color: var(--ink-secondary); margin-bottom: 8px;">
+        &gt;&gt;&gt; חיפוש מהיר בקטלוג הרשתות (HTMX LIVE)
+    </div>
+
+    <div class="receipt-search-box">
+        <span style="font-size: 20px;">🔍</span>
+        <input
+            type="text"
+            name="q"
+            class="receipt-search-input"
+            placeholder="חיפוש מוצר בסופר, ירק/בשר טרי, מותג או ברקוד..."
+            hx-get="/search"
+            hx-trigger="keyup changed delay:200ms, search"
+            hx-target="#search-results"
+            autocomplete="off"
+            dir="rtl"
+            value="{{ query or '' }}"
+        />
+        <span class="search-shortcut-pill">שקיפות מחירים</span>
+    </div>
+
+    <div id="search-results"></div>
+</section>
+
+<!-- 2. DATABASE STATISTICS -->
+
+<section class="home-stats" aria-label="נתוני הקטלוג">
+    <div class="home-stat">
+        <span class="home-stat-value mono-nums">
+            {{ "{:,}".format(total_stores) if total_stores is defined and total_stores is not none else "—" }}
+        </span>
+        <span class="home-stat-label">🏪 סניפים</span>
+    </div>
+
+    <div class="home-stat">
+        <span class="home-stat-value mono-nums">
+            {{ "{:,}".format(total_brands) if total_brands is defined and total_brands is not none else "—" }}
+        </span>
+        <span class="home-stat-label">🏪 רשתות שיווק</span>
+    </div>
+
+    <div class="home-stat">
+        <span class="home-stat-value mono-nums">
+            {{ "{:,}".format(total_fresh_products) if total_fresh_products is defined and total_fresh_products is not none else "—" }}
+        </span>
+        <span class="home-stat-label">🌱 מוצרי תוצרת טרייה</span>
+    </div>
+</section>
+
+<!-- 3. PRODUCT CATALOG NAVIGATION -->
+
+<nav class="home-tabs" aria-label="סוגי מוצרים">
+    <a
+        href="/?tab=packaged"
+        class="home-tab {% if active_tab == 'packaged' %}active{% endif %}"
+        {% if active_tab == 'packaged' %}aria-current="page"{% endif %}
+    >
+        <span class="home-tab-icon">🛒</span>
+        <span>מוצרים ארוזים</span>
+    </a>
+
+    <a
+        href="/?tab=fresh"
+        class="home-tab {% if active_tab == 'fresh' %}active{% endif %}"
+        {% if active_tab == 'fresh' %}aria-current="page"{% endif %}
+    >
+        <span class="home-tab-icon">🌱</span>
+        <span>תוצרת טרייה</span>
+    </a>
+</nav>
+
+<!-- 4. CATEGORIES -->
+
+{% if not (active_tab == 'packaged' and active_category) %}
+<section style="margin-bottom: 32px;">
+
+    {% if not (active_tab == 'fresh' and active_category) %}
+        <div class="category-tiles-grid">
+            {% for cat in categories %}
+                {% set category_name = cat.name or cat.name_he %}
+                {% set category_id = cat.id %}
+                {% set is_active = (active_category|string == category_id|string) if active_tab == 'fresh' else (active_category == category_name) %}
+
+                <a
+                    href="/?tab={{ active_tab }}&amp;category={{ category_id if active_tab == 'fresh' else category_name|urlencode }}"
+                    class="category-tile {% if is_active %}active{% endif %}"
+                    {% if is_active %}aria-current="page"{% endif %}
+                >
+                    <div class="category-tile-top">
+                        <span class="category-tile-icon">
+                            {% if active_tab == 'fresh' %}
+                                {% if category_name == 'FRUITS_AND_VEGETABLES' or category_name == 'ירקות ופירות' %}🥬
+                                {% elif category_name == 'MEAT' or category_name == 'קצבייה' %}🥩
+                                {% elif category_name == 'FISH' or category_name == 'דגים ופירות ים' %}🐟
+                                {% elif category_name == 'BREAD' or category_name == 'לחמים ומאפים' %}🍞
+                                {% else %}🌱{% endif %}
+                            {% else %}
+                                {% set category_emojis = {
+                                    'אחר': '🛍️',
+                                    'בעלי חיים': '🐾',
+                                    'בשר ועוף': '🍗',
+                                    'דגים ופירות ים': '🐟',
+                                    'דגנים וארוחת בוקר': '🥣',
+                                    'ויטמינים ובריאות': '💊',
+                                    'חטיפים וממתקים': '🍫',
+                                    'חלב וביצים': '🥛',
+                                    'יין ואלכוהול': '🍷',
+                                    'ירקות ופירות': '🥑',
+                                    'כלי בית ופנאי': '🏠',
+                                    'לחם ומאפים': '🥐',
+                                    'מוצרי חג': '🎉',
+                                    'מזון מיוחד': '🥗',
+                                    'מכולת ובישול': '🍳',
+                                    'מעדנייה': '🧀',
+                                    'משקאות': '🥤',
+                                    'ניקיון ומוצרי בית': '🧹',
+                                    'פארם וטיפוח': '🧴',
+                                    'קפואים': '🧊',
+                                    'תינוקות': '🍼'
+                                } %}
+                                {{ category_emojis.get(category_name, '🛒') }}
+                            {% endif %}
+                        </span>
+
+                        <span class="category-tile-pill">
+                            {{ cat.count|default(0) }} מוצרים
+                        </span>
+                    </div>
+
+                    <div>
+                        <div class="category-tile-title">{{ category_name }}</div>
+                        <div class="category-tile-sub">
+                            {% if active_tab == 'fresh' %}
+                                תוצרת טרייה
+                            {% else %}
+                                {{ cat.subcategories|default([])|length }} תת-קטגוריות
+                            {% endif %}
+                        </div>
+                    </div>
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- 5. FRESH SUBCATEGORIES -->
+
+{% if active_tab == 'fresh' and active_category and not active_subcategory %}
+<section style="margin-bottom: 32px;">
+    <hr class="dashed-divider">
+
+    <div class="home-section-heading">
+        <div>
+            <h2 dir="rtl">
+                {% for cat in categories %}
+                    {% if cat.id|string == active_category|string %}
+                        {{ cat.name or cat.name_he }}
+                    {% endif %}
+                {% endfor %}
+            </h2>
+            <span style="font-size: 12px; color: var(--ink-muted);">
+                בחירת תת-קטגוריה
+            </span>
+        </div>
+
+        <a href="/?tab=fresh" class="nav-filter-btn">← כל המחלקות</a>
+    </div>
+
+    {% if subcategories %}
+        <div class="category-tiles-grid">
+            {% for subcategory in subcategories %}
+                {% set subcategory_name = subcategory.name or subcategory.name_he %}
+
+                <a
+                    href="/?tab=fresh&amp;category={{ active_category }}&amp;subcategory={{ subcategory.id }}"
+                    class="category-tile"
+                >
+                    <div class="category-tile-top">
+                        <span class="category-tile-icon">🌱</span>
+                        <span class="category-tile-pill">
+                            {{ subcategory.count|default(0) }} מוצרים
+                        </span>
+                    </div>
+
+                    <div class="category-tile-title" dir="rtl">
+                        {{ subcategory_name }}
+                    </div>
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- 6. FRESH PRODUCTS -->
+
+{% if active_tab == 'fresh' and active_category and active_subcategory %}
+<section style="margin-bottom: 40px;">
+    <hr class="dashed-divider">
+
+    <div class="home-section-heading">
+        <div>
+            <h2 dir="rtl">
+                {% for subcategory in subcategories %}
+                    {% if subcategory.id|string == active_subcategory|string %}
+                        {{ subcategory.name or subcategory.name_he }}
+                    {% endif %}
+                {% endfor %}
+            </h2>
+
+            <span class="mono-nums" style="font-size: 12px; color: var(--ink-muted);">
+                {{ fresh_product_total|default(0) }} מוצרים
+            </span>
+        </div>
+
+        <a href="/?tab=fresh&amp;category={{ active_category }}"
+           class="nav-filter-btn">← כל תת-הקטגוריות</a>
+    </div>
+
+    {% if fresh_products %}
+        <div class="category-tiles-grid">
+            {% for product in fresh_products %}
+                <a
+                    href="/fresh-product?name={{ (product.product_name or product.name_he or product.item_code)|urlencode }}&amp;subcategory_id={{ active_subcategory }}"
+                    class="category-tile"
+                    style="text-decoration: none;"
+                >
+                    <div>
+                        <div class="category-tile-title" dir="rtl">
+                            {{ product.product_name or product.name_he or product.item_code }}
+                        </div>
+
+                        <div class="category-tile-sub" dir="rtl">
+                            {{ product.store_count|default(0) }} סניפים
+                        </div>
+
+                        <div class="category-tile-title" style="margin-top: 10px;">
+                            {% if product.lowest_price is not none %}
+                                החל מ־₪{{ "%.2f"|format(product.lowest_price) }}
+                            {% else %}
+                                מחיר לא זמין
+                            {% endif %}
+                        </div>
+
+                        {% if product.cheapest_promotion is not none %}
+                            <div class="category-tile-sub" style="margin-top: 6px;">
+                                מבצע החל מ־₪{{ "%.2f"|format(product.cheapest_promotion) }}
+                            </div>
+                        {% endif %}
+                    </div>
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- 7. PACKAGED PRODUCTS -->
+
+{% if active_tab == 'packaged' and active_category %}
+<section style="margin-bottom: 40px;">
+    <hr class="dashed-divider">
+
+    <div class="home-section-heading">
+        <div>
+            <h2 dir="rtl">{{ active_category }}</h2>
+            <span class="mono-nums" style="font-size: 12px; color: var(--ink-muted);">
+                {{ product_total|default(0) }} מוצרים
+            </span>
+        </div>
+
+        <a href="/?tab=packaged" class="nav-filter-btn">← כל הקטגוריות</a>
+    </div>
+
+    {% if products %}
+        <div class="category-tiles-grid">
+            {% for product in products %}
+                <a
+                    href="/product/{{ product.item_code }}"
+                    class="category-tile"
+                    style="text-decoration: none;"
+                >
+                    <div style="display: flex; justify-content: center; align-items: center; height: 150px; margin-bottom: 12px;">
+                        <img
+                            src="/img/{{ product.item_code }}"
+                            alt="{{ product.name_he or product.name_en or product.item_code }}"
+                            loading="lazy"
+                            onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                            style="max-width: 100%; max-height: 140px; object-fit: contain;"
+                        >
+                    </div>
+
+                    <div>
+                        <div class="category-tile-title" dir="rtl">
+                            {{ product.name_he or product.name_en or product.item_code }}
+                        </div>
+
+                        {% if product.brand_he or product.brand_en %}
+                            <div class="category-tile-sub" dir="rtl">
+                                {{ product.brand_he or product.brand_en }}
+                            </div>
+                        {% endif %}
+
+                        {% if product.subcategory_he %}
+                            <div class="category-tile-sub" dir="rtl">
+                                {{ product.subcategory_he }}
+                            </div>
+                        {% endif %}
+
+                        <div class="category-tile-sub" style="margin-top: 8px;">
+                            ברקוד: {{ product.item_code }}
+                        </div>
+                    </div>
+                </a>
+            {% endfor %}
+        </div>
+    {% endif %}
+</section>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}מציאה — השוואת מחירי סופרמרקטים בישראל{% endblock %}</title>
+    
+    <!-- Google Fonts: Frank Ruhl Libre (Hebrew Display) and Heebo (Body) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@700;800;900&family=Heebo:wght@400;500;600;700&family=Suez+One&display=swap" rel="stylesheet">
+    
+    <!-- Plain Receipt CSS (No build steps, no frameworks) -->
+    <link rel="stylesheet" href="/static/style.css">
+    
+    <!-- HTMX via standard script tag -->
+    <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Main Receipt Paper Container -->
+        <main class="receipt-paper">
+            <header class="receipt-header">
+                <div class="stamp-badge stamp-large" style="float: left;">סופר שקוף ★</div>
+                <h1 class="receipt-title">
+                    <a href="/" style="text-decoration: none; color: inherit;">מציאה • METZIAH</a>
+                </h1>
+                <div class="receipt-subtitle">
+                    קובץ התקנות 7442 • שקיפות מחירי רשתות המזון בישראל
+                </div>
+                <div class="mono-nums" style="font-size: 11px; color: var(--ink-muted); margin-top: 4px;">
+                    מס' מערכת: 0.3.0-PROD | תאריך עדכון: 2026-10-09
+                </div>
+            </header>
+
+            <div class="receipt-body">
+                {% block content %}{% endblock %}
+            </div>
+
+            <footer class="receipt-footer">
+                <div class="receipt-barcode">||| | | |||| || | || |||| | ||| |||| |</div>
+                <p>הנתונים מתעדכנים ישירות ממאגרי המחירים הרשמיים של רשתות השיווק בישראל.</p>
+                <p style="margin-top: 4px;">
+                    <a href="/api/v1/products" style="color: var(--ink-secondary); text-decoration: underline;" target="_blank">JSON API (/api/v1)</a>
+                    &nbsp;|&nbsp;
+                    <a href="/api/v1/status" style="color: var(--ink-secondary); text-decoration: underline;" target="_blank">סטטוס מסד נתונים</a>
+                </p>
+            </footer>
+        </main>
+    </div>
+</body>
+</html>

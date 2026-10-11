@@ -58,7 +58,7 @@
         "Chain_name_gov_page": "גלובל ריטייל ק.י בע\"מ (קרפור, קוויק, ביתן אונליין)",
         "name_he_normalized": "קרפור",
         "name_en_normalized": "carrefour",
-        "brands": ["סיטי", "מרקט", "היפר"],
+        "brands": ["קרפור סיטי", "קרפור מרקט", "קרפור היפר"],
         "web_site": "https://www.carrefour.co.il/",
         "publishing_in": "https://prices.carrefour.co.il/",
         "client": "CarrefourClient"

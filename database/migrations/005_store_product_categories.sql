@@ -104,7 +104,19 @@ JOIN store_product_subcategories sc
             '\s+'
         ) AS word
         WHERE word <> ''
-          AND sp.name NOT ILIKE '%' || word || '%'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM regexp_split_to_table(
+                  regexp_replace(
+                      sp.name,
+                      '[[:space:](),.''"־–—-]+',
+                      ' ',
+                      'g'
+                  ),
+                  '\s+'
+              ) AS product_word
+              WHERE product_word = word
+          )
     )
 JOIN store_product_categories c
     ON c.id = sc.category_id

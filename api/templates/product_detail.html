@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.name }} — מציאה השוואת מחירים{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 20px;">
+    <a href="/" style="font-size: 13px; color: var(--ink-secondary); text-decoration: none; font-weight: 700;">
+        ← חזרה לקטלוג המוצרים
+    </a>
+</div>
+
+<!-- 1. PRODUCT HEADER -->
+
+<div class="product-detail-header">
+    <!-- Product block: image, then brand logo + name (sits under the title) -->
+    <div class="product-detail-product">
+        <img
+            class="product-detail-image"
+            src="/img/{{ product.item_code }}"
+            alt="{{ product.name }}"
+            width="160"
+            height="160"
+            onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+        >
+
+        {% if product.brand %}
+            <div class="product-detail-brand-row">
+                <img
+                    class="product-detail-brand-logo"
+                    src="/brand-logo/{{ product.brand|urlencode }}"
+                    alt=""
+                    loading="lazy"
+                    onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                >
+                <span class="product-detail-brand">{{ product.brand }}</span>
+            </div>
+        {% endif %}
+    </div>
+    <!-- Title block: breadcrumbs, name, barcode (top right) -->
+    <div class="product-detail-center">
+        <nav class="product-breadcrumbs" aria-label="ניווט">
+            {% if product.category %}
+                <span>{{ product.category }}</span>
+            {% endif %}
+            {% if product.subcategory %}
+                <span class="breadcrumb-separator">›</span>
+                <span>{{ product.subcategory }}</span>
+            {% endif %}
+        </nav>
+
+        <h1 class="product-detail-name">{{ product.name }}</h1>
+
+        <div class="mono-nums product-detail-meta">
+            <span>קוד פריט / ברקוד: {{ product.item_code }}</span>
+            {% if product.quantity and product.unit_qty %}
+                <span>תכולה: {{ product.quantity }} {{ product.unit_qty }}</span>
+            {% endif %}
+            {% if product.manufacturer %}
+                <span>יצרן: {{ product.manufacturer }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Lowest-price stamp (left side) -->
+    <div class="product-detail-price">
+        {% if lowest_price is not none %}
+            <div class="stamp-badge stamp-large">
+                ★ המחיר הזול ביותר ★
+                <div class="mono-nums" style="font-size: 18px; margin-top: 2px;">
+                    {{ "%.2f"|format(lowest_price) }} ₪
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 2. PRICE COMPARISON -->
+<section style="margin-bottom: 32px;">
+    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
+        <h2 style="font-size: 22px;">פירוט מחירי רשתות וסניפים</h2>
+        <span class="mono-nums" style="font-size: 12px; color: var(--ink-muted);">
+            {{ product.prices|length }} סניפים זמינים
+        </span>
+    </div>
+
+    <div style="background-color: #ffffff; border: 1px solid var(--paper-border); padding: 16px 20px; border-radius: 4px;">
+        <div style="font-family: var(--receipt-mono); font-size: 11px; color: var(--ink-muted); border-bottom: 1px dashed var(--paper-dashed); padding-bottom: 6px; margin-bottom: 8px; display: flex; justify-content: space-between;">
+            <span>רשת שיווק ומותג סניפי</span>
+            <span>מחיר בסניף</span>
+        </div>
+
+        {% for item in sorted_prices %}
+            {% set is_lowest = (item.price == lowest_price) %}
+            <div class="receipt-line {% if is_lowest %}best-line{% endif %}">
+                <div class="receipt-col-label">
+                    <img
+                        class="receipt-brand-logo"
+                        src="/brand-logo/{{ item.resolved_brand|urlencode }}"
+                        alt=""
+                        loading="lazy"
+                        onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                    >
+                    <span class="receipt-store-brand">{{ item.resolved_brand }}</span>
+                    <span class="receipt-store-sub">({{ item.store_name }})</span>
+                    {% if is_lowest %}
+                        <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">הזול ביותר</span>
+                    {% endif %}
+                </div>
+
+                <div class="receipt-dots"></div>
+
+                <div class="receipt-price-box">
+                    {% if item.unit_price %}
+                        <span class="receipt-unit-price">
+                            {{ "%.2f"|format(item.unit_price) }} ₪ / {{ item.unit_measure or 'יח׳' }}
+                        </span>
+                    {% endif %}
+                    <span class="receipt-price" {% if is_lowest %}style="color: var(--ink-stamp-red);"{% endif %}>
+                        {{ "%.2f"|format(item.price) }} ₪
+                    </span>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- 3. PROMOTIONS -->
+{% if product.promotions %}
+<section style="margin-bottom: 32px;">
+    <h2 style="font-size: 22px; margin-bottom: 12px;">מבצעים פעילים בתוקף</h2>
+
+    <div style="background-color: #fff9f0; border: 1px solid #e8cbb0; padding: 16px 20px; border-radius: 4px;">
+        {% for promo in product.promotions %}
+            <div class="receipt-line" style="align-items: flex-start; padding: 12px 0; border-bottom: 1px dashed #e8cbb0;">
+                <img
+                    class="receipt-brand-logo"
+                    src="/brand-logo/{{ promo.resolved_brand|urlencode }}"
+                    alt=""
+                    loading="lazy"
+                    onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                >
+
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="stamp-badge stamp-badge-blue">מבצע</span>
+                        <strong style="font-size: 15px;">{{ promo.description }}</strong>
+                    </div>
+
+                    <div style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">
+                        סניף: {{ promo.resolved_brand }} ({{ promo.store_name }})
+                        {% if promo.min_qty and promo.min_qty > 1 %} • מינימום {{ promo.min_qty }} יח׳{% endif %}
+                        {% if promo.remarks %} • {{ promo.remarks }}{% endif %}
+                    </div>
+                </div>
+
+                <div class="receipt-dots" style="margin-top: 10px;"></div>
+
+                <div class="receipt-price-box" style="margin-top: 4px;">
+                    {% if promo.original_price %}
+                        <span style="font-family: var(--receipt-mono); font-size: 12px; text-decoration: line-through; color: var(--ink-muted);">
+                            {{ "%.2f"|format(promo.original_price) }} ₪
+                        </span>
+                    {% endif %}
+                    <span class="receipt-price" style="color: var(--ink-stamp-red);">
+                        {{ "%.2f"|format(promo.discounted_price) }} ₪
+                    </span>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<!-- 4. PRODUCT DESCRIPTION, INGREDIENTS AND NUTRITION -->
+{% if product.enrichment %}
+<section style="margin-bottom: 24px;">
+    <h2 style="font-size: 22px; margin-bottom: 12px;">נתונים מועשרים וסימון תזונתי</h2>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
+        <div>
+            {% if product.enrichment.description_he %}
+                <div style="margin-bottom: 16px;">
+                    <div style="font-family: var(--receipt-mono); font-size: 12px; font-weight: 700; color: var(--ink-secondary);">
+                        // תיאור המוצר
+                    </div>
+                    <p style="font-size: 14px; margin-top: 4px; line-height: 1.6;">
+                        {{ product.enrichment.description_he }}
+                    </p>
+                </div>
+            {% endif %}
+
+            {% if product.enrichment.ingredients_he %}
+                <div style="margin-bottom: 16px;">
+                    <div style="font-family: var(--receipt-mono); font-size: 12px; font-weight: 700; color: var(--ink-secondary);">
+                        // רכיבים
+                    </div>
+                    <p style="font-size: 13px; margin-top: 4px; line-height: 1.6; color: var(--ink-secondary);">
+                        {{ product.enrichment.ingredients_he }}
+                    </p>
+                </div>
+            {% endif %}
+        </div>
+
+        {% if product.enrichment.nutrients %}
+        <div>
+            <div class="nutrition-receipt">
+                <div class="nutrition-receipt-title">
+                   סימון תזונתי 
+                </div>
+
+                {% for nut in product.enrichment.nutrients %}
+                    <div class="nutrition-row">
+                        <div>
+                            <span>{{ nut.raw_label }}</span>
+                            {% if nut.is_high_sodium %}
+                                <span class="stamp-badge" style="font-size: 8px; padding: 0 4px; margin-right: 4px;">נתרן גבוה</span>
+                            {% endif %}
+                            {% if nut.is_high_saturated_fat %}
+                                <span class="stamp-badge" style="font-size: 8px; padding: 0 4px; margin-right: 4px;">שומן רווי גבוה</span>
+                            {% endif %}
+                        </div>
+                        <span class="mono-nums" style="font-weight: 700;">
+                            {{ nut.amount }} {{ nut.unit }}
+                            {% if nut.basis %}<small>({{ nut.basis }})</small>{% endif %}
+                        </span>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% else %}
+<div style="background-color: var(--paper-sheet-alt); border: 1px dashed var(--paper-dashed); padding: 16px; border-radius: 4px; text-align: center; color: var(--ink-secondary); font-size: 13px;">
+    // פרטי המוצר המורחבים אינם זמינים כרגע • ההשוואה בין המחירים זמינה במלואה.
+</div>
+{% endif %}
+
+{% endblock %}
