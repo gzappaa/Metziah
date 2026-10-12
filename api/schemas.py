@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class APIModel(BaseModel):
@@ -167,3 +167,110 @@ class StoreProductSearchResult(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+
+
+
+
+class CatalogStats(BaseModel):
+    total_stores: int
+    total_brands: int
+    total_fresh_products: int
+
+
+class PackagedCategory(BaseModel):
+    name: str
+    count: int
+    subcategories: list[str] = Field(default_factory=list)
+
+    @field_validator("subcategories", mode="before")
+    @classmethod
+    def _none_to_empty(cls, value):
+        return value or []
+
+
+class ProductSearchHit(BaseModel):
+    identifier: str
+    name: str
+    brand: str | None = None
+    category: str = ""
+    min_price: Decimal | None = None
+    store_count: int = 0
+
+
+class ProductSearchPage(BaseModel):
+    items: list[ProductSearchHit]
+    total: int
+    limit: int
+    offset: int
+
+
+class FreshCategory(StoreProductCategory):
+    count: int = 0
+
+
+class FreshSubcategory(StoreProductSubcategory):
+    count: int = 0
+
+
+class FreshProductSummary(BaseModel):
+    product_name: str
+    store_count: int
+    lowest_price: Decimal | None = None
+    cheapest_promotion: Decimal | None = None
+
+
+class FreshProductPage(BaseModel):
+    items: list[FreshProductSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class FreshPromotion(BaseModel):
+    promotion_id: str
+    description: str | None = None
+    discounted_price: Decimal | None = None
+    discount_rate: Decimal | None = None
+    min_qty: Decimal | None = None
+    max_qty: Decimal | None = None
+    group_id: str | None = None
+    club_id: str | None = None
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
+
+
+class FreshStorePromotion(FreshPromotion):
+    store_name: str | None = None
+    chain_name_he: str | None = None
+
+
+class FreshStorePrice(BaseModel):
+    chain_id: str
+    store_id: str
+    item_code: str
+    chain_name_he: str
+    chain_name_en: str
+    brands: list[str] = Field(default_factory=list)
+    shopper_brand: str | None = None
+    store_name: str | None = None
+    address: str | None = None
+    city: str | None = None
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    price: Decimal | None = None
+    unit_price: Decimal | None = None
+    promotions: list[FreshPromotion] = Field(default_factory=list)
+
+
+class FreshProductDetail(BaseModel):
+    product_name: str
+    category_id: int | None = None
+    category: str | None = None
+    subcategory_id: int | None = None
+    subcategory: str | None = None
+    lowest_price: Decimal | None = None
+    lowest_promotion: FreshStorePromotion | None = None
+    stores: list[FreshStorePrice]
+    promotions: list[FreshStorePromotion] = Field(default_factory=list)

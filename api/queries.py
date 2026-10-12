@@ -822,3 +822,128 @@ def get_packaged_products_by_category(
             items = [dict(zip(columns, row)) for row in cur.fetchall()]
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+_UNENRICHED_FROM = """
+    FROM products AS p
+    WHERE NOT EXISTS (
+        SELECT 1 FROM product_enrichment AS pe WHERE pe.item_code = p.item_code
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM store_products AS sp WHERE sp.item_code = p.item_code
+    )
+      AND EXISTS (
+        SELECT 1 FROM prices AS pr WHERE pr.item_code = p.item_code
+    )
+"""
+
+
+def _query_unenriched(
+    extra_where: str,
+    params: dict,
+    limit: int,
+    offset: int,
+) -> dict:
+    """Shared count + page query for products without enrichment."""
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) " + _UNENRICHED_FROM + extra_where,
+                params,
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                SELECT
+                    p.item_code,
+                    p.name,
+                    p.name AS name_he,      -- same key the enriched rows use
+                    NULL::text AS name_en,
+                    NULL::text AS brand_he,
+                    NULL::text AS brand_en,
+                    NULL::text AS category_he,
+                    NULL::text AS subcategory_he
+                """
+                + _UNENRICHED_FROM
+                + extra_where
+                + """
+                ORDER BY p.name NULLS LAST, p.item_code
+                LIMIT %(limit)s OFFSET %(offset)s
+                """,
+                {**params, "limit": limit, "offset": offset},
+            )
+            columns = [c.name for c in cur.description]
+            items = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+def get_unenriched_products(limit: int = 40, offset: int = 0) -> dict:
+    """Browse products that have no enrichment row (no category known)."""
+    return _query_unenriched("", {}, limit, offset)
+
+
+def search_unenriched_products(
+    q: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    """Search products that have no enrichment row, by barcode or name."""
+    q = q.strip()
+    if not q:
+        return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+    escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    return _query_unenriched(
+        """
+        AND (
+            p.item_code ILIKE %(pat)s ESCAPE E'\\\\'
+            OR p.name ILIKE %(pat)s ESCAPE E'\\\\'
+        )
+        """,
+        {"pat": f"%{escaped_q}%"},
+        limit,
+        offset,
+    )
+
+def get_catalog_stats() -> dict:
+    """Return the catalog statistics shown on the homepage."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM stores) AS total_stores,
+                    (
+                        SELECT COUNT(DISTINCT brand)
+                        FROM (
+                            SELECT NULLIF(BTRIM(name_he_normalized), '') AS brand
+                            FROM chains
+
+                            UNION
+
+                            SELECT NULLIF(BTRIM(b.brand), '') AS brand
+                            FROM chains
+                            CROSS JOIN LATERAL UNNEST(brands) AS b(brand)
+                        ) AS all_brands
+                        WHERE brand IS NOT NULL
+                    ) AS total_brands,
+                    (
+                        SELECT COUNT(DISTINCT product_name)
+                        FROM store_product_category_matches
+                    ) AS total_fresh_products
+                """
+            )
+            row = cur.fetchone()
+
+    return {
+        "total_stores": row[0],
+        "total_brands": row[1],
+        "total_fresh_products": row[2],
+    }

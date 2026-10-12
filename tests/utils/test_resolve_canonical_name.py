@@ -179,3 +179,45 @@ def test_resolve_canonical_name_chain_breadth_beats_quality():
     result = resolve_canonical_name(name_chain_counts)
 
     assert result == "קולה"
+
+def test_resolve_canonical_name_strips_single_candidate_whitespace():
+    name_chain_counts = {
+        "   קוקה קולה זירו 1.5 ליטר   ": {
+            "chain_1": 1,
+        }
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result == "קוקה קולה זירו 1.5 ליטר"
+
+
+def test_resolve_canonical_name_strips_whitespace_from_winning_cluster():
+    name_chain_counts = {
+        "   קוקה קולה זירו 1.5 ליטר   ": {
+            "chain_1": 5,
+            "chain_2": 5,
+        },
+        "מוצר פשוט": {
+            "chain_3": 1,
+        },
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result == "קוקה קולה זירו 1.5 ליטר"
+
+
+def test_resolve_canonical_name_strips_whitespace_after_quality_filtering():
+    name_chain_counts = {
+        "***": {
+            "chain_1": 100,
+        },
+        "   קוקה קולה זירו 1.5 ליטר   ": {
+            "chain_2": 1,
+        },
+    }
+
+    result = resolve_canonical_name(name_chain_counts)
+
+    assert result == "קוקה קולה זירו 1.5 ליטר"

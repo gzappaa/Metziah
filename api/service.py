@@ -11,9 +11,12 @@ from api.schemas import (
     StoreProductCategory,
     StoreProductSearchResult,
     StoreProductSubcategory,
+    FreshProductDetail,
+    FreshStorePrice,
+    FreshStorePromotion,
 )
-from utils.brand_resolution import resolve_shopper_brand
 
+from utils.brand_resolution import resolve_shopper_brand
 
 def get_product_detail(barcode: str) -> ProductDetail | None:
     """Combine product, price, promotion, and enrichment data."""
@@ -231,3 +234,97 @@ def parse_product_identifier(identifier: str) -> dict[str, str]:
         }
 
     raise ValueError(f"Invalid product identifier: {identifier!r}")
+
+
+def search_unenriched_products(q: str, limit: int = 20, offset: int = 0) -> dict:
+    """Search products without enrichment, shaped for the shopper template."""
+    result = queries.search_unenriched_products(q, limit=limit, offset=offset)
+    prices_by_item = queries.get_prices_for_products(
+        [item["item_code"] for item in result["items"]]
+    )
+
+    products = []
+    for item in result["items"]:
+        prices = prices_by_item.get(item["item_code"], [])
+        available = [p["price"] for p in prices if p["price"] and p["price"] > 0]
+        products.append(
+            {
+                "identifier": item["item_code"],
+                "brand": None,
+                "category": "",
+                "name": item["name"] or item["item_code"],
+                "min_price": min(available) if available else None,
+                "store_count": len({(p["chain_id"], p["store_id"]) for p in prices}),
+            }
+        )
+
+    return {
+        "products": products,
+        "total": result["total"],
+        "limit": result["limit"],
+        "offset": result["offset"],
+    }
+
+
+
+
+
+def get_fresh_product_detail(
+    name: str,
+    subcategory_id: int,
+) -> FreshProductDetail | None:
+    """Fresh product: per-store prices plus all active promotions."""
+    product_name = name.strip()
+    if not product_name:
+        return None
+
+    rows = queries.get_fresh_product_detail(
+        product_name=product_name,
+        subcategory_id=subcategory_id,
+    )
+    if not rows:
+        return None
+
+    stores = []
+    for row in rows:
+        row = dict(row)
+        row["shopper_brand"] = resolve_shopper_brand(
+            row.get("store_name"),
+            row.get("brands"),
+            row.get("chain_name_he"),
+        )
+        stores.append(FreshStorePrice.model_validate(row))
+
+    promotions = [
+        FreshStorePromotion(
+            **promotion.model_dump(),
+            store_name=store.store_name,
+            chain_name_he=store.chain_name_he,
+        )
+        for store in stores
+        for promotion in store.promotions
+        if promotion.discounted_price is not None
+        and promotion.discounted_price > 0
+    ]
+
+    valid_prices = [
+        store.price for store in stores
+        if store.price is not None and store.price > 0
+    ]
+
+    first = rows[0]
+    return FreshProductDetail(
+        product_name=product_name,
+        category_id=first["category_id"],
+        category=first["category"],
+        subcategory_id=first["subcategory_id"],
+        subcategory=first["subcategory"],
+        lowest_price=min(valid_prices) if valid_prices else None,
+        lowest_promotion=(
+            min(promotions, key=lambda promo: promo.discounted_price)
+            if promotions
+            else None
+        ),
+        stores=stores,
+        promotions=promotions,
+    )

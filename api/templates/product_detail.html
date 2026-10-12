@@ -1,3 +1,4 @@
+
 {% extends "base.html" %}
 
 {% block title %}{{ product.name }} — מציאה השוואת מחירים{% endblock %}
@@ -12,7 +13,6 @@
 <!-- 1. PRODUCT HEADER -->
 
 <div class="product-detail-header">
-    <!-- Product block: image, then brand logo + name (sits under the title) -->
     <div class="product-detail-product">
         <img
             class="product-detail-image"
@@ -36,7 +36,7 @@
             </div>
         {% endif %}
     </div>
-    <!-- Title block: breadcrumbs, name, barcode (top right) -->
+
     <div class="product-detail-center">
         <nav class="product-breadcrumbs" aria-label="ניווט">
             {% if product.category %}
@@ -61,7 +61,6 @@
         </div>
     </div>
 
-    <!-- Lowest-price stamp (left side) -->
     <div class="product-detail-price">
         {% if lowest_price is not none %}
             <div class="stamp-badge stamp-large">
@@ -89,40 +88,42 @@
             <span>מחיר בסניף</span>
         </div>
 
-        {% for item in sorted_prices %}
-            {% set is_lowest = (item.price == lowest_price) %}
-            <div class="receipt-line {% if is_lowest %}best-line{% endif %}">
-                <div class="receipt-col-label">
-                    <img
-                        class="receipt-brand-logo"
-                        src="/brand-logo/{{ item.resolved_brand|urlencode }}"
-                        alt=""
-                        loading="lazy"
-                        onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
-                    >
-                    <span class="receipt-store-brand">{{ item.resolved_brand }}</span>
-                    {% if item.store_name %}
-                        <span class="receipt-store-sub">({{ item.store_name }})</span>
-                    {% endif %}
-                    {% if is_lowest %}
-                        <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">הזול ביותר</span>
-                    {% endif %}
-                </div>
+        <div class="receipt-lines">
+            {% for item in sorted_prices %}
+                {% set is_lowest = (item.price == lowest_price) %}
+                <div class="receipt-line {% if is_lowest %}best-line{% endif %}">
+                    <div class="receipt-col-label">
+                        <img
+                            class="receipt-brand-logo"
+                            src="/brand-logo/{{ item.resolved_brand|urlencode }}"
+                            alt=""
+                            loading="lazy"
+                            onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                        >
+                        <span class="receipt-store-brand">{{ item.resolved_brand }}</span>
+                        {% if item.store_name %}
+                            <span class="receipt-store-sub">({{ item.store_name }})</span>
+                        {% endif %}
+                        {% if is_lowest %}
+                            <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">הזול ביותר</span>
+                        {% endif %}
+                    </div>
 
-                <div class="receipt-dots"></div>
+                    <div class="receipt-dots"></div>
 
-                <div class="receipt-price-box">
-                    {% if item.unit_price %}
-                        <span class="receipt-unit-price">
-                            {{ "%.2f"|format(item.unit_price) }} ₪ / {{ item.unit_measure or 'יח׳' }}
+                    <div class="receipt-price-box">
+                        {% if item.unit_price %}
+                            <span class="receipt-unit-price">
+                                {{ "%.2f"|format(item.unit_price) }} ₪ / {{ item.unit_measure or 'יח׳' }}
+                            </span>
+                        {% endif %}
+                        <span class="receipt-price" {% if is_lowest %}style="color: var(--ink-stamp-red);"{% endif %}>
+                            {{ "%.2f"|format(item.price) }} ₪
                         </span>
-                    {% endif %}
-                    <span class="receipt-price" {% if is_lowest %}style="color: var(--ink-stamp-red);"{% endif %}>
-                        {{ "%.2f"|format(item.price) }} ₪
-                    </span>
+                    </div>
                 </div>
-            </div>
-        {% endfor %}
+            {% endfor %}
+        </div>
     </div>
 </section>
 
@@ -132,47 +133,48 @@
     <h2 style="font-size: 22px; margin-bottom: 12px;">מבצעים פעילים בתוקף</h2>
 
     <div style="background-color: #fff9f0; border: 1px solid #e8cbb0; padding: 16px 20px; border-radius: 4px;">
-        {% for promo in product.promotions %}
-            <div class="receipt-line" style="align-items: flex-start; padding: 12px 0; border-bottom: 1px dashed #e8cbb0;">
-                <img
-                    class="receipt-brand-logo"
-                    src="/brand-logo/{{ promo.resolved_brand|urlencode }}"
-                    alt=""
-                    loading="lazy"
-                    onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
-                >
+        <div class="receipt-lines">
+            {% for promo in product.promotions %}
+                <div class="receipt-line" style="align-items: flex-start; padding: 12px 0; border-bottom: 1px dashed #e8cbb0;">
+                    <img
+                        class="receipt-brand-logo"
+                        src="/brand-logo/{{ promo.resolved_brand|urlencode }}"
+                        alt=""
+                        loading="lazy"
+                        onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                    >
 
-                <div style="flex: 1; min-width: 0;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="stamp-badge stamp-badge-blue">מבצע</span>
-                        <strong style="font-size: 15px;">{{ promo.description }}</strong>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="stamp-badge stamp-badge-blue">מבצע</span>
+                            <strong style="font-size: 15px;">{{ promo.description }}</strong>
+                        </div>
+
+                        <div style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">
+                            סניף: {{ promo.resolved_brand }}{% if promo.store_name %} ({{ promo.store_name }}){% endif %}
+                            {% if promo.min_qty and promo.min_qty > 1 %} • מינימום {{ promo.min_qty }} יח׳{% endif %}
+                            {% if promo.remarks %} • {{ promo.remarks }}{% endif %}
+                        </div>
                     </div>
 
-                    <div style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">
-                        סניף: {{ promo.resolved_brand }}{% if promo.store_name %} ({{ promo.store_name }}){% endif %}
-                        {% if promo.min_qty and promo.min_qty > 1 %} • מינימום {{ promo.min_qty }} יח׳{% endif %}
-                        {% if promo.remarks %} • {{ promo.remarks }}{% endif %}
-                    </div>
-                </div>
+                    <div class="receipt-dots" style="margin-top: 10px;"></div>
 
-                <div class="receipt-dots" style="margin-top: 10px;"></div>
-
-                <div class="receipt-price-box" style="margin-top: 4px;">
-                    {% if promo.original_price %}
-                        <span style="font-family: var(--receipt-mono); font-size: 12px; text-decoration: line-through; color: var(--ink-muted);">
-                            {{ "%.2f"|format(promo.original_price) }} ₪
+                    <div class="receipt-price-box" style="margin-top: 4px;">
+                        {% if promo.original_price %}
+                            <span style="font-family: var(--receipt-mono); font-size: 12px; text-decoration: line-through; color: var(--ink-muted);">
+                                {{ "%.2f"|format(promo.original_price) }} ₪
+                            </span>
+                        {% endif %}
+                        <span class="receipt-price" style="color: var(--ink-stamp-red);">
+                            {{ "%.2f"|format(promo.discounted_price) }} ₪
                         </span>
-                    {% endif %}
-                    <span class="receipt-price" style="color: var(--ink-stamp-red);">
-                        {{ "%.2f"|format(promo.discounted_price) }} ₪
-                    </span>
+                    </div>
                 </div>
-            </div>
-        {% endfor %}
+            {% endfor %}
+        </div>
     </div>
 </section>
 {% endif %}
-
 
 <!-- 4. ENRICHED PRODUCT DATA AND NUTRITION -->
 {% if product.enrichment %}

@@ -1,29 +1,36 @@
-.PHONY: help test setup setup-test setup-prod \
+.PHONY: help test setup setup-test setup-prod enrich-prod enrich-prod-images \
 	docker-up docker-down docker-logs docker-reset \
 	migrate migrate-test
-
 
 help:
 	@echo "Metziah commands:"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test          Run pytest"
+	@echo "  make test                Run pytest"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make setup         First-time standard setup"
-	@echo "  make setup-test    First-time test setup"
-	@echo "  make setup-prod    First-time production setup"
+	@echo "  make setup               First-time standard setup"
+	@echo "  make setup-test          First-time test setup"
+	@echo "  make setup-prod          First-time production setup"
+	@echo ""
+	@echo "Product enrichment:"
+	@echo "  make enrich-prod         Run production product enrichment pipeline"
+	@echo "  make enrich-prod-images  Download product images (slow)"
 	@echo ""
 	@echo "Docker:"
-	@echo "  make docker-up     Start PostgreSQL"
-	@echo "  make docker-down   Stop Docker services"
-	@echo "  make docker-logs   Follow PostgreSQL logs"
-	@echo "  make docker-reset  Recreate PostgreSQL database"
+	@echo "  make docker-up           Start PostgreSQL"
+	@echo "  make docker-down         Stop Docker services"
+	@echo "  make docker-logs         Follow PostgreSQL logs"
+	@echo "  make docker-reset        Recreate PostgreSQL database"
 	@echo ""
 	@echo "Database:"
-	@echo "  make migrate       Apply migrations to development database"
-	@echo "  make migrate-test  Apply migrations to test database"
+	@echo "  make migrate             Apply migrations to development database"
+	@echo "  make migrate-test        Apply migrations to test database"
 
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
 
 test:
 	ENV=test pytest -v
@@ -64,6 +71,7 @@ migrate:
 		psql -U "$$PGUSER" -d "$$PGDATABASE" \
 		< database/migrations/002_chain_partitions.sql
 	@echo "=== Development database migrated ==="
+
 
 migrate-test:
 	@echo "=== Migrating test database ==="
@@ -266,3 +274,65 @@ setup-prod:
 	ENV=prod python -m downloaders.scheduler
 
 	@echo "=== Production setup complete ==="
+
+
+# ---------------------------------------------------------------------------
+# Production product enrichment
+# ---------------------------------------------------------------------------
+
+# Select the chain with the largest products_parsed.jsonl file.
+# This uses file size as a proxy for item count.
+PRODUCTS_SOURCE := $(shell find data/parsed -mindepth 2 -maxdepth 2 \
+	-type f -name products_parsed.jsonl -printf '%s\t%h\n' \
+	| sort -nr | head -1 | cut -f2- | sed 's|.*/||')
+
+enrich-prod:
+	@echo "=== 1. Detect pharmacy stores ==="
+	ENV=prod python -m monitoring.detect_pharmacy_stores
+
+	@echo "=== 2. Check scraper coverage ==="
+	ENV=prod python -m monitoring.scraper_coverage
+
+	@echo "=== 3. Run generic scraper ==="
+	ENV=prod python -m scrapers.generic
+
+	@echo "=== 4. Generate product JSONL ==="
+	ENV=prod python -m utils.processing.generate_product_jsonl
+
+	@echo "=== 5. Apply product enrichment migration ==="
+	docker compose --env-file .env.dev exec -T db \
+		psql -U "$$PGUSER" -d metziah_prod \
+		< database/migrations/004_product_enrichment.sql
+
+	@echo "=== 6. Apply store-product categories migration ==="
+	docker compose --env-file .env.dev exec -T db \
+		psql -U "$$PGUSER" -d metziah_prod \
+		< database/migrations/005_store_product_categories.sql
+
+	@echo "=== 7. Load enriched products (source: $(PRODUCTS_SOURCE)) ==="
+	@if [ -z "$(PRODUCTS_SOURCE)" ]; then \
+		echo "ERROR: No products_parsed.jsonl found under data/parsed"; \
+		exit 1; \
+	fi
+	ENV=prod python -m utils.products.load_products_enriched \
+		--source "$(PRODUCTS_SOURCE)"
+
+	@echo "=== 8. Load store-product categories ==="
+	ENV=prod python -m utils.products.load_store_products_categories
+
+	@echo "=== Refresh store-product category matches ==="
+	ENV=prod python -c "import db; conn = db.get_connection(); conn.execute('REFRESH MATERIALIZED VIEW store_product_category_matches'); conn.commit(); conn.close()"
+
+	@echo "=== 9. Load product nutrition ==="
+	ENV=prod python -m utils.products.load_products_nutrition
+
+	@echo "=== Production product enrichment complete ==="
+
+
+# Run only when intentionally downloading product images.
+enrich-prod-images:
+	ENV=prod python -m utils.processing.download_product_image
+
+
+
+

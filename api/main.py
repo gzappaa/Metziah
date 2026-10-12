@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from api.routes_web import router as web_router
+from api.routes_api import router as api_router
+
+
 
 app = FastAPI(
     title="Metziah API",
@@ -22,7 +25,7 @@ app.mount(
 )
 
 app.include_router(web_router)
-
+app.include_router(api_router)
 
 @app.get("/api/v1/health", tags=["Health"])
 def health_check() -> dict[str, str]:

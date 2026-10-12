@@ -453,6 +453,7 @@ def load_files(
                             product.manufacturer_country
                         )
                     )
+                    product.name = normalize_metadata_value(product.name) 
 
                     (
                         product_record,
@@ -709,6 +710,7 @@ def discover_new_products(
                     product.manufacturer_country = normalize_metadata_value(
                         product.manufacturer_country
                     )
+                    product.name = normalize_metadata_value(product.name)
 
                     (
                         product_record,

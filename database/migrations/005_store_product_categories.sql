@@ -69,63 +69,86 @@ ON store_product_subcategories (category_id, sort_order);
 --
 -- Example:
 --
---   subcategory: "חזה עוף"
---   product:     "חזה עוף טרי"
+--   subcategory: "עוף שלם"
+--   product:     "עוף שלם טרי אולטרה מגה"
 --
 --   -> MATCH
 --
 -- The words do not need to be adjacent or in the same order.
+-- A product can match several subcategories (by design).
+--
+-- Performance: names are tokenized ONCE into text[] and compared
+-- with array containment (@>). Matching is done on DISTINCT
+-- product names first, then fanned out to store_products rows.
 -- ------------------------------------------------------------
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS store_product_category_matches AS
+DROP MATERIALIZED VIEW IF EXISTS store_product_category_matches;
+
+CREATE MATERIALIZED VIEW store_product_category_matches AS
+WITH names AS (
+    SELECT DISTINCT
+        name,
+        string_to_array(
+            btrim(regexp_replace(name, '[[:space:](),.''"־–—-]+', ' ', 'g')),
+            ' '
+        ) AS words
+    FROM store_products
+    WHERE name IS NOT NULL
+),
+subs AS (
+    SELECT
+        id,
+        category_id,
+        name,
+        string_to_array(
+            btrim(regexp_replace(replace(name, '/', ' '),
+                                 '[[:space:](),.''"־–—-]+', ' ', 'g')),
+            ' '
+        ) AS words
+    FROM store_product_subcategories
+),
+name_matches AS (
+    SELECT
+        n.name  AS product_name,
+        s.id    AS subcategory_id,
+        s.name  AS subcategory,
+        s.category_id
+    FROM names n
+    JOIN subs s ON n.words @> s.words
+)
 SELECT
     sp.chain_id,
     sp.store_id,
     sp.item_code,
     sp.name AS product_name,
 
-    c.id AS category_id,
+    c.id   AS category_id,
     c.name AS category,
 
-    sc.id AS subcategory_id,
-    sc.name AS subcategory
-
+    nm.subcategory_id,
+    nm.subcategory
 FROM store_products sp
-JOIN store_product_subcategories sc
-    ON NOT EXISTS (
-        SELECT 1
-        FROM regexp_split_to_table(
-            regexp_replace(
-                replace(sc.name, '/', ' '),
-                '[(),.''"־–—-]',
-                ' ',
-                'g'
-            ),
-            '\s+'
-        ) AS word
-        WHERE word <> ''
-          AND NOT EXISTS (
-              SELECT 1
-              FROM regexp_split_to_table(
-                  regexp_replace(
-                      sp.name,
-                      '[[:space:](),.''"־–—-]+',
-                      ' ',
-                      'g'
-                  ),
-                  '\s+'
-              ) AS product_word
-              WHERE product_word = word
-          )
-    )
+JOIN name_matches nm
+    ON nm.product_name = sp.name
 JOIN store_product_categories c
-    ON c.id = sc.category_id
-WHERE sp.name IS NOT NULL;
+    ON c.id = nm.category_id;
 
 
 -- ------------------------------------------------------------
 -- MATCH VIEW INDEXES
+--
+-- (Dropping the view drops its indexes, so they are re-created.)
+-- The unique index is required for
+--   REFRESH MATERIALIZED VIEW CONCURRENTLY store_product_category_matches;
 -- ------------------------------------------------------------
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sp_category_matches_row
+ON store_product_category_matches (
+    chain_id,
+    store_id,
+    item_code,
+    subcategory_id
+);
 
 CREATE INDEX IF NOT EXISTS idx_sp_category_matches_product
 ON store_product_category_matches (

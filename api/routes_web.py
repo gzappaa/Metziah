@@ -117,20 +117,27 @@ def brand_logo(brand_name: str) -> FileResponse:
     return FileResponse(PLACEHOLDER_IMAGE, media_type="image/svg+xml")
 
 
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
-def index(request: Request) -> HTMLResponse:
+def index(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+) -> HTMLResponse:
     """Render the shopper page and the selected category's products."""
     active_tab = request.query_params.get("tab", "")
     active_category = request.query_params.get("category", "")
     active_subcategory = request.query_params.get("subcategory", "")
 
+    page_size = 40
+    offset = (page - 1) * page_size
+
     subcategories = []
     fresh_products = []
     fresh_product_total = 0
+    fresh_product_pages = 0
 
     if active_tab == "packaged":
         categories = get_packaged_product_categories()
-
     elif active_tab == "fresh":
         categories = get_store_product_categories()
 
@@ -160,22 +167,32 @@ def index(request: Request) -> HTMLResponse:
             if valid_subcategory:
                 result = get_store_products_by_subcategory(
                     subcategory_id,
-                    limit=40,
-                    offset=0,
+                    limit=page_size,
+                    offset=offset,
                 )
                 fresh_products = result["items"]
                 fresh_product_total = result["total"]
+                fresh_product_pages = (
+                    fresh_product_total + page_size - 1
+                ) // page_size
             else:
                 active_subcategory = ""
-
     else:
         categories = []
 
     packaged_result = (
-        get_packaged_products_by_category(active_category)
+        get_packaged_products_by_category(
+            active_category,
+            limit=page_size,
+            offset=offset,
+        )
         if active_tab == "packaged" and active_category
-        else {"items": [], "total": 0, "limit": 40, "offset": 0}
+        else {"items": [], "total": 0, "limit": page_size, "offset": offset}
     )
+
+    packaged_product_pages = (
+        packaged_result["total"] + page_size - 1
+    ) // page_size
 
     stats = get_homepage_stats()
 
@@ -189,12 +206,16 @@ def index(request: Request) -> HTMLResponse:
             "active_category": active_category,
             "products": packaged_result["items"],
             "product_total": packaged_result["total"],
+            "product_pages": packaged_product_pages,
             "subcategories": subcategories,
             "active_subcategory": active_subcategory,
             "fresh_products": fresh_products,
             "fresh_product_total": fresh_product_total,
+            "fresh_product_pages": fresh_product_pages,
+            "page": page,
         },
     )
+
 
 
 @router.get("/search", response_class=HTMLResponse, include_in_schema=False)
