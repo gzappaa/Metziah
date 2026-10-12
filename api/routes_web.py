@@ -2,11 +2,11 @@
 """HTML routes for the Metziah shopper interface."""
 
 from pathlib import Path
-
+import time
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-
+from config import settings, APP_VERSION
 from db import get_connection
 
 from api.queries import (
@@ -32,8 +32,34 @@ templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent / "templates")
 )
 templates.env.policies["json.dumps_kwargs"]["ensure_ascii"] = False
-templates.env.globals["app_version"] = "0.3.0-PROD"
-templates.env.globals["data_updated"] = "2026-10-09"
+
+
+_data_updated_cache: tuple[float, str] = (0.0, "—")
+
+
+def get_data_updated() -> str:
+    """Date of the latest loaded price file, cached for 5 minutes."""
+    global _data_updated_cache
+    ts, value = _data_updated_cache
+    if time.monotonic() - ts < 300:
+        return value
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MAX(updated_at)::date FROM file_tracking "
+                    "WHERE loaded AND file_type IN ('PriceFull', 'Price')"
+                )
+                row = cur.fetchone()
+        value = row[0].isoformat() if row and row[0] else "—"
+    except Exception:
+        pass  # keep the last known value
+    _data_updated_cache = (time.monotonic(), value)
+    return value
+
+
+templates.env.globals["app_version"] = f"{APP_VERSION}-{settings.ENV.upper()}"
+templates.env.globals["data_updated"] = get_data_updated
 
 def find_product_image(item_code: str) -> Path | None:
     """Find a product image using its item code across known sources."""

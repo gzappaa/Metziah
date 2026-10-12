@@ -1,250 +1,351 @@
 # Metziah
 
-Metziah is a Python data pipeline for collecting, processing, and storing comprehensive Israeli supermarket price, promotion, and store data. Its primary goal is to build a reliable, continuously updated source of supermarket data across chains and stores, providing a foundation for price comparison, promotion discovery, data analysis, and other applications.
+[![Tests](https://github.com/gzappaa/metziah/actions/workflows/tests.yml/badge.svg)](.github/workflows/tests.yml)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL-PostGIS%2016-336791)
+![License: source-available](https://img.shields.io/badge/license-source--available-lightgrey)
 
-The current version processes 15,000+ feed files per day, covering approximately 2,369 stores, 822,000 unique products, 30.9 million promotion items*, and 33 chains across multiple publishing platforms and data sources. The pipeline is extensively tested to ensure reliable and consistent data processing.
+**Metziah** (מציאה, "a bargain") is a Python data platform for Israeli supermarket prices. It downloads the price, promotion and store feeds that chains are legally required to publish, normalizes them, enriches products with scraped metadata, and stores everything in PostgreSQL + PostGIS. A FastAPI service exposes the result as a JSON REST API and a small HTMX web interface.
 
-It downloads the XML feeds published by supermarket chains under Israel's 2014 Price Transparency regulations (Reshumot 7442), parses and normalizes the data, and loads it into PostgreSQL + PostGIS. The pipeline tracks files and data changes over time, handles full and incremental feeds, and provides monitoring, inspection, and daily promotion notifications.
+The main goal is an **accurate, reliable, continuously updated dataset**. The API and website exist to expose and demonstrate that data. They are intentionally simple (see [ADR 016](docs/decisions/016-REST_API_and_WEB_API.md)).
 
-This is a from-scratch build, designed for flexibility, experimentation, and full control over the architecture.
+## At a glance
 
-*The promotion count reflects the records published by the retailers and may be misleading due to how some publishers represent and repeat promotion data. For this version, the focus is on reliably ingesting and processing the published data rather than analyzing or correcting such anomalies.*
+| | |
+|---|---|
+| Feed files processed | 15,000+ per day |
+| Chains | 33 supermarket chains (plus pharmacy chains, stored separately) |
+| Stores | ~2,369, about 90% geocoded |
+| Products | ~550,000 unique products, ~200,000 in the global barcode catalog |
+| Enriched products | 19,009 barcodes with names, brands, categories including ~9,000 with ingredients and nutrition. They cover **56.79%** of production barcode product-store price listings |
+| Price records | \~14 million records tracking individual products sold by stores at specific prices |
+| Promotion items | ~30.9 million as published by retailers* |
 
 
+*Approximately 30 million promotion items before data cleaning, including anomalies, and 20 million after cleaning in production.*
 
-## Status
+> Figures are snapshots from the project's decision records and may lag behind the live database.
 
-Ingests from 33 chains across several distinct feed protocols (see `data/reference/chains.json` / `chains_extra.json`), with schema and architecture designed to scale to the full set of ~2,500 stores nationwide. See [Roadmap](#roadmap) for what's next.
+## Features
+
+- **Multi-protocol ingestion.** One client per distinct feed protocol: Laib Catalog, BinaProjects, PublishedPrices, Carrefour, Mishnat Yosef, Wolt and generic HTML endpoints.
+- **Full and delta feeds.** `PriceFull` and `PromoFull` snapshots are loaded before the incremental `Price` and `Promo` files, and the order is enforced by file tracking.
+- **File tracking.** Per-store, per-day load state for every feed file, with file-size metadata.
+- **Two product identities.** Real cross-chain barcodes are kept separate from store-scoped internal codes. Product identity and price identity are also separate.
+- **Chain-partitioned tables.** `prices` and `promotion_items` are partitioned by `chain_id`.
+- **Product enrichment.** Retailer websites are scraped and merged into a `product_enrichment` table. Normalized nutrition goes in `product_nutrition`.
+- **Store-product categories.** Products sold by weight or prepared in store, such as chicken breast, are categorized with a manually maintained keyword vocabulary.
+- **Pharmacy separation.** Pharmacy chains and stores are kept apart from supermarkets.
+- **Data cleaning.** Conservative rules remove suspicious products and orphan promotion items from production data.
+- **Monitoring and inspection.** Health checks for sources, missing chains and stores, filename drift and full-vs-delta consistency, plus ad-hoc data-quality reports.
+- **Analytics and notifications.** Log parsing, price and promo change detection, and an optional email digest of promotions near a configured location.
+- **REST API and web UI.** Versioned JSON endpoints under `/api/v1/` and a server-rendered HTMX site.
 
 ## How it works
 
 ```
-Chain feed sources (laibcatalog, binaprojects, publishedprices,
-carrefour, mishnatyosef, wolt, generic HTML endpoints)
+Chain feed sources
+(laibcatalog, binaprojects, publishedprices, carrefour,
+ mishnatyosef, wolt, generic HTML)
         │
         ▼
-  clients/          per-source client, one per feed protocol
+  clients/            one client per feed protocol
         │
         ▼
-  downloaders/      common.py + full_family.py / delta_family.py + runner.py
-        │             gzip'd XML feeds → data/
+  downloaders/        shared full/delta download logic, runner, scheduler
+        │             → raw feed files in data/
         ▼
-  parsers/xml.py    XML → Product / Promo domain models (models/)
+  parsers/xml.py      XML → typed models (models/)
         │
         ▼
-  utils/update_*    normalization, product/price/promo reconciliation
-        │
+  utils/              load_*.py (thin CLI) + update_*.py (logic):
+        │             products, prices, promos, stores, file tracking
         ▼
-  database/         repository.py (SQL access) + migrations
-        │             PostgreSQL + PostGIS: products, prices, promotions
-        ▼
-  analytics/        log parsing → price/promo change detection → mailer
-  monitoring/          source health, missing chains/stores, full-vs-delta checks
+  database/           repository.py (SQL) + records.py + migrations
+        │             PostgreSQL + PostGIS
+        ├──────────────► api/          FastAPI: REST API + HTMX website
+        ├──────────────► analytics/    log parsing → change detection → email
+        └──────────────► monitoring/   source health and consistency checks
+
+  scrapers/generic.py → parsers/product_json.py → utils/products/load_products_enriched.py
+  (retailer websites)   (data/parsed/*.jsonl)     (product enrichment, nutrition, categories)
 ```
 
-- **`clients/`** — one client class per genuinely distinct feed protocol (BinaProjects, Carrefour, LaibCatalog, MishnatYosef, PublishedPrices, Wolt, generic HTML).
-- **`downloaders/`** — shared full/delta download orchestration (`common.py`, `full_family.py`, `delta_family.py`) plus a `runner.py` and `scheduler.py` for ongoing cycles.
-- **`parsers/xml.py`** — turns raw Price/Promo/Store XML into typed models.
-- **`database/`** — `repository.py` is the SQL access layer; product identity is split between real (shared, cross-chain) barcodes and internal store-scoped codes; promotions are stored as a `promotions → promotion_groups → promotion_items` hierarchy with reconciliation on each load.
-- **`utils/file_tracking/`** — records per-store/day load state for every feed file and enforces ordering (e.g. a `PriceFull`/`PromoFull` snapshot must load before incremental files for that store/day are applied).
-- **`analytics/`** — parses pipeline logs (`log_parsers/`), detects price/promo changes, and sends a deduplicated notification digest (`notifications/mailer.py`, `promo_notifications.py`).
-- **`monitoring/`** — health checks: missing chains/stores, duplicate stores, filename pattern drift, full-vs-delta feed consistency, source staleness vs. the government registry.
-- **`inspection/`** — ad-hoc reports for data quality (invalid item codes, naming inconsistencies, store/file audits).
+### Key design decisions
+
+The reasoning behind the architecture is documented as ADRs in [`docs/decisions/`](docs/decisions/):
+
+| ADR | Topic |
+|---|---|
+| [001](docs/decisions/001-geocoding-provide.md) | Google Geocoding API instead of GovMap |
+| [002](docs/decisions/002-separate-product-and-price-identity.md.md) | Separate product and price identity |
+| [003](docs/decisions/003-logging-architecture.md) | Logging architecture |
+| [004](docs/decisions/004-file_tracking.md), [006](docs/decisions/006-file-size-metadata.md) | File tracking and file-size metadata |
+| [005](docs/decisions/005-yellow_stores.md) | "Yellow" stores |
+| [007](docs/decisions/007-chains_extra.md) | Extra (non-standard) chains |
+| [008](docs/decisions/008-store-identity.md) | Store identity |
+| [009](docs/decisions/009-downloaders.md) | Shared downloader architecture |
+| [010](docs/decisions/010-snapshot_prices.md) | Snapshot prices |
+| [011](docs/decisions/011-partitions.md) | Chain-specific table partitions |
+| [012](docs/decisions/012-pharmacies_separation.md) | Pharmacies separation |
+| [013](docs/decisions/013-product_enrichment.md) | Product enrichment and metadata normalization |
+| [014](docs/decisions/014-simple_data_cleaning.md) | Conservative data cleaning |
+| [015](docs/decisions/015-store_product_normalization.md) | Store-product category normalization |
+| [016](docs/decisions/016-REST_API_and_WEB_API.md) | Separate REST API and web interface |
 
 ## Requirements
 
 - Python 3.12
-- PostgreSQL with the PostGIS extension (`postgis/postgis:16-3.4` via Docker, or a local install)
-- A Gmail (or other SMTP) account for the notification digest (optional — only needed if you enable notifications)
-- A Google Geocoding API key (optional — only needed for store geocoding)
+- PostgreSQL 16 with PostGIS (`postgis/postgis:16-3.4` via Docker, or a local install). The schema also uses `pg_trgm`.
+- Docker and Docker Compose (recommended)
+- Optional: a Google Geocoding API key for store geocoding
+- Optional: an SMTP account for the promotion notification digest
+- Optional: Playwright browsers, only if you run the scrapers
 
-## Setup
+## Getting started
 
-1. **Clone and install dependencies**
+### 1. Install
 
-   ```bash
-   git clone <repo-url>
-   cd metziah
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+```bash
+git clone <repo-url>
+cd metziah
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-2. **Start PostgreSQL/PostGIS.** Either via Docker:
+### 2. Configure environment files
 
-   ```bash
-   docker-compose up -d db
-   ```
+Settings are loaded by [`config.py`](config.py) (pydantic-settings) from `.env.{ENV}`. `ENV` is `dev`, `test` or `prod` and defaults to `test`. Create the files you need in the project root:
 
-   or a local Postgres instance with PostGIS enabled — `docker/init-db.sh` shows what the container runs on first boot.
+```dotenv
+PGHOST=localhost
+PGPORT=5432
+PGUSER=your_user
+PGPASSWORD=your_password
+PGDATABASE=metziah
 
-3. **Apply the schema:**
+ENV=dev
+DEBUG=false
 
-   ```bash
-   psql -d metziah -f database/migrations/001_schema.sql
-   psql -d metziah -f database/migrations/002_chain_partitions.sql
-   ```
+GEOCODE_API=
 
-4. **Configure environment variables.** Metziah uses [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/), with `config.py` loading `.env.{ENV}` (`ENV` defaults to `test`). Create `.env.dev` (and `.env.test` for the test environment) in the project root:
+# Promotion notifications (optional)
+USER_LAT=
+USER_LON=
+MAX_STORE_DISTANCE_KM=5
 
-   ```dotenv
-   PGHOST=localhost
-   PGPORT=5432
-   PGUSER=your_user
-   PGPASSWORD=your_password
-   PGDATABASE=metziah
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+EMAIL_FROM=
+EMAIL_TO=
+```
 
-   ENV=dev
-   DEBUG=false
+`ENV` gates several safety checks, such as which database is written to and which feed directory is used. Keep it consistent with the active `.env.*` file. `.env*` files are git-ignored.
 
-   GEOCODE_API=
+### 3. Start the database
 
-   # Promo notifications (optional)
-   USER_LAT=
-   USER_LON=
-   MAX_STORE_DISTANCE_KM=5
+```bash
+make docker-up
+```
 
-   SMTP_HOST=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_USER=
-   SMTP_PASSWORD=
-   EMAIL_FROM=
-   EMAIL_TO=
-   ```
+On first boot [`docker/init-db.sh`](docker/init-db.sh) creates the `metziah_test` database and enables PostGIS on both `metziah` and `metziah_test`.
 
-   `ENV` gates several safety checks throughout the pipeline (e.g. which database is written to, which feed directory is used), so it should always match whichever `.env.*` file is active.
+### 4. Apply migrations
 
-5. **Run first-time setup.** The `Makefile` bootstraps stores, chains, and initial full snapshots in the right order:
+```bash
+make migrate        # development database
+make migrate-test   # test database
+```
 
-   ```bash
-   make setup        # standard (ENV=dev) first-time setup
-   # or
-   make setup-test    # test (ENV=test) first-time setup
-   ```
+Migrations live in [`database/migrations/`](database/migrations/):
 
-   Run `make help` to see what each target does; `setup`/`setup-test` walk through downloading stores, building the store registry, resolving/normalizing chains, geocoding, seeding stores, loading full price/promo snapshots, and loading products/prices/promotions, ending with a scheduler run.
+| File | Purpose |
+|---|---|
+| `001_schema.sql` | Core schema: chains, stores, file tracking, products, prices, promotions |
+| `002_chain_partitions.sql` | Per-chain partitions for `prices` and `promotion_items` |
+| `003_pharmacies.sql` | Pharmacy separation |
+| `004_product_enrichment.sql` | Product enrichment and nutrition tables |
+| `005_store_product_categories.sql` | Store-product category matching |
 
-## Running the pipeline
+`make migrate` applies `001` and `002`, and `make migrate-test` applies `001` to `003`. Apply `004` and `005` with `psql` where you need them. `make enrich-prod` does this for the production database.
 
-After first-time setup, the scheduler orchestrates ongoing cycles — downloading full/incremental price and promo files and loading whatever is eligible according to `file_tracking`:
+### 5. Run first-time setup
+
+```bash
+make setup         # development (ENV=dev)
+make setup-test    # test (ENV=test)
+make setup-prod    # production (ENV=prod)
+```
+
+Each target runs the full bootstrap in order:
+
+1. Download store files and build the store registry
+2. Load file-tracking history
+3. Resolve hidden or ambiguous chains and normalize chain IDs
+4. Normalize city metadata and clean City Market addresses
+5. Geocode stores (skipped in production)
+6. Seed stores and add stores missing from `Stores.xml`
+7. Load `PriceFull` and `PromoFull` snapshots
+8. Load and resolve products, prices and promotions
+9. Run the scheduler once
+
+Run `make help` for a summary of all targets.
+
+## Usage
+
+### Run the ingestion pipeline
+
+After setup, the scheduler downloads and loads whatever is eligible according to file tracking:
 
 ```bash
 ENV=dev python -m downloaders.scheduler
 ```
 
-In production this runs on a cron schedule. To send the promo notification digest manually:
+In production this runs on a cron schedule. Everything is invoked as a module (`python -m package.module`), not by file path.
+
+### Product enrichment (production)
 
 ```bash
-ENV=dev python -m analytics.notifications.promo_notifications
+make enrich-prod          # detect pharmacies → scrape → generate JSONL → migrate → load
+make enrich-prod-images   # download product images (slow, run only when needed)
 ```
 
-Analytics/log-parsing runs via:
+The pipeline scrapes every retailer marked `available` in `data/reference/chains_extra.json`, writes parsed `products_parsed.jsonl` files under `data/parsed/`, and loads them into the database. The retailer with the most parsed barcodes becomes the primary metadata source. The others only fill fields that are still empty ([ADR 013](docs/decisions/013-product_enrichment.md)).
+
+### Run the API and website
 
 ```bash
-ENV=dev python -m analytics.runner
+ENV=prod uvicorn api.main:app --reload
 ```
 
-Modules are invoked with `python -m package.module` syntax throughout, not by file path.
+- Website: `http://localhost:8000/`
+- Interactive API docs: `http://localhost:8000/docs`
+
+#### REST API (`/api/v1`)
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Health check |
+| `GET /stats` | Catalog totals |
+| `GET /categories/packaged` | Packaged-product categories with counts and subcategories |
+| `GET /products` | Enriched packaged products in a category |
+| `GET /products/search?q=` | Search enriched packaged products |
+| `GET /products/unenriched?q=` | Search products that have no enrichment |
+| `GET /products/{barcode}` | Full detail for any barcode, enriched or not |
+| `GET /fresh/categories` | Fresh-product categories in display order |
+| `GET /fresh/categories/{category_id}/subcategories` | Subcategories of a fresh category |
+| `GET /fresh/products` | Fresh products in a category or subcategory |
+| `GET /fresh/products/detail` | Detail for a fresh product |
+| `GET /fresh/search?q=` | Search fresh products |
+
+The REST API serves the whole catalog, because enrichment is optional metadata and not a requirement for a product to appear.
+
+### Analytics and notifications
+
+```bash
+ENV=dev python -m analytics.runner                          # parse logs, detect price/promo changes
+ENV=dev python -m analytics.notifications.promo_notifications   # send the promotion digest
+```
+
+Notifications use `USER_LAT`, `USER_LON` and `MAX_STORE_DISTANCE_KM` from your env file, and the SMTP settings.
+
+### Monitoring and inspection
+
+```bash
+ENV=dev python -m monitoring.chains_missing
+ENV=dev python -m monitoring.stores_missing
+ENV=dev python -m monitoring.check_full_x_delta
+ENV=dev python -m monitoring.scraper_coverage
+```
+
+`inspection/` holds ad-hoc reports for data quality, items, scrapers, stores and file tracking. Run them the same way, for example `python -m inspection.stores.stores_data_report`.
 
 ## Docker
 
-Docker runs the PostgreSQL/PostGIS database and the Metziah app in separate containers.
+The compose file defines two services: `db` (PostGIS 16) and `app` (the Python image, which idles so you can run commands inside it).
 
 ```bash
 docker compose --env-file .env.dev up -d db
 docker compose --env-file .env.dev up -d app
-```
 
-
-Development database:
-
-```bash
-make migrate
-make migrate-test
-```
-
-To run any command inside the app container:
-
-```bash
-docker compose --env-file .env.dev exec app <command>
-```
-
-Example: 
-
-```bash
+# run any command in the app container
 docker compose --env-file .env.dev exec app make setup
+
+# run against the test database
+docker compose --env-file .env.dev exec -e PGDATABASE=metziah_test app make setup-test
+
+# open psql
+docker compose --env-file .env.dev exec db psql -U <user> -d metziah
 ```
 
-To run a command using the test database:
-
-```bash
-docker compose --env-file .env.dev exec \
-  -e PGDATABASE=metziah_test \
-  app <command>
-```
-
-Example: 
-
-```bash
-docker compose --env-file .env.dev exec \
-  -e PGDATABASE=metziah_test \
-  app make setup-test
-```
-
-Database queries:
-```bash
-docker compose --env-file .env.dev exec db psql -U postgres -d metziah
-```
-
-```bash
-docker compose --env-file .env.dev exec db psql -U postgres -d metziah_test
-```
-
+Other helpers: `make docker-down`, `make docker-logs`, `make docker-reset` (destroys the volume and recreates the database).
 
 ## Testing
 
 ```bash
-make test
+make test        # ENV=test pytest -v
 ```
 
-which runs `ENV=test pytest -v`. Tests run against a real, separately-seeded PostgreSQL test database rather than mocked connections — integration tests use real `psycopg` connections. CI (`.github/workflows/tests.yml`) spins up a `postgis/postgis` service, applies both migrations, and runs the same suite on every push/PR to `main`.
+The suite uses a real, separately seeded PostgreSQL test database instead of mocked connections. It covers clients, downloaders, parsers, repository and records, the pipeline utilities, monitoring, analytics, the API, and full-lifecycle integration tests. Fixtures include synthetic XML feeds and parsed product files under `tests/fixtures/`. Tests marked `integration` use the real test database.
 
-## Project layout
+CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) starts a `postgis/postgis:16-3.4` service, applies migrations `001` to `005`, and runs `pytest --import-mode=importlib` on every push and pull request to `main`.
+
+## Project structure
 
 ```
-clients/          # One client per feed protocol (BinaProjects, Carrefour, LaibCatalog, MishnatYosef, PublishedPrices, Wolt, generic HTML)
-downloaders/      # Download orchestration: common/full_family/delta_family + runner + scheduler
-parsers/xml.py    # XML -> domain model parsing
-models/           # Chain, product, promo, and store dataclasses
-utils/            # load_*.py (thin CLI) / update_*.py (logic) pairs: prices, products, promos, stores, file_tracking
-database/
-├── migrations/   # 001_schema.sql, 002_chain_partitions.sql
-├── records.py    # Domain model -> DB-shaped record mapping
-└── repository.py # SQL access layer
-analytics/        # Log parsing, price/promo change detection, notification mailer
-monitoring/       # Source health, missing chains/stores, full-vs-delta checks
-inspection/       # Ad-hoc data-quality reports
-data/reference/   # chains.json, chains_extra.json, canonical name vocabulary, CBS localities
-docs/decisions/   # Architecture decision records (ADRs)
-docs/regulations/ # Hebrew regulatory reference material
-docker/           # entrypoint.sh, init-db.sh
-config.py         # pydantic-settings configuration
-db.py             # Connection management
-logging_config.py # Root + isolated (audit) logger setup
-tests/            # Unit + integration tests, real fixture XML feeds
-Makefile          # setup / setup-test / test targets
+metziah/
+├── api/                 FastAPI app: REST API, HTMX website, Jinja templates, static files
+├── analytics/           Log parsers, price/promo change detection, email notifications
+├── clients/             One client per feed protocol (BinaProjects, Carrefour, Laib Catalog,
+│                        Mishnat Yosef, PublishedPrices, Wolt, generic HTML)
+├── database/            migrations/, records.py (model → DB record), repository.py (SQL layer)
+├── data/
+│   ├── reference/       Chains, categories, vocabularies, CBS localities, ignored stores
+│   ├── parsed/          Scraped product JSONL per retailer (git-ignored)
+│   └── archive/         Archived reference data
+├── docker/              Container entrypoint and DB init script
+├── docs/
+│   ├── decisions/       Architecture decision records
+│   ├── extras/          Schema diagrams
+│   └── regulations/     Price Transparency regulations (Hebrew)
+├── downloaders/         common, full_family, delta_family, prices/promos(+full), stores, runner, scheduler
+├── inspection/          Ad-hoc data-quality and audit reports
+├── models/              Chain, product, promo and store models
+├── monitoring/          Source health, missing chains/stores, filename drift, full-vs-delta checks
+├── parsers/             xml.py (feeds), product_json.py (scraped products)
+├── scrapers/            generic.py, the retailer product scraper
+├── tests/               Unit and integration tests mirroring the package layout
+├── utils/               load_*/update_* pipelines, file tracking, store enrichment, processing
+├── config.py            Settings (pydantic-settings, per-ENV)
+├── db.py                Connection management
+├── logging_config.py    Root and isolated (audit) loggers
+├── Dockerfile · docker-compose.yml · Makefile · pytest.ini · requirements.txt
+└── LICENSE
 ```
+
+`utils/` follows a consistent pattern: `load_*.py` is a thin CLI wrapper and `update_*.py` holds the logic.
+
+## Data model
+
+The main tables are `chains`, `sub_chains`, `stores`, `file_tracking`, `products`, `store_products`, `prices`, `promotions`, `promotion_groups` and `promotion_items`. Enrichment adds `product_enrichment`, `product_nutrition` and a `store_product_category_matches` materialized view. Promotions form a `promotions → promotion_groups → promotion_items` hierarchy that is reconciled on each load. See [`docs/extras/`](docs/extras/) for the schema diagrams.
 
 ## Roadmap
 
-- **Phase 1 (done):** Core pipeline — downloading, parsing, and loading price/promo data end-to-end for a single chain.
-- **Phase 2 (done):** Multi-chain expansion, promotion notifications, and monitoring across the full chain/protocol set. Dockerization.
-- **Phase 3 (current):** Smart cleaning and canonicalization of product names (e.g. junk/placeholder item codes, cross-chain naming variance).
+- [x] **Phase 1:** Core pipeline: download, parse and load price and promo data end to end.
+- [x] **Phase 2:** Multi-chain expansion, promotion notifications, monitoring, Dockerization.
+- [x] **Phase 3:** Product enrichment, name canonicalization, store-product categories, conservative data cleaning.
+- [x] **Phase 4:** REST API and web interface.
+
 
 ## Legal basis
 
-Feed access is based on Israel's 2014 Price Transparency regulations (Reshumot 7442), which require supermarket chains to publish machine-readable price and promotion data.
+Feed access rests on Israel's **Regulations for the Promotion of Competition in the Food Industry (Price Transparency), 2014** (Reshumot 7442), which require large supermarket chains to publish machine-readable price and promotion data. The feed structure is government-mandated, so it is known in advance and was not reverse-engineered. The regulation text is in [`docs/regulations/`](docs/regulations/).
 
 ## License
 
-Metziah is released under a custom **source-available** license (see [LICENSE](./LICENSE)), not an OSI-approved open-source license. In short: free to view, run, modify, and share for non-commercial use with attribution; commercial use requires the author's prior written consent. Read the full text before reusing any part of this project.
+Metziah is released under a custom **source-available** license (see [LICENSE](./LICENSE)), not an OSI-approved open-source license. In short, you may view, run, modify and share it for non-commercial use with attribution. Commercial use requires the author's prior written consent. Contributions are licensed back to the author as described in the license. Read the full text before reusing any part of the project.
+
+Created by [gzappaa](https://github.com/gzappaa).

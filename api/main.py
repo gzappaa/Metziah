@@ -5,18 +5,15 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api.routes_web import router as web_router
 from api.routes_api import router as api_router
-
-
+from api.routes_web import router as web_router
+from config import APP_VERSION
 
 app = FastAPI(
     title="Metziah API",
     description="A platform for exploring Israeli supermarket data",
-    version="0.1.0",
+    version=APP_VERSION,
 )
-app.state.app_version = "0.3.0-PROD"
-app.state.data_updated = "2026-10-09"
 
 app.mount(
     "/static",
@@ -26,6 +23,7 @@ app.mount(
 
 app.include_router(web_router)
 app.include_router(api_router)
+
 
 @app.get("/api/v1/health", tags=["Health"])
 def health_check() -> dict[str, str]:

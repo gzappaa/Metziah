@@ -24,8 +24,8 @@ help:
 	@echo "  make docker-reset        Recreate PostgreSQL database"
 	@echo ""
 	@echo "Database:"
-	@echo "  make migrate             Apply migrations to development database"
-	@echo "  make migrate-test        Apply migrations to test database"
+	@echo "  make migrate             Apply all migrations to development database"
+	@echo "  make migrate-test        Apply all migrations to test database"
 
 
 # ---------------------------------------------------------------------------
@@ -62,29 +62,21 @@ docker-reset:
 # Database migrations
 # ---------------------------------------------------------------------------
 
-migrate:
-	@echo "=== Migrating development database ==="
-	docker compose --env-file .env.dev exec -T db \
-		psql -U "$$PGUSER" -d "$$PGDATABASE" \
-		< database/migrations/001_schema.sql
-	docker compose --env-file .env.dev exec -T db \
-		psql -U "$$PGUSER" -d "$$PGDATABASE" \
-		< database/migrations/002_chain_partitions.sql
-	@echo "=== Development database migrated ==="
+# Every .sql file in database/migrations/, applied in filename order.
+MIGRATIONS := $(sort $(wildcard database/migrations/*.sql))
 
+migrate: DB = $$PGDATABASE
+migrate-test: DB = metziah_test
 
-migrate-test:
-	@echo "=== Migrating test database ==="
-	docker compose --env-file .env.dev exec -T db \
-		psql -U "$$PGUSER" -d metziah_test \
-		< database/migrations/001_schema.sql
-	docker compose --env-file .env.dev exec -T db \
-		psql -U "$$PGUSER" -d metziah_test \
-		< database/migrations/002_chain_partitions.sql
-	docker compose --env-file .env.dev exec -T db \
-		psql -U "$$PGUSER" -d metziah_test \
-		< database/migrations/003_pharmacies.sql
-	@echo "=== Test database migrated ==="
+migrate migrate-test:
+	@echo "=== Migrating $(DB) ==="
+	@for f in $(MIGRATIONS); do \
+		echo "--- $$f"; \
+		docker compose --env-file .env.dev exec -T db \
+			psql -U "$$PGUSER" -d "$(DB)" -v ON_ERROR_STOP=1 \
+			< "$$f" || exit 1; \
+	done
+	@echo "=== $(DB) migrated ==="
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +324,3 @@ enrich-prod:
 # Run only when intentionally downloading product images.
 enrich-prod-images:
 	ENV=prod python -m utils.processing.download_product_image
-
-
-
-

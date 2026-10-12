@@ -3,7 +3,6 @@ venv
 *.env
 **/__pycache__/
 *.pyc
-__init__.py
 notes.md
 data/reports/
 data/stores
@@ -42,3 +41,4 @@ data/parsed
 data/images/*
 !data/images/brands/
 !data/images/brands/**
+llm_context
