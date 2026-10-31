@@ -1,4 +1,5 @@
 .PHONY: help test setup setup-test setup-prod enrich-prod enrich-prod-images \
+	enrich-prod-bonus \
 	docker-up docker-down docker-logs docker-reset \
 	migrate migrate-test
 
@@ -15,6 +16,7 @@ help:
 	@echo ""
 	@echo "Product enrichment:"
 	@echo "  make enrich-prod         Run production product enrichment pipeline"
+	@echo "  make enrich-prod-bonus   Run optional browser/product-page scrapers and reload enrichment"
 	@echo "  make enrich-prod-images  Download product images (slow)"
 	@echo ""
 	@echo "Docker:"
@@ -64,6 +66,7 @@ docker-reset:
 
 # Every .sql file in database/migrations/, applied in filename order.
 MIGRATIONS := $(sort $(wildcard database/migrations/*.sql))
+DOCKER_APP = docker compose --env-file .env.prod exec -T app
 
 migrate: DB = $$PGDATABASE
 migrate-test: DB = metziah_test
@@ -72,7 +75,7 @@ migrate migrate-test:
 	@echo "=== Migrating $(DB) ==="
 	@for f in $(MIGRATIONS); do \
 		echo "--- $$f"; \
-		docker compose --env-file .env.dev exec -T db \
+		docker compose --env-file .env.prod exec -T db \
 			psql -U "$$PGUSER" -d "$(DB)" -v ON_ERROR_STOP=1 \
 			< "$$f" || exit 1; \
 	done
@@ -272,10 +275,10 @@ setup-prod:
 # Production product enrichment
 # ---------------------------------------------------------------------------
 
-# Select the chain with the largest products_parsed.jsonl file.
-# This uses file size as a proxy for item count.
+# Select the retailer with the largest parsed product JSONL file.
+# Supports products_parsed.jsonl and products_parsed_*.jsonl.
 PRODUCTS_SOURCE := $(shell find data/parsed -mindepth 2 -maxdepth 2 \
-	-type f -name products_parsed.jsonl -printf '%s\t%h\n' \
+	-type f -name 'products_parsed*.jsonl' -printf '%s\t%h\n' \
 	| sort -nr | head -1 | cut -f2- | sed 's|.*/||')
 
 enrich-prod:
@@ -292,12 +295,12 @@ enrich-prod:
 	ENV=prod python -m utils.processing.generate_product_jsonl
 
 	@echo "=== 5. Apply product enrichment migration ==="
-	docker compose --env-file .env.dev exec -T db \
+	docker compose --env-file .env.prod exec -T db \
 		psql -U "$$PGUSER" -d metziah_prod \
 		< database/migrations/004_product_enrichment.sql
 
 	@echo "=== 6. Apply store-product categories migration ==="
-	docker compose --env-file .env.dev exec -T db \
+	docker compose --env-file .env.prod exec -T db \
 		psql -U "$$PGUSER" -d metziah_prod \
 		< database/migrations/005_store_product_categories.sql
 
@@ -321,6 +324,34 @@ enrich-prod:
 	@echo "=== Production product enrichment complete ==="
 
 
+# Optional: run the additional browser-based scrapers and reload enrichment.
+enrich-prod-bonus:
+	@echo "=== 1. Run browser scraper ==="
+	ENV=prod python -m scrapers.browser
+
+	@echo "=== IMPORTANT: Create scrapers/product_pages/product_urls.txt before continuing ==="
+	@read -p "Press Enter once product_urls.txt is ready..."
+
+	@echo "=== 2. Run product-pages scraper ==="
+	ENV=prod python -m scrapers.product_pages.scraper --headless
+
+	@echo "=== 3. Regenerate product JSONL ==="
+	ENV=prod python -m utils.processing.generate_product_jsonl
+
+	@echo "=== 4. Reload enriched products ==="
+	@if [ -z "$(PRODUCTS_SOURCE)" ]; then \
+		echo "ERROR: No products_parsed.jsonl found under data/parsed"; \
+		exit 1; \
+	fi
+	ENV=prod python -m utils.products.load_products_enriched \
+		--source "$(PRODUCTS_SOURCE)"
+
+	@echo "=== 5. Load product nutrition ==="
+	ENV=prod python -m utils.products.load_products_nutrition
+
+	@echo "=== Bonus product enrichment complete ==="
+
+
 # Run only when intentionally downloading product images.
 enrich-prod-images:
-	ENV=prod python -m utils.processing.download_product_image
+	ENV=prod python -m utils.processing.download_img

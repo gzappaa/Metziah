@@ -1,3 +1,4 @@
+
 """
 parsers/product_json.py
 
@@ -8,11 +9,12 @@ Import usage:
 """
 
 import json
-import logging
+import re
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from database.records import is_valid_gtin
 
 # Language ids as seen in the samples
 HE, EN, RU = "1", "2", "4"
@@ -25,6 +27,40 @@ def _get(d: Any, *keys: str) -> Any:
             return None
         d = d.get(key)
     return d
+
+
+def _barcode_from_image_url(url: Any) -> str | None:
+    """Extract a valid GTIN from a GS1 product image URL."""
+    if not isinstance(url, str):
+        return None
+
+    path = urlparse(url).path
+
+    if "product-images" in path or "gs1-products" not in path:
+        return None
+
+    match = re.search(r"/\{\{size\}\}/(\d+)", path)
+    if not match:
+        return None
+
+    candidate = match.group(1)
+    return candidate if is_valid_gtin(candidate) else None
+
+
+def _resolve_barcode(
+    raw_barcode: Any,
+    images: list[dict[str, Any]],
+) -> str | None:
+    """Preserve the source barcode; infer one from images only if missing."""
+    if raw_barcode is not None and str(raw_barcode).strip():
+        return str(raw_barcode).strip()
+
+    for image in images:
+        candidate = _barcode_from_image_url(image.get("url"))
+        if candidate:
+            return candidate
+
+    return None
 
 
 def _collect_images(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -48,7 +84,7 @@ def _collect_images(raw: dict[str, Any]) -> list[dict[str, Any]]:
             "id": img.get("id"),
             "url": img.get("url"),
             "is_default": bool(img.get("isDefault")),
-            "classification": img.get("classification"),  # Front / Back / None
+            "classification": img.get("classification"),
             "sort": img.get("sort"),
             "source": img.get("source"),
             "tag": img.get("tag"),
@@ -76,7 +112,7 @@ def parse_product(raw: dict[str, Any]) -> dict[str, Any]:
 
     return {
         # --- identity ---
-        "barcode": raw.get("barcode"),
+        "barcode": _resolve_barcode(raw.get("barcode"), images),
         "local_barcode": raw.get("localBarcode"),
         "product_id": raw.get("productId"),
         "id": raw.get("id"),
@@ -107,30 +143,29 @@ def parse_product(raw: dict[str, Any]) -> dict[str, Any]:
         "category_path_ids": [c.get("id") for c in main_path],
         "category_path_he": [_get(c, "names", HE) for c in main_path],
         "category_path_en": [_get(c, "names", EN) for c in main_path],
-        "categories_paths": family.get("categoriesPaths") or [],  # all paths, raw
-        # --- content (data is keyed by language id) ---
+        "categories_paths": family.get("categoriesPaths") or [],
+        # --- content ---
         "ingredients_he": _get(data, HE, "ingredients"),
         "ingredients_en": _get(data, EN, "ingredients"),
         "ingredients_ru": _get(data, RU, "ingredients"),
         "description_he": _get(data, HE, "description"),
         "description_en": _get(data, EN, "description"),
         "description_ru": _get(data, RU, "description"),
-        # --- nutrition (raw until we see a populated example) ---
+        # --- nutrition ---
         "nutrition_facts": raw.get("nutritionFacts"),
         "nutrition_values": raw.get("nutritionValues"),
-        # --- images (raw URLs, untouched) ---
+        # --- images ---
         "main_image_url": default_image["url"] if default_image else None,
         "images": images,
         "nutrition_image_url": raw.get("nutritionImageUrl"),
     }
 
 
-def iter_products(path: Path) -> Iterator[dict[str, Any]]:
-    """Yield parsed products from one file.
-
-    Raises OSError, json.JSONDecodeError or ValueError for unreadable files or
-    files without a 'products' list - the caller decides how to handle them.
-    """
+def iter_products(
+    path: Path,
+    stats: dict[str, int] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield parsed products and optionally count recovered barcodes."""
     with path.open(encoding="utf-8") as f:
         doc = json.load(f)
 
@@ -143,7 +178,19 @@ def iter_products(path: Path) -> Iterator[dict[str, Any]]:
         raise ValueError(f"no 'products' list (top-level: {keys})")
 
     for raw in products:
-        if isinstance(raw, dict):
-            yield parse_product(raw)
-        else:
-            logger.warning("%s: skipped non-dict product entry (%s)", path, type(raw).__name__)
+        if not isinstance(raw, dict):
+            continue
+
+        product = parse_product(raw)
+
+        raw_barcode = raw.get("barcode")
+        if (
+            stats is not None
+            and (raw_barcode is None or not str(raw_barcode).strip())
+            and product["barcode"] is not None
+        ):
+            stats["barcodes_recovered"] = (
+                stats.get("barcodes_recovered", 0) + 1
+            )
+
+        yield product

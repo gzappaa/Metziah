@@ -171,8 +171,11 @@ def safe_db_call(fn, *args, default=None, **kwargs):
 
 
 def fetch_universal_product_codes(item_codes: set[str]) -> set[str]:
-    """Which of these item_codes are real barcodes in `products` (i.e. safe
-    to compare across chains, vs. chain-internal store_products codes)."""
+    """Return item codes recognized as universal barcodes.
+
+    Includes barcodes in products and pharmacy_products, excluding
+    chain-internal codes stored in store_products tables.
+    """
     if not item_codes:
         return set()
 
@@ -180,8 +183,18 @@ def fetch_universal_product_codes(item_codes: set[str]) -> set[str]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT item_code FROM products WHERE item_code = ANY(%s)",
-                (list(item_codes),),
+                """
+                SELECT item_code
+                FROM products
+                WHERE item_code = ANY(%s)
+
+                UNION
+
+                SELECT item_code
+                FROM pharmacy_products
+                WHERE item_code = ANY(%s)
+                """,
+                (list(item_codes), list(item_codes)),
             )
             return {row[0] for row in cur.fetchall()}
     finally:

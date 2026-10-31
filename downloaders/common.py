@@ -416,11 +416,7 @@ async def _get_html_page(
 
 def _page_fingerprint(candidates) -> tuple:
     return tuple(
-        (
-            getattr(candidate, "filename", None),
-            getattr(candidate, "href", None),
-            getattr(candidate, "text", None),
-        )
+        getattr(candidate, "filename", None)
         for candidate in candidates
     )
 

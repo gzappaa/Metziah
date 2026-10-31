@@ -203,18 +203,17 @@ def test_iter_products_reads_top_level_list(tmp_path, raw_product):
     assert products[0]["product_id"] == 456789
 
 
-def test_iter_products_skips_non_dictionary_entries(tmp_path, raw_product, caplog):
+def test_iter_products_skips_non_dictionary_entries(tmp_path, raw_product):
     path = tmp_path / "products.json"
     path.write_text(
         json.dumps({"products": [raw_product, None, "invalid", 123]}),
         encoding="utf-8",
     )
 
-    with caplog.at_level("WARNING"):
-        products = list(iter_products(path))
+    products = list(iter_products(path))
 
     assert len(products) == 1
-    assert "skipped non-dict product entry" in caplog.text
+    assert products[0]["barcode"] == "7291234567890"
 
 
 def test_iter_products_rejects_invalid_structure(tmp_path):

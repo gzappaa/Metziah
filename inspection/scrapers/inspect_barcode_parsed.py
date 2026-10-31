@@ -39,7 +39,7 @@ def main() -> None:
     records = 0
     files = 0
 
-    for path in sorted(PARSED_DIR.glob("*/products_parsed.json")):
+    for path in sorted(PARSED_DIR.glob("*/products_parsed*.jsonl")):
         files += 1
 
         with path.open(encoding="utf-8") as f:

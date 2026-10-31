@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from downloaders.full_family import (
-    extract_time_suffix,
     find_latest_full_files_per_store,
     get_storage_path,
     _cleanup_old_same_day_files,
@@ -12,6 +11,7 @@ from downloaders.full_family import (
     save_full_file_async,
 )
 
+from utils.file_tracking.parser_file_tracking import extract_time_suffix
 
 def test_extract_time_suffix_yyyymmdd_hhmmss():
     assert (

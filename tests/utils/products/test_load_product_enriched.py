@@ -42,3 +42,17 @@ def test_normalize_category_path_returns_none_for_unmapped_category():
         ["קטגוריה לא מוכרת", "תת קטגוריה"],
         {},
     ) == (None, None)
+
+def test_get_item_code_converts_numeric_barcode_to_string():
+    assert get_item_code({"barcode": 7290012345678}) == "7290012345678"
+
+
+def test_normalize_category_path_ignores_extra_path_levels():
+    mapping = {
+        "ירקות ופירות / ירקות": ("ירקות ופירות", "ירקות"),
+    }
+
+    assert normalize_category_path(
+        ["ירקות ופירות", "ירקות", "עגבניות"],
+        mapping,
+    ) == ("ירקות ופירות", "ירקות")

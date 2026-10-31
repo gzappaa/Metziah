@@ -195,12 +195,18 @@ def test_nutrition_key_uses_raw_label_for_unmapped_rows(nutrition_row):
     [
         (None, 12.5, 12.5),
         (12.5, 20.0, 12.5),
-        (0, 20.0, 0),
+        (0, 20.0, 20.0),
+        (0, 0.01, 0.01),
+        (0, 0, 0),
+        (0.01, 0, 0.01),
+        (0.01, 20.0, 0.01),
         (None, None, None),
+        (0, None, 0),
     ],
 )
 def test_merge_value_only_fills_missing_values(existing, incoming, expected):
     assert loader._merge_value(existing, incoming) == expected
+
 
 
 def test_reconcile_rows_preserves_existing_values_and_combines_flags(
@@ -377,3 +383,38 @@ def test_load_product_nutrition_reconciles_sources_and_inserts(
     output = capsys.readouterr().out
     assert "Products with nutrition: 1" in output
     assert "Inserted nutrition rows: 4" in output
+    assert all(row[1] == "market_a" for row in inserts)
+
+
+def test_iter_products_returns_nothing_when_directory_missing(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        loader,
+        "PARSED_DIR",
+        tmp_path / "missing",
+    )
+
+    assert list(loader.iter_products()) == []
+
+
+def test_iter_products_raises_on_invalid_json(
+    tmp_path,
+    monkeypatch,
+):
+    parsed_dir = tmp_path / "parsed"
+    market_dir = parsed_dir / "market_a"
+    market_dir.mkdir(parents=True)
+
+    file = market_dir / "products_parsed.jsonl"
+    file.write_text(
+        '{"barcode": "123"}\n'
+        '{"barcode": invalid}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(loader, "PARSED_DIR", parsed_dir)
+
+    with pytest.raises(json.JSONDecodeError):
+        list(loader.iter_products())

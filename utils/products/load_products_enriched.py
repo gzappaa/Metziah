@@ -37,6 +37,17 @@ PARSED_ROOT = Path("data/parsed")
 CATEGORIES_PATH = Path("data/reference/categories.json")
 
 
+def get_source_files(source_dir):
+    """Return all parsed product JSONL files in deterministic order."""
+    return sorted(
+        source_dir.glob("products_parsed*.jsonl"),
+        key=lambda path: (
+            path.name != "products_parsed.jsonl",
+            path.name,
+        ),
+    )
+
+
 def load_jsonl(path):
     """Yield products from a parsed JSONL file."""
     with path.open("r", encoding="utf-8") as file:
@@ -146,10 +157,11 @@ def process_source(
     is_source_of_truth,
     category_mapping,
 ):
-    """Process one parsed product source."""
+    """Process one parsed product JSONL file."""
     logger.info(
-        "Processing %s%s",
+        "Processing %s: %s%s",
         source_name,
+        source_file.name,
         " (source of truth)" if is_source_of_truth else "",
     )
 
@@ -202,8 +214,9 @@ def process_source(
     conn.commit()
 
     logger.info(
-        "%s completed: %s inserted, %s enriched, %s skipped, %s invalid",
+        "%s (%s) completed: %s inserted, %s enriched, %s skipped, %s invalid",
         source_name,
+        source_file.name,
         inserted,
         updated,
         skipped,
@@ -244,18 +257,17 @@ def main():
     )
 
     source_dir = PARSED_ROOT / args.source
-    source_file = source_dir / "products_parsed.jsonl"
+    source_files = get_source_files(source_dir)
 
-    if not source_file.is_file():
+    if not source_files:
         raise SystemExit(
-            f"Source file not found: {source_file}"
+            f"No products_parsed*.jsonl files found in: {source_dir}"
         )
 
     source_dirs = sorted(
         path
         for path in PARSED_ROOT.iterdir()
-        if path.is_dir()
-        and (path / "products_parsed.jsonl").is_file()
+        if path.is_dir() and get_source_files(path)
     )
 
     source_names = [path.name for path in source_dirs]
@@ -284,18 +296,19 @@ def main():
         for path in source_dirs:
             is_source_of_truth = path == source_dir
 
-            inserted, updated, skipped, invalid = process_source(
-                conn,
-                path.name,
-                path / "products_parsed.jsonl",
-                is_source_of_truth,
-                category_mapping,
-            )
+            for source_file in get_source_files(path):
+                inserted, updated, skipped, invalid = process_source(
+                    conn,
+                    path.name,
+                    source_file,
+                    is_source_of_truth,
+                    category_mapping,
+                )
 
-            total_inserted += inserted
-            total_updated += updated
-            total_skipped += skipped
-            total_invalid += invalid
+                total_inserted += inserted
+                total_updated += updated
+                total_skipped += skipped
+                total_invalid += invalid
 
     logger.info(
         "Enriched product load completed: "

@@ -63,8 +63,8 @@ def collect_categories():
     level_2 = Counter()
     combinations = Counter()
 
-    files = sorted(PARSED_ROOT.glob("*/products_parsed.jsonl"))
-
+    files = sorted(PARSED_ROOT.glob("*/products_parsed*.jsonl"))
+    
     total_products = 0
 
     for path in files:

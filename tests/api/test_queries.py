@@ -177,9 +177,23 @@ class TestSearch:
             queries.search("חלב", offset=-1)
 
 
-def test_like_wildcards_are_treated_literally(seed):
-    assert queries.search("_")["total"] > 0
-    assert queries.search("%")["total"] > 0
+def test_like_wildcards_are_treated_literally(seed, conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE product_enrichment
+            SET name_he = %s,
+                name_en = %s
+            WHERE item_code = %s
+            """,
+            ("חלב_טסט", "test%milk", seed.milk),
+        )
+
+    underscore_results = codes(queries.search("_")["items"])
+    percent_results = codes(queries.search("%")["items"])
+
+    assert seed.milk in underscore_results
+    assert seed.milk in percent_results
 
 
 # --------------------------------------------------------------------------

@@ -30,7 +30,7 @@ PARSED_DIR = Path("data/parsed")
 
 def iter_products():
     """Yield parsed products from all supermarket JSONL files."""
-    for path in sorted(PARSED_DIR.glob("*/products_parsed.jsonl")):
+    for path in sorted(PARSED_DIR.glob("*/*products_parsed*.jsonl")):
         with path.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -113,11 +113,15 @@ def _nutrition_key(row):
 
 def _merge_value(existing, incoming):
     """
-    Fill an existing value only when it is currently missing.
+    Fill missing values during source reconciliation.
 
-    Existing non-NULL values always win.
+    Zero is treated as missing only when another source provides
+    a nonzero value. Nonzero values are never overwritten.
     """
-    if existing is None and incoming is not None:
+    if existing is None:
+        return incoming
+
+    if existing == 0 and incoming is not None and incoming != 0:
         return incoming
 
     return existing

@@ -3,9 +3,10 @@
 [![Tests](https://github.com/gzappaa/metziah/actions/workflows/tests.yml/badge.svg)](.github/workflows/tests.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL-PostGIS%2016-336791)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
 ![License: source-available](https://img.shields.io/badge/license-source--available-lightgrey)
 
-**Metziah** (מציאה, "a bargain") is a Python data platform for Israeli supermarket prices. It downloads the price, promotion and store feeds that chains are legally required to publish, normalizes them, enriches products with scraped metadata, and stores everything in PostgreSQL + PostGIS. A FastAPI service exposes the result as a JSON REST API and a small HTMX web interface.
+**Metziah** (מציאה, "a bargain") is a Python data platform for Israeli supermarket prices. It downloads the price, promotion and store feeds that chains are legally required to publish, normalizes them, **enriches products with scraped metadata, images and nutrition facts**, and stores everything in PostgreSQL + PostGIS. A FastAPI service exposes the result as a versioned JSON REST API and a small HTMX web interface.
 
 The main goal is an **accurate, reliable, continuously updated dataset**. The API and website exist to expose and demonstrate that data. They are intentionally simple (see [ADR 016](docs/decisions/016-REST_API_and_WEB_API.md)).
 
@@ -17,14 +18,15 @@ The main goal is an **accurate, reliable, continuously updated dataset**. The AP
 | Chains | 33 supermarket chains (plus pharmacy chains, stored separately) |
 | Stores | ~2,369, about 90% geocoded |
 | Products | ~550,000 unique products, ~200,000 in the global barcode catalog |
-| Enriched products | 19,009 barcodes with names, brands, categories including ~9,000 with ingredients and nutrition. They cover **56.79%** of production barcode product-store price listings |
-| Price records | \~14 million records tracking individual products sold by stores at specific prices |
+| Price records | ~14 million records tracking individual products sold by stores at specific prices |
 | Promotion items | ~30.9 million as published by retailers* |
-
+| **Scraped products** | **~48,000** products scraped from retailer websites |
+| **Product images** | **~48,000** product images downloaded and served by the API |
+| **Nutrition data** | **16,000+** products with parsed, normalized nutrition facts |
 
 *Approximately 30 million promotion items before data cleaning, including anomalies, and 20 million after cleaning in production.*
 
-> Figures are snapshots from the project's decision records and may lag behind the live database.
+> Figures are snapshots and may lag behind the live database. Enrichment numbers count scraped and parsed output. Run the reports in `inspection/data_quality/` for current coverage against the production price listings.
 
 ## Features
 
@@ -33,13 +35,15 @@ The main goal is an **accurate, reliable, continuously updated dataset**. The AP
 - **File tracking.** Per-store, per-day load state for every feed file, with file-size metadata.
 - **Two product identities.** Real cross-chain barcodes are kept separate from store-scoped internal codes. Product identity and price identity are also separate.
 - **Chain-partitioned tables.** `prices` and `promotion_items` are partitioned by `chain_id`.
-- **Product enrichment.** Retailer websites are scraped and merged into a `product_enrichment` table. Normalized nutrition goes in `product_nutrition`.
+- **Product enrichment at scale.** Retailer websites are scraped (JSON dumps, server-rendered pages and replayed JSON APIs), parsed to JSONL and merged into `product_enrichment`. Names, brands, descriptions, ingredients and category paths are canonicalized.
+- **Nutrition facts.** About 120 Hebrew and English label spellings are mapped to canonical nutrients, units are converted, and each value is tagged with its basis (per 100 g, per 100 ml, per serving, %DV). Nothing is dropped silently, and the raw scrape is kept so rows can be rebuilt.
+- **Product images.** One image per barcode, stored by `item_code` and served by the web interface with a placeholder fallback.
 - **Store-product categories.** Products sold by weight or prepared in store, such as chicken breast, are categorized with a manually maintained keyword vocabulary.
 - **Pharmacy separation.** Pharmacy chains and stores are kept apart from supermarkets.
 - **Data cleaning.** Conservative rules remove suspicious products and orphan promotion items from production data.
-- **Monitoring and inspection.** Health checks for sources, missing chains and stores, filename drift and full-vs-delta consistency, plus ad-hoc data-quality reports.
+- **Monitoring and inspection.** Health checks for sources, missing chains and stores, filename drift and full-vs-delta consistency, plus ad-hoc data-quality and scraper-coverage reports.
 - **Analytics and notifications.** Log parsing, price and promo change detection, and an optional email digest of promotions near a configured location.
-- **REST API and web UI.** Versioned JSON endpoints under `/api/v1/` and a server-rendered HTMX site.
+- **REST API and web UI.** Versioned JSON endpoints under `/api/v1/`, interactive Swagger docs and a server-rendered HTMX site.
 
 ## How it works
 
@@ -67,8 +71,11 @@ Chain feed sources
         ├──────────────► analytics/    log parsing → change detection → email
         └──────────────► monitoring/   source health and consistency checks
 
-  scrapers/generic.py → parsers/product_json.py → utils/products/load_products_enriched.py
-  (retailer websites)   (data/parsed/*.jsonl)     (product enrichment, nutrition, categories)
+  Enrichment (see "Product enrichment pipeline")
+  scrapers/ ─► data/raw*/ ─► parsers/ ─► data/parsed/*.jsonl ─► utils/products/load_*
+  (retailer      raw JSON      product_json,   one JSONL per       product_enrichment,
+   sites)        per product   page_type1/2    retailer            product_nutrition
+                                                                    + data/images/products/
 ```
 
 ### Key design decisions
@@ -92,6 +99,7 @@ The reasoning behind the architecture is documented as ADRs in [`docs/decisions/
 | [014](docs/decisions/014-simple_data_cleaning.md) | Conservative data cleaning |
 | [015](docs/decisions/015-store_product_normalization.md) | Store-product category normalization |
 | [016](docs/decisions/016-REST_API_and_WEB_API.md) | Separate REST API and web interface |
+| [017](docs/decisions/017-barcode_fallback_scraping.md) | Barcode fallback scraping |
 
 ## Requirements
 
@@ -206,42 +214,142 @@ ENV=dev python -m downloaders.scheduler
 
 In production this runs on a cron schedule. Everything is invoked as a module (`python -m package.module`), not by file path.
 
-### Product enrichment (production)
+## Product enrichment pipeline
+
+Feeds give prices and a barcode, but names are noisy and there are no images, ingredients or nutrition facts. Enrichment fills that gap from the retailers' own websites. The current dataset holds **~48,000 scraped products, ~48,000 product images and 16,000+ products with parsed nutrition**.
+
+### Stages
+
+| Stage | What happens | Code |
+|---|---|---|
+| 1. Scrape | Retailer sites are scraped per barcode. Chain JSON dumps go to `data/raw/<retailer>/`, and product pages go to `data/raw_product_pages/<retailer>/<item_code>.json`. | `scrapers/generic.py`, `scrapers/product_pages/` |
+| 2. Parse | Raw dumps become flat records. A missing barcode can be recovered from a GS1 image URL when the GTIN is valid. | `parsers/product_json.py`, `parsers/product_page_type1.py`, `parsers/product_page_type2.py` |
+| 3. Generate JSONL | One `products_parsed*.jsonl` file per retailer under `data/parsed/`. | `utils/processing/generate_product_jsonl.py` |
+| 4. Load | The retailer with the most parsed barcodes is the source of truth. Others only add missing products and fill empty fields. Raw category paths are mapped to canonical category and subcategory through `data/reference/categories.json`. | `utils/products/load_products_enriched.py` |
+| 5. Nutrition | Scraped nutrition rows are normalized into `product_nutrition`. | `utils/processing/normalize_nutritional.py`, `utils/products/load_products_nutrition.py` |
+| 6. Images | One image per barcode is saved to `data/images/products/{item_code}.jpg`. Existing files are skipped. | `utils/processing/download_img.py`, `utils/processing/download_all_product_images.py` |
+
+### Product-page scraper
+
+`scrapers/product_pages/scraper.py` needs one example product URL per supermarket in `scrapers/product_pages/product_urls.txt`. The barcode in that URL is swapped for every item code in the database. The site's page type is detected once:
+
+- **Type 1, server-rendered.** The product content is parsed from the HTML (`.productContainer` sections).
+- **Type 2, JSON API.** The product request is captured from the example page's network traffic, then replayed per item code with plain HTTP and no browser. Requests are throttled adaptively and retried with backoff on `429` and `5xx`.
+
+New page structures are added as `scrapers/product_pages/type_*.py` modules. Runs are resumable: items that already have a file are skipped, items the site does not have are written to `_missing.txt`, and failures save nothing so the next run retries them.
+
+```bash
+python -m scrapers.product_pages.scraper --item 7290110115227            # one item from every site, print only
+python -m scrapers.product_pages.scraper --item 7290110115227 --save     # same, and save found items
+python -m scrapers.product_pages.scraper --limit 20                      # first 20 unsaved codes per site
+python -m scrapers.product_pages.scraper                                 # everything unsaved, in chunks
+```
+
+### Nutrition normalization
+
+Every nutrition row is normalized into a comparable shape:
+
+- **Label.** About 120 Hebrew and English spellings map to one canonical nutrient key, such as `calories`, `total_fat`, `sodium` or `vitamin_b12`.
+- **Unit.** Values are converted to the nutrient's canonical unit (`kcal`, `g`, `mg`, `mcg`).
+- **Basis.** The scraped size field becomes what the number is per: 100 g, 100 ml, serving or %DV.
+- **Duplicates.** If the same nutrient and basis appear twice in a product, only the first row is marked canonical (`is_canonical`).
+- **Flags.** `unmapped`, `unit_missing` and `unit_mismatch` mark rows that need attention. Unknown labels are kept, so the mapping can be extended later and the rows rebuilt from `nutrition_raw`.
+
+To support a new spelling from a new retailer, add it to the label list of the right key in `SPEC`.
+
+### Run it
 
 ```bash
 make enrich-prod          # detect pharmacies → scrape → generate JSONL → migrate → load
 make enrich-prod-images   # download product images (slow, run only when needed)
 ```
 
-The pipeline scrapes every retailer marked `available` in `data/reference/chains_extra.json`, writes parsed `products_parsed.jsonl` files under `data/parsed/`, and loads them into the database. The retailer with the most parsed barcodes becomes the primary metadata source. The others only fill fields that are still empty ([ADR 013](docs/decisions/013-product_enrichment.md)).
+The pipeline scrapes every retailer marked `available` in `data/reference/chains_extra.json`. To run a stage on its own, use the module directly, for example:
 
-### Run the API and website
+```bash
+ENV=prod python -u -m utils.products.load_products --prod
+python -m utils.processing.download_img --item-code 7290019431169
+python -m utils.processing.download_img --all
+```
+
+### Coverage checks
+
+`inspection/scrapers/` has reports for parsed barcodes, fields, image URLs, nutrition and category mapping. `inspection/data_quality/analyze_images_coverage.py` measures image coverage, and `monitoring.scraper_coverage` tracks which retailers are covered.
+
+## REST API
+
+The API is a FastAPI app (`api/main.py`) with a thin routing layer (`api/routes_api.py`), a service layer (`api/service.py`), SQL in `api/queries.py` and Pydantic response models in `api/schemas.py`. It serves the **whole catalog**: enrichment is optional metadata, not a requirement for a product to appear.
+
+Everything is read-only JSON under `/api/v1`. The same data backs the HTMX website, and a parity test keeps the two in sync.
+
+| URL | Description |
+|---|---|
+| `http://localhost:8000/` | Website |
+| `http://localhost:8000/docs` | Swagger UI |
+| `http://localhost:8000/openapi.json` | OpenAPI schema |
+
+### Run locally
 
 ```bash
 ENV=prod uvicorn api.main:app --reload
 ```
 
-- Website: `http://localhost:8000/`
-- Interactive API docs: `http://localhost:8000/docs`
-
-#### REST API (`/api/v1`)
+### Endpoints
 
 | Endpoint | Description |
 |---|---|
-| `GET /health` | Health check |
-| `GET /stats` | Catalog totals |
+| `GET /health` | Health check, returns `{"status": "ok"}` |
+| `GET /stats` | Catalog totals: stores, brands and fresh products |
 | `GET /categories/packaged` | Packaged-product categories with counts and subcategories |
-| `GET /products` | Enriched packaged products in a category |
-| `GET /products/search?q=` | Search enriched packaged products |
-| `GET /products/unenriched?q=` | Search products that have no enrichment |
+| `GET /products?category=` | Enriched packaged products in a category |
+| `GET /products/search?q=` | Search enriched products. Each hit has its cheapest price and store count |
+| `GET /products/unenriched?q=` | Browse or search products that have no enrichment |
 | `GET /products/{barcode}` | Full detail for any barcode, enriched or not |
-| `GET /fresh/categories` | Fresh-product categories in display order |
+| `GET /fresh/categories` | Fresh-product categories in display order, with counts |
 | `GET /fresh/categories/{category_id}/subcategories` | Subcategories of a fresh category |
-| `GET /fresh/products` | Fresh products in a category or subcategory |
-| `GET /fresh/products/detail` | Detail for a fresh product |
-| `GET /fresh/search?q=` | Search fresh products |
+| `GET /fresh/products?subcategory_id=` | Distinct fresh products in a subcategory, cheapest first |
+| `GET /fresh/products/detail?name=&subcategory_id=` | Price and active promotions for a fresh product in every store |
+| `GET /fresh/search?q=` | Search fresh (unbarcoded) products by name or item code |
 
-The REST API serves the whole catalog, because enrichment is optional metadata and not a requirement for a product to appear.
+List endpoints take `limit` (1 to 100) and `offset`, and return `{items, total, limit, offset}`. `/products/{barcode}` is declared after `/products/search` and `/products/unenriched` so those paths are not captured as barcodes.
+
+### Example requests
+
+```bash
+curl "http://localhost:8000/api/v1/stats"
+curl "http://localhost:8000/api/v1/products/search?q=שוקולד&limit=10"
+curl "http://localhost:8000/api/v1/products/7290019431169"
+curl "http://localhost:8000/api/v1/fresh/search?q=חזה עוף"
+```
+
+### Product detail response
+
+`GET /products/{barcode}` returns one object with four parts:
+
+```
+{
+  "product":     { item_code, name, manufacturer, name_he, name_en, brand_he, brand_en,
+                   category_he, subcategory_he, ingredients_he, ... },
+  "prices":      [ { chain, store, address, city, latitude, longitude,
+                     price, unit_price, quantity, unit_measure, weighted,
+                     price_update_time, ... } ],
+  "promotions":  [ { promotion_id, store, description, start_datetime, end_datetime,
+                     discount_type, min_qty, discounted_price, discount_rate, club_id, ... } ],
+  "enrichment":  { source, category_path_he, category_path_en, ...,
+                   nutrition: [ { nutrient, amount, unit, basis, bound, flags, is_canonical } ] }
+}
+```
+
+`enrichment` is `null` when a product has no scraped metadata. Prices and promotions carry the chain's Hebrew and English names, brand list and store coordinates, so a client can sort by price or distance without extra calls.
+
+### Images
+
+Product images are served by the website routes, not under `/api/v1`:
+
+- `GET /img/{item_code}` returns the product image, or a neutral SVG placeholder when none exists.
+- `GET /brand-logo/{brand_name}` returns a brand logo, or the same placeholder.
+
+Images are read from `data/images/`, so mount that directory into the API container in production.
 
 ### Analytics and notifications
 
@@ -265,7 +373,9 @@ ENV=dev python -m monitoring.scraper_coverage
 
 ## Docker
 
-The compose file defines two services: `db` (PostGIS 16) and `app` (the Python image, which idles so you can run commands inside it).
+The compose file defines the `db` (PostGIS 16) and `app` (the Python image, which idles so you can run commands inside it) services. Production adds an `api` service that runs the FastAPI server on port 8000.
+
+### Development
 
 ```bash
 docker compose --env-file .env.dev up -d db
@@ -283,13 +393,84 @@ docker compose --env-file .env.dev exec db psql -U <user> -d metziah
 
 Other helpers: `make docker-down`, `make docker-logs`, `make docker-reset` (destroys the volume and recreates the database).
 
+### Production
+
+All commands use `--env-file .env.prod`. Run them from the project directory (`cd ~/metziah`).
+
+**First deployment**
+
+```bash
+# 1. Build the image
+docker compose --env-file .env.prod build
+
+# 2. Start the database and wait until PostgreSQL reports healthy
+docker compose --env-file .env.prod up -d db
+docker compose --env-file .env.prod ps
+
+# 3. Start the application container
+docker compose --env-file .env.prod up -d app
+
+# 4. Run the production setup (needs the app container running)
+docker compose --env-file .env.prod exec -T app make setup-prod
+
+# 5. Run database migrations from a shell inside the app container
+docker compose --env-file .env.prod exec app bash
+PGUSER=postgres PGDATABASE=metziah_prod make migrate
+PGUSER=postgres PGDATABASE=metziah_test make migrate    # test database
+
+# 6. Start the API and check all services
+docker compose --env-file .env.prod up -d api
+docker compose --env-file .env.prod ps
+```
+
+Then open:
+
+- API: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- OpenAPI: `http://localhost:8000/openapi.json`
+
+**Day-to-day commands**
+
+```bash
+# Run a Python module
+docker compose --env-file .env.prod exec -T app env ENV=prod python -u -m MODULE_NAME
+# e.g. load products
+docker compose --env-file .env.prod exec -T app env ENV=prod python -u -m utils.products.load_products --prod
+
+# Run a Makefile target
+docker compose --env-file .env.prod exec -T app make TARGET_NAME
+
+# Logs
+docker compose --env-file .env.prod logs -f api
+docker compose --env-file .env.prod logs -f db
+docker compose --env-file .env.prod logs -f app
+
+# Restart the API
+docker compose --env-file .env.prod restart api
+```
+
+**Updating after code or dependency changes**
+
+```bash
+docker compose --env-file .env.prod build
+docker compose --env-file .env.prod up -d --force-recreate app api
+```
+
+**Stopping**
+
+```bash
+docker compose --env-file .env.prod down
+```
+
+> **Do not use `down -v`** unless you intentionally want to delete the PostgreSQL volume and all its data.
+
 ## Testing
 
 ```bash
 make test        # ENV=test pytest -v
 ```
 
-The suite uses a real, separately seeded PostgreSQL test database instead of mocked connections. It covers clients, downloaders, parsers, repository and records, the pipeline utilities, monitoring, analytics, the API, and full-lifecycle integration tests. Fixtures include synthetic XML feeds and parsed product files under `tests/fixtures/`. Tests marked `integration` use the real test database.
+The suite uses a real, separately seeded PostgreSQL test database instead of mocked connections. It covers clients, downloaders, parsers, scrapers, repository and records, the pipeline utilities (including nutrition normalization and image download), monitoring, analytics, the API (queries, service layer, route parity and web pages), and full-lifecycle integration tests. Fixtures include synthetic XML feeds and parsed product files under `tests/fixtures/`. Tests marked `integration` use the real test database.
 
 CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) starts a `postgis/postgis:16-3.4` service, applies migrations `001` to `005`, and runs `pytest --import-mode=importlib` on every push and pull request to `main`.
 
@@ -297,14 +478,18 @@ CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) starts a `post
 
 ```
 metziah/
-├── api/                 FastAPI app: REST API, HTMX website, Jinja templates, static files
+├── api/                 FastAPI app: routes_api, routes_web, service, queries, schemas,
+│                        Jinja templates, static files
 ├── analytics/           Log parsers, price/promo change detection, email notifications
 ├── clients/             One client per feed protocol (BinaProjects, Carrefour, Laib Catalog,
 │                        Mishnat Yosef, PublishedPrices, Wolt, generic HTML)
 ├── database/            migrations/, records.py (model → DB record), repository.py (SQL layer)
 ├── data/
 │   ├── reference/       Chains, categories, vocabularies, CBS localities, ignored stores
-│   ├── parsed/          Scraped product JSONL per retailer (git-ignored)
+│   ├── raw/             Raw chain product JSON dumps (git-ignored)
+│   ├── raw_product_pages/  Raw scraped product pages per retailer (git-ignored)
+│   ├── parsed/          Parsed product JSONL per retailer (git-ignored)
+│   ├── images/          Product images, named by item_code (git-ignored)
 │   └── archive/         Archived reference data
 ├── docker/              Container entrypoint and DB init script
 ├── docs/
@@ -312,11 +497,11 @@ metziah/
 │   ├── extras/          Schema diagrams
 │   └── regulations/     Price Transparency regulations (Hebrew)
 ├── downloaders/         common, full_family, delta_family, prices/promos(+full), stores, runner, scheduler
-├── inspection/          Ad-hoc data-quality and audit reports
+├── inspection/          Ad-hoc data-quality, scraper and audit reports
 ├── models/              Chain, product, promo and store models
 ├── monitoring/          Source health, missing chains/stores, filename drift, full-vs-delta checks
-├── parsers/             xml.py (feeds), product_json.py (scraped products)
-├── scrapers/            generic.py, the retailer product scraper
+├── parsers/             xml.py (feeds), product_json.py, product_page_type1.py, product_page_type2.py
+├── scrapers/            generic.py, browser.py, product_pages/ (type_1, type_2, scraper)
 ├── tests/               Unit and integration tests mirroring the package layout
 ├── utils/               load_*/update_* pipelines, file tracking, store enrichment, processing
 ├── config.py            Settings (pydantic-settings, per-ENV)
@@ -330,7 +515,7 @@ metziah/
 
 ## Data model
 
-The main tables are `chains`, `sub_chains`, `stores`, `file_tracking`, `products`, `store_products`, `prices`, `promotions`, `promotion_groups` and `promotion_items`. Enrichment adds `product_enrichment`, `product_nutrition` and a `store_product_category_matches` materialized view. Promotions form a `promotions → promotion_groups → promotion_items` hierarchy that is reconciled on each load. See [`docs/extras/`](docs/extras/) for the schema diagrams.
+The main tables are `chains`, `sub_chains`, `stores`, `file_tracking`, `products`, `store_products`, `prices`, `promotions`, `promotion_groups` and `promotion_items`. Enrichment adds `product_enrichment` (names, brand, category path and canonical category, description, ingredients, source and raw nutrition), `product_nutrition` (one normalized row per nutrient and basis) and a `store_product_category_matches` materialized view. Promotions form a `promotions → promotion_groups → promotion_items` hierarchy that is reconciled on each load. See [`docs/extras/`](docs/extras/) for the schema diagrams.
 
 ## Roadmap
 
@@ -338,7 +523,7 @@ The main tables are `chains`, `sub_chains`, `stores`, `file_tracking`, `products
 - [x] **Phase 2:** Multi-chain expansion, promotion notifications, monitoring, Dockerization.
 - [x] **Phase 3:** Product enrichment, name canonicalization, store-product categories, conservative data cleaning.
 - [x] **Phase 4:** REST API and web interface.
-
+- [x] **Phase 5:** Enrichment at scale (~48k scraped products and images, 16k+ parsed nutrition records), barcode fallback scraping, production Docker deployment with a dedicated API service.
 
 ## Legal basis
 

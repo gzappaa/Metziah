@@ -74,7 +74,21 @@ class TestApp:
 # --------------------------------------------------------------------------
 
 class TestFindProductImage:
-    @pytest.mark.parametrize("bad", ["", "../etc/passwd", "a/b", "a b", "ab-c", "א123", "123\n", "a.b", "..", "%00"])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            "../etc/passwd",
+            "a/b",
+            "a b",
+            "ab-c",
+            "א123",
+            "123\n",
+            "a.b",
+            "..",
+            "%00",
+        ],
+    )
     def test_rejects_non_alphanumeric_or_non_ascii_codes(self, bad):
         assert routes_web.find_product_image(bad) is None
 
@@ -83,26 +97,18 @@ class TestFindProductImage:
 
         assert routes_web.find_product_image("7290000000001") is None
 
-    def test_finds_image_in_a_known_source_folder(self, tmp_path, monkeypatch):
+    def test_finds_image_in_products_directory(self, tmp_path, monkeypatch):
         monkeypatch.setattr(routes_web, "IMAGES_DIR", tmp_path)
-        (tmp_path / "freshmarket").mkdir()
-        image = tmp_path / "freshmarket" / "123_001.jpg"
+        (tmp_path / "products").mkdir()
+        image = tmp_path / "products" / "123.jpg"
         image.write_bytes(b"jpg")
 
         assert routes_web.find_product_image("123") == image
 
-    def test_source_priority_is_tiv_taam_first(self, tmp_path, monkeypatch):
+    def test_does_not_find_image_in_source_folder(self, tmp_path, monkeypatch):
         monkeypatch.setattr(routes_web, "IMAGES_DIR", tmp_path)
-        for source in ("super yuda", "tiv taam"):
-            (tmp_path / source).mkdir()
-            (tmp_path / source / "123_001.jpg").write_bytes(b"jpg")
-
-        assert routes_web.find_product_image("123").parent.name == "tiv taam"
-
-    def test_ignores_unknown_source_folders(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(routes_web, "IMAGES_DIR", tmp_path)
-        (tmp_path / "other").mkdir()
-        (tmp_path / "other" / "123_001.jpg").write_bytes(b"jpg")
+        (tmp_path / "tiv taam").mkdir()
+        (tmp_path / "tiv taam" / "123_001.jpg").write_bytes(b"jpg")
 
         assert routes_web.find_product_image("123") is None
 
@@ -110,8 +116,9 @@ class TestFindProductImage:
 class TestImageRoute:
     def test_serves_the_jpeg_when_it_exists(self, client, tmp_path, monkeypatch):
         monkeypatch.setattr(routes_web, "IMAGES_DIR", tmp_path)
-        (tmp_path / "tiv taam").mkdir()
-        (tmp_path / "tiv taam" / "123_001.jpg").write_bytes(b"\xff\xd8jpegdata")
+        (tmp_path / "products").mkdir()
+        image = tmp_path / "products" / "123.jpg"
+        image.write_bytes(b"\xff\xd8jpegdata")
 
         response = client.get("/img/123")
 
@@ -127,12 +134,22 @@ class TestImageRoute:
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/svg+xml"
 
-    @pytest.mark.parametrize("path", ["/img/..%2f..%2fetc%2fpasswd", "/img/%2e%2e", "/img/a%00b"])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/img/..%2f..%2fetc%2fpasswd",
+            "/img/%2e%2e",
+            "/img/a%00b",
+        ],
+    )
     def test_path_traversal_gets_placeholder_or_404_never_a_file(self, client, path):
         response = client.get(path)
 
         assert response.status_code in (200, 404)
-        assert response.headers["content-type"] in ("image/svg+xml", "application/json")
+        assert response.headers["content-type"] in (
+            "image/svg+xml",
+            "application/json",
+        )
 
     def test_is_hidden_from_openapi(self, client):
         assert "/img/{item_code}" not in client.get("/openapi.json").json()["paths"]

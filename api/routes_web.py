@@ -62,16 +62,13 @@ templates.env.globals["app_version"] = f"{APP_VERSION}-{settings.ENV.upper()}"
 templates.env.globals["data_updated"] = get_data_updated
 
 def find_product_image(item_code: str) -> Path | None:
-    """Find a product image using its item code across known sources."""
+    """Find a product image using its item code."""
     if not item_code or not item_code.isascii() or not item_code.isalnum():
         return None
 
-    for source in ("tiv taam", "freshmarket", "super yuda"):
-        candidate = IMAGES_DIR / source / f"{item_code}_001.jpg"
-        if candidate.is_file():
-            return candidate
-
-    return None
+    candidate = IMAGES_DIR / "products" / f"{item_code}.jpg"
+    
+    return candidate if candidate.is_file() else None
 
 
 def get_homepage_stats() -> dict[str, int]:

@@ -6,6 +6,7 @@ import pytest
 from utils.file_tracking import load_file_tracking
 
 
+
 def test_local_feed_directory():
     assert load_file_tracking._local_feed_directory("Price") == "prices"
     assert load_file_tracking._local_feed_directory("PriceFull") == "pricesfull"
@@ -599,3 +600,88 @@ async def test_update_file_tracking_deduplicates_by_filename(
     assert len(report_records) == 1
     assert report_records[0]["filename"] == "same.xml"
     assert report_records[0]["source"] == "second"
+
+
+def test_loose_normalize_unexpected_filename_format():
+    filename = "PriceFull7290661400001_018_20261021_extra.xml"
+
+    record = load_file_tracking._loose_normalize(filename)
+
+    assert record == {
+        "filename": filename,
+        "file_type": "PriceFull",
+        "chain_id": "7290661400001",
+        "sub_chain_id": None,
+        "store_id": "018",
+        "file_date": "2026-10-21",
+        "file_size": None,
+        "parse_status": "loose",
+    }
+
+def test_normalize_uses_loose_fallback_only_in_report_mode(monkeypatch):
+    filename = "PriceFull7290661400001_018_20261021_extra.xml"
+
+    monkeypatch.setattr(
+        load_file_tracking,
+        "_REPORT_MODE",
+        False,
+    )
+    monkeypatch.setattr(
+        load_file_tracking,
+        "normalize_file",
+        lambda filename, size=None: None,
+    )
+
+    assert load_file_tracking._normalize(filename) is None
+
+    monkeypatch.setattr(
+        load_file_tracking,
+        "_REPORT_MODE",
+        True,
+    )
+
+    record = load_file_tracking._normalize(filename)
+
+    assert record is not None
+    assert record["filename"] == filename
+    assert record["parse_status"] == "loose"
+
+
+def test_loose_normalize_unrecognized_filename():
+    filename = "unexpected_vendor_export.xml"
+
+    record = load_file_tracking._loose_normalize(filename)
+
+    assert record["filename"] == filename
+    assert record["file_type"] == "Unknown"
+    assert record["chain_id"] is None
+    assert record["file_date"] is None
+    assert record["parse_status"] == "unparsed"
+
+
+def test_generate_report_includes_loose_records(tmp_path, monkeypatch):
+    filename = "unexpected_vendor_export.xml"
+    monkeypatch.setattr(
+        load_file_tracking,
+        "REPORTS_DIR",
+        tmp_path,
+    )
+
+    record = load_file_tracking._loose_normalize(filename)
+    record.update(
+        source="test source",
+        downloaded=False,
+    )
+
+    report_path = load_file_tracking.generate_report([record])
+
+    with report_path.open(
+        newline="",
+        encoding="utf-8-sig",
+    ) as file:
+        rows = list(csv.DictReader(file))
+
+    assert len(rows) == 1
+    assert rows[0]["filename"] == filename
+    assert rows[0]["parse_status"] == "unparsed"
+    assert rows[0]["file_type"] == "Unknown"

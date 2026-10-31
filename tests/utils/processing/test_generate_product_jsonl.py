@@ -1,680 +1,481 @@
-"""Tests for the generic retailer scraper."""
-
 import json
-from unittest.mock import Mock
+import logging
+from pathlib import Path
+from unittest.mock import patch
 
-import httpx
+import pytest
 
-from scrapers import generic
-
-
-def make_response(data=None, text="", status_code=200):
-    request = httpx.Request(
-        "GET",
-        "https://example.com",
-    )
-
-    if data is not None:
-        return httpx.Response(
-            status_code=status_code,
-            request=request,
-            json=data,
-        )
-
-    return httpx.Response(
-        status_code=status_code,
-        request=request,
-        text=text,
-    )
+from utils.processing import generate_product_jsonl as generator
 
 
-def test_extract_js_object():
-    text = """
-    const something = 123;
-    frontendData: {"tree": {"categories": []}, "retailer": {}};
-    """
+# ============================================================
+# Helpers
+# ============================================================
 
-    result = generic.extract_js_object(
-        text,
-        "frontendData",
-    )
-
-    assert json.loads(result) == {
-        "tree": {"categories": []},
-        "retailer": {},
-    }
-
-
-def test_extract_js_object_handles_nested_objects_and_strings():
-    text = r'''
-    frontendData: {
-        "name": "test } value",
-        "nested": {
-            "value": 123
-        }
-    };
-    '''
-
-    result = generic.extract_js_object(
-        text,
-        "frontendData",
-    )
-
-    assert json.loads(result) == {
-        "name": "test } value",
-        "nested": {"value": 123},
-    }
-
-
-def test_extract_js_object_missing_key():
-    try:
-        generic.extract_js_object(
-            "something: {}",
-            "frontendData",
-        )
-    except ValueError as exc:
-        assert str(exc) == "Could not find frontendData"
-    else:
-        raise AssertionError("Expected ValueError")
-
-
-def test_extract_js_object_missing_object():
-    try:
-        generic.extract_js_object(
-            "frontendData:;",
-            "frontendData",
-        )
-    except ValueError as exc:
-        assert str(exc) == (
-            "Could not find object for frontendData"
-        )
-    else:
-        raise AssertionError("Expected ValueError")
-
-
-def test_extract_js_object_unclosed_object():
-    try:
-        generic.extract_js_object(
-            'frontendData: {"test": 123',
-            "frontendData",
-        )
-    except ValueError as exc:
-        assert str(exc) == "Could not extract frontendData"
-    else:
-        raise AssertionError("Expected ValueError")
-
-
-def test_get_all_categories_flattens_nested_categories():
-    categories = [
-        {
-            "id": 1,
-            "subCategories": [
-                {
-                    "id": 2,
-                    "subCategories": [
-                        {"id": 3},
-                    ],
-                },
-            ],
-        },
-        {
-            "id": 4,
-        },
-    ]
-
-    result = generic.get_all_categories(categories)
-
-    assert [category["id"] for category in result] == [
-        1,
-        2,
-        3,
-        4,
+def read_jsonl(path):
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
     ]
 
 
-def test_get_all_categories_handles_missing_subcategories():
-    categories = [
-        {"id": 1},
-        {"id": 2, "subCategories": []},
-    ]
+# ============================================================
+# Source directory normalization
+# ============================================================
 
-    assert generic.get_all_categories(categories) == categories
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("Tiv Taam", "tiv_taam"),
+        ("  Super Yuda  ", "super_yuda"),
+        ("Fresh-Market", "fresh-market"),
+        ("Rami Levi!", "rami_levi"),
+        ("", "unknown"),
+        ("!!!", "unknown"),
+    ],
+)
+def test_source_dir(source, expected):
+    assert generator._source_dir(source) == expected
 
 
-def test_load_retailers_only_returns_available(
-    tmp_path,
-    monkeypatch,
-):
-    config = {
-        "1062": {
-            "name_en_normalized": "tiv_taam",
-            "available": True,
-        },
-        "9999": {
-            "name_en_normalized": "unavailable",
-            "available": False,
-        },
-        "1234": {
-            "name_en_normalized": "missing_flag",
-        },
+# ============================================================
+# Regular product generation
+# ============================================================
+
+def test_generate_creates_jsonl_for_each_company(tmp_path):
+    raw_dir = tmp_path / "raw"
+    parsed_dir = tmp_path / "parsed"
+
+    company_dir = raw_dir / "tiv taam"
+    company_dir.mkdir(parents=True)
+
+    (company_dir / "products.json").write_text("{}", encoding="utf-8")
+    (company_dir / "another.json").write_text("{}", encoding="utf-8")
+
+    products = {
+        "products.json": [{"barcode": "123", "name": "Milk"}],
+        "another.json": [{"barcode": "456", "name": "Bread"}],
     }
 
-    config_file = tmp_path / "scraper_coverage.json"
-
-    config_file.write_text(
-        json.dumps(config),
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        generic,
-        "CONFIG_FILE",
-        config_file,
-    )
-
-    assert generic.load_retailers() == [
-        {
-            "chain_id": "1062",
-            "name_en_normalized": "tiv_taam",
-            "available": True,
-        }
-    ]
-
-
-def test_get_frontend_data():
-    client = Mock()
-
-    retailer = {
-        "data_url": "https://example.com/data.js",
-    }
-
-    frontend_data = {
-        "tree": {
-            "categories": [],
-        },
-        "retailer": {
-            "branches": [],
-        },
-    }
-
-    client.get.return_value = make_response(
-        text=(
-            "frontendData: "
-            + json.dumps(frontend_data)
-            + ";"
-        )
-    )
-
-    result = generic.get_frontend_data(
-        client,
-        retailer,
-    )
-
-    assert result == frontend_data
-
-    client.get.assert_called_once_with(
-        "https://example.com/data.js"
-    )
-
-
-def test_get_frontend_data_raises_for_http_error():
-    client = Mock()
-
-    retailer = {
-        "data_url": "https://example.com/data.js",
-    }
-
-    response = make_response(status_code=500)
-    client.get.return_value = response
-
-    try:
-        generic.get_frontend_data(
-            client,
-            retailer,
-        )
-    except httpx.HTTPStatusError:
-        pass
-    else:
-        raise AssertionError(
-            "Expected HTTPStatusError"
-        )
-
-
-def test_scrape_category_single_page():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    products = [
-        {"barcode": "111"},
-        {"barcode": "222"},
-    ]
-
-    client.get.return_value = make_response(
-        data={
-            "total": 2,
-            "products": products,
-        }
-    )
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert result["products"] == products
-
-    assert result["_metziah"] == {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "branch_id": "10",
-        "category_id": "20",
-    }
-
-    client.get.assert_called_once_with(
-        "https://example.com/10/20",
-        params={
-            "from": 0,
-            "size": 100,
-        },
-    )
-
-
-def test_scrape_category_paginates():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    first_page = [
-        {"barcode": str(i)}
-        for i in range(100)
-    ]
-
-    second_page = [
-        {"barcode": str(i)}
-        for i in range(100, 105)
-    ]
-
-    client.get.side_effect = [
-        make_response(
-            data={
-                "total": 105,
-                "products": first_page,
-            }
-        ),
-        make_response(
-            data={
-                "total": 105,
-                "products": second_page,
-            }
-        ),
-    ]
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert len(result["products"]) == 105
-    assert result["products"] == (
-        first_page + second_page
-    )
-
-    assert client.get.call_args_list[0].kwargs["params"] == {
-        "from": 0,
-        "size": 100,
-    }
-
-    assert client.get.call_args_list[1].kwargs["params"] == {
-        "from": 100,
-        "size": 100,
-    }
-
-
-def test_scrape_category_returns_none_when_no_products():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    client.get.return_value = make_response(
-        data={
-            "total": 0,
-            "products": [],
-        }
-    )
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert result is None
-
-
-def test_scrape_category_returns_none_on_initial_request_error():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    client.get.side_effect = httpx.HTTPError(
-        "connection failed"
-    )
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert result is None
-
-
-def test_scrape_category_stops_on_empty_pagination_page():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    client.get.side_effect = [
-        make_response(
-            data={
-                "total": 150,
-                "products": [{"barcode": "1"}] * 100,
-            }
-        ),
-        make_response(
-            data={
-                "total": 150,
-                "products": [],
-            }
-        ),
-    ]
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert result is None
-
-
-def test_scrape_category_returns_none_on_pagination_error():
-    client = Mock()
-
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    client.get.side_effect = [
-        make_response(
-            data={
-                "total": 150,
-                "products": [{"barcode": "1"}] * 100,
-            }
-        ),
-        httpx.HTTPError("pagination failed"),
-    ]
-
-    result = generic.scrape_category(
-        client=client,
-        retailer=retailer,
-        branch_id="10",
-        category_id="20",
-    )
-
-    assert result is None
-
-
-def test_scrape_retailer_uses_first_branch_with_products(
-    tmp_path,
-    monkeypatch,
-):
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "data_url": "https://example.com/data.js",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    frontend_data = {
-        "tree": {
-            "categories": [
-                {"id": "10"},
-                {"id": "20"},
-            ],
-        },
-        "retailer": {
-            "branches": [
-                {"id": 1},
-                {"id": 2},
-            ],
-        },
-    }
-
-    monkeypatch.setattr(
-        generic,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        generic,
-        "get_frontend_data",
-        lambda client, retailer: frontend_data,
-    )
-
-    calls = []
-
-    def fake_scrape_category(
-        client,
-        retailer,
-        branch_id,
-        category_id,
+    def fake_iter_products(path, stats):
+        yield from products[path.name]
+
+    with patch.object(
+        generator,
+        "iter_products",
+        side_effect=fake_iter_products,
     ):
-        calls.append(
-            (branch_id, category_id)
-        )
+        generator.generate(raw_dir, parsed_dir)
 
-        if len(calls) == 1:
-            return None
+    output = parsed_dir / "tiv taam" / generator.OUTPUT_FILENAME
+    records = read_jsonl(output)
 
-        if len(calls) == 2:
-            return {
-                "products": [
-                    {"barcode": "123"},
-                ]
-            }
-
-        return {
-            "products": [
-                {"barcode": "456"},
-            ]
-        }
-
-    monkeypatch.setattr(
-        generic,
-        "scrape_category",
-        fake_scrape_category,
-    )
-
-    assert generic.scrape_retailer(retailer) is True
-
-    output_dir = tmp_path / "tiv_taam"
-
-    assert json.loads(
-        (output_dir / "10.json").read_text(
-            encoding="utf-8"
-        )
-    )["products"] == [
-        {"barcode": "123"},
-    ]
-
-    assert json.loads(
-        (output_dir / "20.json").read_text(
-            encoding="utf-8"
-        )
-    )["products"] == [
-        {"barcode": "456"},
-    ]
-
-    assert calls == [
-        ("1", "10"),
-        ("2", "10"),
-        ("1", "20"),
-    ]
-
-
-def test_scrape_retailer_skips_existing_category(
-    tmp_path,
-    monkeypatch,
-):
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "data_url": "https://example.com/data.js",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
-        ),
-    }
-
-    output_dir = tmp_path / "tiv_taam"
-    output_dir.mkdir()
-
-    existing_file = output_dir / "10.json"
-
-    existing_file.write_text(
-        '{"products": ["existing"]}',
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        generic,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        generic,
-        "get_frontend_data",
-        lambda client, retailer: {
-            "tree": {
-                "categories": [
-                    {"id": "10"},
-                ],
-            },
-            "retailer": {
-                "branches": [
-                    {"id": 1},
-                ],
-            },
+    assert records == [
+        {
+            "company": "tiv taam",
+            "source_file": "another.json",
+            "barcode": "456",
+            "name": "Bread",
         },
-    )
-
-    called = False
-
-    def fake_scrape_category(*args, **kwargs):
-        nonlocal called
-        called = True
-
-    monkeypatch.setattr(
-        generic,
-        "scrape_category",
-        fake_scrape_category,
-    )
-
-    assert generic.scrape_retailer(retailer) is True
-    assert called is False
-
-    assert json.loads(
-        existing_file.read_text(
-            encoding="utf-8"
-        )
-    ) == {
-        "products": ["existing"],
-    }
+        {
+            "company": "tiv taam",
+            "source_file": "products.json",
+            "barcode": "123",
+            "name": "Milk",
+        },
+    ]
 
 
-def test_scrape_retailer_returns_false_on_unexpected_error(
-    monkeypatch,
-):
-    retailer = {
-        "chain_id": "1062",
-        "retailer_id": "123",
-        "name_en_normalized": "tiv_taam",
-        "data_url": "https://example.com/data.js",
-        "scraping_url": (
-            "https://example.com/"
-            "{branch_id}/{category_id}"
+def test_generate_passes_stats_to_parser(tmp_path):
+    raw_dir = tmp_path / "raw"
+    parsed_dir = tmp_path / "parsed"
+
+    company_dir = raw_dir / "company"
+    company_dir.mkdir(parents=True)
+    product_file = company_dir / "product.json"
+    product_file.write_text("{}", encoding="utf-8")
+
+    received_stats = {}
+
+    def fake_iter_products(path, stats):
+        received_stats.update(stats)
+        stats["barcodes_recovered"] += 1
+        yield {"barcode": "123"}
+
+    with patch.object(
+        generator,
+        "iter_products",
+        side_effect=fake_iter_products,
+    ):
+        generator.generate(raw_dir, parsed_dir)
+
+    assert received_stats == {"barcodes_recovered": 0}
+
+
+def test_generate_skips_invalid_files_and_continues(tmp_path, caplog):
+    raw_dir = tmp_path / "raw"
+    parsed_dir = tmp_path / "parsed"
+
+    company_dir = raw_dir / "company"
+    company_dir.mkdir(parents=True)
+
+    (company_dir / "a.json").write_text("{}", encoding="utf-8")
+    (company_dir / "b.json").write_text("{}", encoding="utf-8")
+
+    def fake_iter_products(path, stats):
+        if path.name == "a.json":
+            raise ValueError("Invalid product")
+        yield {"barcode": "123"}
+
+    with (
+        patch.object(
+            generator,
+            "iter_products",
+            side_effect=fake_iter_products,
         ),
+        caplog.at_level(logging.WARNING),
+    ):
+        generator.generate(raw_dir, parsed_dir)
+
+    output = parsed_dir / "company" / generator.OUTPUT_FILENAME
+
+    assert read_jsonl(output) == [
+        {
+            "company": "company",
+            "source_file": "b.json",
+            "barcode": "123",
+        }
+    ]
+    assert "failed to parse" in caplog.text
+
+
+def test_generate_raises_when_no_company_directories_exist(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+
+    with pytest.raises(SystemExit, match="No sub-folders found"):
+        generator.generate(raw_dir, tmp_path / "parsed")
+
+
+# ============================================================
+# Type 1 generation
+# ============================================================
+
+def test_generate_type1_groups_products_by_source(tmp_path):
+    raw_dir = tmp_path / "type_1"
+    parsed_dir = tmp_path / "parsed"
+
+    raw_dir.mkdir()
+
+    (raw_dir / "a.json").write_text("{}", encoding="utf-8")
+    (raw_dir / "b.json").write_text("{}", encoding="utf-8")
+
+    products = {
+        "a.json": [
+            {"source": "Tiv Taam", "name": "Milk"},
+            {"source": "Super Yuda", "name": "Bread"},
+        ],
+        "b.json": [
+            {"source": "Tiv Taam", "name": "Cheese"},
+        ],
     }
 
-    def raise_error(*args, **kwargs):
-        raise RuntimeError("boom")
+    def fake_iter_products(path):
+        yield from products[path.name]
 
-    monkeypatch.setattr(
-        generic,
-        "get_frontend_data",
-        raise_error,
+    with patch.object(
+        generator,
+        "iter_type1_products",
+        side_effect=fake_iter_products,
+    ):
+        generator.generate_type1(raw_dir, parsed_dir)
+
+    tiv_output = (
+        parsed_dir / "tiv_taam" / generator.TYPE1_OUTPUT_FILENAME
+    )
+    yuda_output = (
+        parsed_dir / "super_yuda" / generator.TYPE1_OUTPUT_FILENAME
     )
 
-    assert generic.scrape_retailer(retailer) is False
+    assert [p["name"] for p in read_jsonl(tiv_output)] == [
+        "Milk",
+        "Cheese",
+    ]
+    assert [p["name"] for p in read_jsonl(yuda_output)] == [
+        "Bread",
+    ]
+
+
+def test_generate_type1_uses_unknown_for_missing_source(tmp_path):
+    raw_dir = tmp_path / "type_1"
+    parsed_dir = tmp_path / "parsed"
+    raw_dir.mkdir()
+
+    (raw_dir / "product.json").write_text("{}", encoding="utf-8")
+
+    with patch.object(
+        generator,
+        "iter_type1_products",
+        return_value=iter([{"name": "Milk"}]),
+    ):
+        generator.generate_type1(raw_dir, parsed_dir)
+
+    output = parsed_dir / "unknown" / generator.TYPE1_OUTPUT_FILENAME
+
+    assert read_jsonl(output) == [{"name": "Milk"}]
+
+
+def test_generate_type1_raises_when_directory_missing(tmp_path):
+    with pytest.raises(SystemExit, match="Input directory not found"):
+        generator.generate_type1(
+            tmp_path / "missing",
+            tmp_path / "parsed",
+        )
+
+
+def test_generate_type1_raises_when_no_json_files(tmp_path):
+    raw_dir = tmp_path / "type_1"
+    raw_dir.mkdir()
+
+    with pytest.raises(SystemExit, match="No JSON files found"):
+        generator.generate_type1(raw_dir, tmp_path / "parsed")
+
+
+def test_generate_type1_exits_if_a_file_fails(tmp_path, caplog):
+    raw_dir = tmp_path / "type_1"
+    parsed_dir = tmp_path / "parsed"
+    raw_dir.mkdir()
+
+    (raw_dir / "a.json").write_text("{}", encoding="utf-8")
+    (raw_dir / "b.json").write_text("{}", encoding="utf-8")
+
+    def fake_iter_products(path):
+        if path.name == "a.json":
+            raise ValueError("Invalid JSON")
+        yield {"source": "Tiv Taam", "name": "Milk"}
+
+    with (
+        patch.object(
+            generator,
+            "iter_type1_products",
+            side_effect=fake_iter_products,
+        ),
+        caplog.at_level(logging.WARNING),
+        pytest.raises(SystemExit) as exc,
+    ):
+        generator.generate_type1(raw_dir, parsed_dir)
+
+    assert exc.value.code == 1
+    assert "failed to parse" in caplog.text
+
+    output = parsed_dir / "tiv_taam" / generator.TYPE1_OUTPUT_FILENAME
+    assert len(read_jsonl(output)) == 1
+
+
+# ============================================================
+# Type 2 generation
+# ============================================================
+
+def test_generate_type2_groups_products_by_parent_directory(tmp_path):
+    raw_dir = tmp_path / "type_2"
+    parsed_dir = tmp_path / "parsed"
+
+    tiv_dir = raw_dir / "tiv taam"
+    yuda_dir = raw_dir / "super yuda"
+
+    tiv_dir.mkdir(parents=True)
+    yuda_dir.mkdir(parents=True)
+
+    (tiv_dir / "a.json").write_text("{}", encoding="utf-8")
+    (yuda_dir / "b.json").write_text("{}", encoding="utf-8")
+
+    def fake_iter_products(path):
+        if path.name == "a.json":
+            yield {"name": "Milk"}
+        else:
+            yield {"name": "Bread"}
+
+    with patch.object(
+        generator,
+        "iter_type2_products",
+        side_effect=fake_iter_products,
+    ):
+        generator.generate_type2(raw_dir, parsed_dir)
+
+    tiv_output = (
+        parsed_dir / "tiv_taam" / generator.TYPE2_OUTPUT_FILENAME
+    )
+    yuda_output = (
+        parsed_dir / "super_yuda" / generator.TYPE2_OUTPUT_FILENAME
+    )
+
+    assert read_jsonl(tiv_output) == [
+        {
+            "company": "tiv_taam",
+            "source": "tiv_taam",
+            "source_file": "a.json",
+            "name": "Milk",
+        }
+    ]
+
+    assert read_jsonl(yuda_output) == [
+        {
+            "company": "super_yuda",
+            "source": "super_yuda",
+            "source_file": "b.json",
+            "name": "Bread",
+        }
+    ]
+
+
+def test_generate_type2_raises_when_directory_missing(tmp_path):
+    with pytest.raises(SystemExit, match="Input directory not found"):
+        generator.generate_type2(
+            tmp_path / "missing",
+            tmp_path / "parsed",
+        )
+
+
+def test_generate_type2_raises_when_no_json_files(tmp_path):
+    raw_dir = tmp_path / "type_2"
+    raw_dir.mkdir()
+
+    with pytest.raises(SystemExit, match="No JSON files found"):
+        generator.generate_type2(raw_dir, tmp_path / "parsed")
+
+
+def test_generate_type2_exits_if_a_file_fails(tmp_path, caplog):
+    raw_dir = tmp_path / "type_2"
+    parsed_dir = tmp_path / "parsed"
+
+    company_dir = raw_dir / "tiv taam"
+    company_dir.mkdir(parents=True)
+
+    (company_dir / "a.json").write_text("{}", encoding="utf-8")
+    (company_dir / "b.json").write_text("{}", encoding="utf-8")
+
+    def fake_iter_products(path):
+        if path.name == "a.json":
+            raise ValueError("Invalid product")
+        yield {"name": "Milk"}
+
+    with (
+        patch.object(
+            generator,
+            "iter_type2_products",
+            side_effect=fake_iter_products,
+        ),
+        caplog.at_level(logging.WARNING),
+        pytest.raises(SystemExit) as exc,
+    ):
+        generator.generate_type2(raw_dir, parsed_dir)
+
+    assert exc.value.code == 1
+    assert "failed to parse" in caplog.text
+
+    output = parsed_dir / "tiv_taam" / generator.TYPE2_OUTPUT_FILENAME
+    assert len(read_jsonl(output)) == 1
+
+
+# ============================================================
+# CLI
+# ============================================================
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--type1", "--type2"],
+        ["--type1", "--all"],
+        ["--type2", "--all"],
+    ],
+)
+def test_main_rejects_conflicting_modes(args):
+    with (
+        patch("sys.argv", ["generate_parsed_products.py", *args]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        generator.main()
+
+    assert exc.value.code == 2
+
+
+def test_main_defaults_to_regular_generation(tmp_path):
+    raw_dir = tmp_path / "raw"
+    parsed_dir = tmp_path / "parsed"
+
+    with (
+        patch(
+            "sys.argv",
+            [
+                "generate_parsed_products.py",
+                "--raw-dir",
+                str(raw_dir),
+                "--parsed-dir",
+                str(parsed_dir),
+            ],
+        ),
+        patch.object(generator, "generate") as generate,
+        patch.object(generator, "setup_general_logging", create=True),
+    ):
+        generator.main()
+
+    generate.assert_called_once_with(raw_dir, parsed_dir)
+
+
+def test_main_runs_type1_only():
+    with (
+        patch(
+            "sys.argv",
+            ["generate_parsed_products.py", "--type1"],
+        ),
+        patch.object(generator, "generate_type1") as generate_type1,
+    ):
+        generator.main()
+
+    generate_type1.assert_called_once_with(
+        generator.DEFAULT_TYPE1_RAW_DIR,
+        generator.DEFAULT_PARSED_DIR,
+    )
+
+
+def test_main_runs_type2_only():
+    with (
+        patch(
+            "sys.argv",
+            ["generate_parsed_products.py", "--type2"],
+        ),
+        patch.object(generator, "generate_type2") as generate_type2,
+    ):
+        generator.main()
+
+    generate_type2.assert_called_once_with(
+        generator.DEFAULT_TYPE2_RAW_DIR,
+        generator.DEFAULT_PARSED_DIR,
+    )
+
+
+def test_main_runs_all_modes():
+    with (
+        patch(
+            "sys.argv",
+            ["generate_parsed_products.py", "--all"],
+        ),
+        patch.object(generator, "generate") as generate,
+        patch.object(generator, "generate_type1") as generate_type1,
+        patch.object(generator, "generate_type2") as generate_type2,
+    ):
+        generator.main()
+
+    generate.assert_called_once_with(
+        generator.DEFAULT_RAW_DIR,
+        generator.DEFAULT_PARSED_DIR,
+    )
+    generate_type1.assert_called_once_with(
+        generator.DEFAULT_TYPE1_RAW_DIR,
+        generator.DEFAULT_PARSED_DIR,
+    )
+    generate_type2.assert_called_once_with(
+        generator.DEFAULT_TYPE2_RAW_DIR,
+        generator.DEFAULT_PARSED_DIR,
+    )

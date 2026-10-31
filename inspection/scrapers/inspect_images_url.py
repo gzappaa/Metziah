@@ -13,8 +13,50 @@ REPORT_PATH = REPORT_DIR / "images_parsed.txt"
 
 NUMBER_RE = re.compile(r"^\d+$")
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
-GS1_RE = re.compile(r"^(\d+)-(\d+)$")
+GS1_RE = re.compile(r"^\d+-\d+$")
 TEMPLATE_RE = re.compile(r"\{\{([^}]+)\}\}")
+
+
+
+
+
+def merge_company_stats(all_stats: list[dict]) -> dict:
+    merged = {
+        "company": "ALL COMPANIES",
+        "structures": Counter(),
+        "extensions": Counter(),
+    }
+
+    numeric_keys = [
+        "files",
+        "records",
+        "products_with_main_image",
+        "products_with_images_url",
+        "products_with_any_image",
+        "main_image_urls",
+        "image_urls",
+        "barcode_matches",
+        "barcode_misses",
+        "barcode_unavailable",
+        "product_id_matches",
+        "product_id_misses",
+        "product_id_unavailable",
+        "gs1_barcode_matches",
+        "gs1_barcode_mismatches",
+    ]
+
+    for key in numeric_keys:
+        merged[key] = sum(
+            stats[key] for stats in all_stats
+        )
+
+    for stats in all_stats:
+        merged["structures"].update(stats["structures"])
+        merged["extensions"].update(stats["extensions"])
+
+    return merged
+
+
 
 
 def normalize_segment(segment: str) -> str:
@@ -22,7 +64,6 @@ def normalize_segment(segment: str) -> str:
         return segment
 
     template = TEMPLATE_RE.fullmatch(segment)
-
     if template:
         value = template.group(1)
 
@@ -31,11 +72,27 @@ def normalize_segment(segment: str) -> str:
 
         return f"{{{value}}}"
 
+    # Barcode-supplier ID-timestamp, optionally with an extension.
+    match = re.fullmatch(
+        r"(\d+)-(\d+)-(\d{10,})(\.[^.]+)?",
+        segment,
+    )
+    if match:
+        extension = match.group(4) or ""
+        return f"{{barcode}}-{{supplier_id}}-{{timestamp}}{extension}"
+
+    # Barcode-supplier ID as a standalone path segment.
+    if re.fullmatch(r"\d+-\d+", segment):
+        return "{barcode}-{supplier_id}"
+
+    # Timestamp with an optional extension.
+    match = re.fullmatch(r"(\d{10,})(\.[^.]+)?", segment)
+    if match:
+        extension = match.group(2) or ""
+        return f"{{timestamp}}{extension}"
+
     if TIMESTAMP_RE.match(segment):
         return "{timestamp}"
-
-    if GS1_RE.match(segment):
-        return "{barcode}-{supplier_id}"
 
     if NUMBER_RE.fullmatch(segment):
         return "{number}"
@@ -49,7 +106,12 @@ def normalize_filename(filename: str) -> str:
 
     name, extension = filename.rsplit(".", 1)
 
-    name = normalize_segment(name)
+    match = GS1_RE.fullmatch(name)
+    if match:
+        name = "{barcode}-{supplier_id}-{timestamp}"
+    else:
+        name = normalize_segment(name)
+
     extension = normalize_segment(extension)
 
     return f"{name}.{extension}"
@@ -58,26 +120,32 @@ def normalize_filename(filename: str) -> str:
 def normalize_url_structure(url: str) -> str:
     path = urlparse(url).path
 
-    segments = [
-        segment
-        for segment in path.split("/")
-        if segment
-    ]
+    segments = [segment for segment in path.split("/") if segment]
 
     if not segments:
         return "/"
 
     normalized = []
+    is_gs1 = len(segments) > 0 and segments[0] == "gs1-products"
 
     for index, segment in enumerate(segments):
-        if index == len(segments) - 1:
-            normalized.append(
-                normalize_filename(segment)
-            )
+        if (
+            is_gs1
+            and index >= 3
+            and GS1_RE.fullmatch(segment)
+        ):
+            normalized.append("{barcode}-{supplier_id}")
+        elif (
+            is_gs1
+            and index >= 4
+            and NUMBER_RE.fullmatch(segment)
+            and GS1_RE.fullmatch(segments[index - 1])
+        ):
+            normalized.append("{barcode}")
+        elif index == len(segments) - 1:
+            normalized.append(normalize_filename(segment))
         else:
-            normalized.append(
-                normalize_segment(segment)
-            )
+            normalized.append(normalize_segment(segment))
 
     return "/" + "/".join(normalized)
 
@@ -101,14 +169,11 @@ def exact_value_in_url(
 
 def extract_gs1_barcode(url: str) -> str | None:
     match = re.search(
-        r"/gs1-products/[^/]+/[^/]+/(\d+)-\d+/",
-        url,
+        r"/gs1-products/[^/]+/[^/]+/(\d+)-\d+-\d+\.[^/]+$",
+        urlparse(url).path,
     )
 
-    if match:
-        return match.group(1)
-
-    return None
+    return match.group(1) if match else None
 
 
 def extract_extension(url: str) -> str:
@@ -404,11 +469,13 @@ def write_report(
         )
         f.write("=" * 100 + "\n\n")
 
+        write_company_report(
+            f,
+            merge_company_stats(all_stats),
+        )
+
         for stats in all_stats:
-            write_company_report(
-                f,
-                stats,
-            )
+            write_company_report(f, stats)
 
     print(
         f"Report written to: {REPORT_PATH}"

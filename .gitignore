@@ -42,3 +42,5 @@ data/images/*
 !data/images/brands/
 !data/images/brands/**
 llm_context
+scrapers/product_pages/product_urls.txt
+data/raw_product_pages

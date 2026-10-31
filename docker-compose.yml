@@ -20,18 +20,37 @@ services:
 
   app:
     build: .
+    image: metziah:latest
     container_name: metziah_app
     depends_on:
       db:
         condition: service_healthy
     env_file:
-      - .env.dev
+      - .env.prod
     environment:
       PGHOST: db
-      PGDATABASE: metziah_test
+      PGDATABASE: metziah_prod
     volumes:
       - ./data:/app/data
     command: ["sleep", "infinity"]
+
+  api:
+    image: metziah:latest
+    container_name: metziah_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.prod
+    environment:
+      PGHOST: db
+      PGDATABASE: ${PGDATABASE}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 volumes:
   metziah_pgdata:

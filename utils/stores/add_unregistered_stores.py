@@ -1,18 +1,12 @@
 """
 utils/stores/add_unregistered_stores.py
 
-Adds stores observed in feeds but missing from the publisher Stores JSON.
+Adds stores observed in feeds but missing from publisher Stores JSON.
 
 Reads:
     monitoring/data/stores_missing_from_registry.json
 
-Each store is inserted with a descriptive fallback name and no other
-metadata.
-
 Safe to re-run (upsert on chain_id, store_id).
-
-Usage:
-    python -m utils.stores.data_enrichment.add_unregistered_stores
 """
 
 import json
@@ -70,7 +64,8 @@ def main():
 
     all_stores = []
 
-    for source, data in missing_stores.items():
+    for _, data in missing_stores.items():
+        source = data["source"]
         chain_id = data["chain_id"]
 
         if chain_id not in chains:

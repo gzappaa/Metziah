@@ -109,7 +109,7 @@ class ProductEnrichment(Product):
     source_file: str | None = None
     category_path_he: list[str] | None = None
     category_path_en: list[str] | None = None
-    nutrition_raw: dict[str, Any] | None = None
+    nutrition_raw: Any = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     nutrition: list[Nutrition] = Field(default_factory=list)
