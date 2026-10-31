@@ -19,7 +19,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parent
-
+APP_VERSION = "0.3.0"
 
 class Settings(BaseSettings):
     PGHOST: str = "localhost"

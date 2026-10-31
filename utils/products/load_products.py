@@ -4,21 +4,29 @@ utils/products/load_products.py
 Standalone canonical product-name updater.
 
 Walks the selected feeds directory, finds the latest PriceFull file for
-each chain/sub-chain/store, parses product information, aggregates product
-observations across the available feeds, resolves canonical product names,
-and upserts:
+each chain/sub-chain/store, parses product information, aggregates
+non-pharmacy product observations across the available feeds, resolves
+canonical product names, and upserts:
 
     products
     store_products
+    pharmacy_products
+    pharmacy_store_products
 
-This script is intended to run periodically, including as a cron job
+Pharmacy stores are routed according to data/reference/chains_pharm.json:
+
+    - pharmacy barcodes already known globally are ignored
+    - pharmacy-only barcodes are quarantined in pharmacy_products
+    - pharmacy internal codes go to pharmacy_store_products
+
+This script is intended to run periodically, including as a cron job,
 between scheduler runs, to refresh canonical product names.
 
 Real-time Price and PriceFull processing uses
-discover_new_products(), which inserts previously unseen products
-immediately but intentionally does not resolve canonical names. Running
-this loader periodically provides the full cross-chain/store evidence
-needed to update those temporary names to their canonical names.
+discover_new_products(), which inserts previously unseen supermarket
+products immediately but intentionally does not resolve canonical names.
+Running this loader periodically provides the full cross-chain/store
+evidence needed to update those temporary names to their canonical names.
 
 Price data is intentionally ignored here.
 
@@ -26,6 +34,8 @@ Usage:
     python scripts/load_products.py
     python scripts/load_products.py --dev
     python scripts/load_products.py --test
+    python scripts/load_products.py --prod
+    python scripts/load_products.py --test --prod
     python scripts/load_products.py --feeds-dir data/feeds
 """
 
@@ -121,6 +131,12 @@ def main():
     )
 
     parser_args.add_argument(
+        "--prod",
+        action="store_true",
+        help="Allow loading into the production database",
+    )
+
+    parser_args.add_argument(
         "--feeds-dir",
         type=Path,
         default=DEFAULT_FEEDS_DIR,
@@ -143,9 +159,24 @@ def main():
             "--dev was provided, but the configured environment is not dev."
         )
 
-    if args.test and settings.ENV != "test":
+    if settings.ENV == "test" and not args.test:
+        raise RuntimeError(
+            "Test database selected. Run with --test to confirm."
+        )
+
+    if settings.ENV != "test" and args.test:
         raise RuntimeError(
             "--test was provided, but the configured environment is not test."
+        )
+
+    if settings.ENV == "prod" and not args.prod:
+        raise RuntimeError(
+            "Production database selected. Run with --prod to confirm."
+        )
+
+    if settings.ENV != "prod" and args.prod:
+        raise RuntimeError(
+            "--prod was provided, but the configured environment is not prod."
         )
 
     # ------------------------------------------------------------------

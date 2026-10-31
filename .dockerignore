@@ -35,3 +35,8 @@ data/xml_samples
 .git
 .gitignore
 **/.pytest_cache/
+data/raw_product_pages
+data/parsed
+data/images/*
+!data/images/brands/
+data/raw

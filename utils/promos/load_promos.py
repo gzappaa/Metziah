@@ -24,6 +24,11 @@ operates only on PromoFull files already present on disk and reuses the
 same loading logic as the live scheduler through
 utils.promos.update_promos.load_files().
 
+With --prod (ENV=prod) the prod filter is applied: promo items with a NULL
+discounted_price or an item_code missing from products / store_products are
+dropped, together with any group or promotion left empty. dev and test load
+everything, as before.
+
 PromoFull files are loaded with log_changes=False, so this one-time
 bootstrap does not write to promo_changes.log. That log remains
 exclusively for live scheduler activity.
@@ -34,6 +39,8 @@ Usage:
     python utils/promos/load_promos.py
     python utils/promos/load_promos.py --dev
     python utils/promos/load_promos.py --test
+    python utils/promos/load_promos.py --prod
+    python utils/promos/load_promos.py --test --prod
     python utils/promos/load_promos.py --feeds-dir data/feeds
 """
 
@@ -124,6 +131,15 @@ def main():
     )
 
     parser_args.add_argument(
+        "--prod",
+        action="store_true",
+        help=(
+            "Apply production filtering "
+            "(known items only, discounted_price required)"
+        ),
+    )
+
+    parser_args.add_argument(
         "--test",
         action="store_true",
         help="Load the test database using data/test_feeds",
@@ -150,6 +166,11 @@ def main():
     if settings.ENV != "dev" and args.dev:
         raise RuntimeError(
             "--dev was provided, but the configured environment is not dev."
+        )
+
+    if settings.ENV == "prod" and not args.prod:
+        raise RuntimeError(
+            "Production database selected. Run with --prod to confirm."
         )
 
     if args.test and settings.ENV != "test":
@@ -206,6 +227,7 @@ def main():
             files,
             args.feeds_dir,
             log_changes=False,
+            prod_filter=args.prod,
         )
 
     logger.info("Done.")

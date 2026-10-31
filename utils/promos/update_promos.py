@@ -25,6 +25,18 @@ Optional diff logging compares the incoming data with the existing
 database state before writes. When log_changes=False, the pre-write
 SELECTs used for diff logging are skipped entirely.
 
+Prod filter (ENV=prod / load_promos.py --prod):
+    Applied to the parsed file before anything is written:
+    - an item with discounted_price NULL is dropped
+    - an item whose item_code is not present in `products`,
+    this store's `store_products`, the chain's `pharmacy_products`,
+    or this store's `pharmacy_store_products` is dropped
+    - a group left with no items is dropped
+    - a promotion left with no groups is dropped
+    For PromoFull the filtered result is still the authoritative snapshot,
+    so reconciliation runs even when nothing survives the filter.
+    dev/test keep the unfiltered behavior.
+
 Successful files are marked as loaded in file_tracking by load_files().
 """
 
@@ -34,6 +46,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
+from config import settings
 from database.records import split_promotion
 from database.repository import (
     ensure_chain,
@@ -87,14 +100,16 @@ def _load_chain_metadata():
 
 def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
     """
-    Resolve item_code -> name for logging, preferring the store-specific
-    name and falling back to the global product name. Mirrors the
-    store_products / products precedence used in update_prices.py.
+    Resolve item_code -> name for logging.
+
+    Prefer the store-specific name, then the pharmacy store-specific name,
+    then the global pharmacy name, then the global product name.
     """
     if not item_codes:
         return {}
 
     item_codes = list(item_codes)
+    names = {}
 
     with conn.cursor() as cur:
         cur.execute(
@@ -107,14 +122,49 @@ def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
             """,
             (chain_id, store_id_text, item_codes),
         )
-        names = dict(cur.fetchall())
+        names.update(dict(cur.fetchall()))
 
     missing = [code for code in item_codes if code not in names]
 
     if missing:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT item_code, name FROM products WHERE item_code = ANY(%s)",
+                """
+                SELECT item_code, name
+                FROM pharmacy_store_products
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND item_code = ANY(%s)
+                """,
+                (chain_id, store_id_text, missing),
+            )
+            names.update(dict(cur.fetchall()))
+
+    missing = [code for code in item_codes if code not in names]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT item_code, name
+                FROM pharmacy_products
+                WHERE chain_id = %s
+                  AND item_code = ANY(%s)
+                """,
+                (chain_id, missing),
+            )
+            names.update(dict(cur.fetchall()))
+
+    missing = [code for code in item_codes if code not in names]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT item_code, name
+                FROM products
+                WHERE item_code = ANY(%s)
+                """,
                 (missing,),
             )
             names.update(dict(cur.fetchall()))
@@ -335,6 +385,147 @@ def _log_changes(
             )
 
 
+def _fetch_existing_item_codes(
+    conn,
+    chain_id: str,
+    store_id: str,
+    item_codes: list[str],
+) -> set[str]:
+    """
+    Return item codes known to the global, supermarket-store,
+    pharmacy, or pharmacy-store product tables.
+    """
+    if not item_codes:
+        return set()
+
+    item_codes = list(item_codes)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT item_code
+            FROM products
+            WHERE item_code = ANY(%s)
+
+            UNION
+
+            SELECT item_code
+            FROM store_products
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND item_code = ANY(%s)
+
+            UNION
+
+            SELECT item_code
+            FROM pharmacy_products
+            WHERE chain_id = %s
+              AND item_code = ANY(%s)
+
+            UNION
+
+            SELECT item_code
+            FROM pharmacy_store_products
+            WHERE chain_id = %s
+              AND store_id = %s
+              AND item_code = ANY(%s)
+            """,
+            (
+                item_codes,
+                chain_id,
+                store_id,
+                item_codes,
+                chain_id,
+                item_codes,
+                chain_id,
+                store_id,
+                item_codes,
+            ),
+        )
+
+        return {row[0] for row in cur.fetchall()}
+
+
+def _apply_prod_filter(
+    conn,
+    promotions: list,
+    chain_id: str,
+    store_id_text: str,
+) -> tuple[list, dict]:
+    """
+    Prod-only filtering of a parsed promo file.
+
+    Order matters:
+        1. drop items with discounted_price NULL
+        2. drop items not in products / this store's store_products
+        3. drop groups left with no items
+        4. drop promotions left with no groups
+
+    The nested objects are modified in place. Returns the surviving
+    promotions plus counters of what was dropped.
+    """
+
+    stats = {
+        "null_price_items": 0,
+        "unknown_items": 0,
+        "empty_groups": 0,
+        "empty_promotions": 0,
+    }
+
+    candidate_codes = set()
+
+    for promotion in promotions:
+        for group in promotion.groups:
+            kept = []
+
+            for item in group.items:
+                if item.discounted_price is None:
+                    stats["null_price_items"] += 1
+                    continue
+
+                kept.append(item)
+                candidate_codes.add(item.item_code)
+
+            group.items = kept
+
+    existing_codes = _fetch_existing_item_codes(
+        conn,
+        chain_id,
+        store_id_text,
+        candidate_codes,
+    )
+
+    surviving = []
+
+    for promotion in promotions:
+        kept_groups = []
+
+        for group in promotion.groups:
+            kept_items = [
+                item
+                for item in group.items
+                if item.item_code in existing_codes
+            ]
+
+            stats["unknown_items"] += len(group.items) - len(kept_items)
+
+            if not kept_items:
+                stats["empty_groups"] += 1
+                continue
+
+            group.items = kept_items
+            kept_groups.append(group)
+
+        if not kept_groups:
+            stats["empty_promotions"] += 1
+            continue
+
+        promotion.groups = kept_groups
+        surviving.append(promotion)
+
+    return surviving, stats
+
+
 def load_one_file(
     conn,
     parser: StoreXmlParser,
@@ -343,6 +534,7 @@ def load_one_file(
     file_type: str,
     chain_metadata: dict,
     log_changes: bool = True,
+    prod_filter: bool = False,
 ) -> None:
 
     if file_type not in ("Promo", "PromoFull"):
@@ -446,6 +638,19 @@ def load_one_file(
         store_id,
         filename_sub_chain_id,
     )
+
+    filter_stats = None
+
+    if prod_filter:
+        # Do NOT return early when nothing survives. A PromoFull is the
+        # authoritative snapshot, so reconciliation below must still remove
+        # whatever this store had before. Upserts are no-ops on empty lists.
+        promotions, filter_stats = _apply_prod_filter(
+            conn,
+            promotions,
+            chain_id,
+            store_id,
+        )
 
     all_groups = []
     all_items = []
@@ -605,12 +810,24 @@ def load_one_file(
         removed_items,
     )
 
+    if filter_stats is not None:
+        logger.info(
+            "%s: prod filter dropped null_price_items=%d "
+            "unknown_items=%d empty_groups=%d empty_promotions=%d",
+            filepath.name,
+            filter_stats["null_price_items"],
+            filter_stats["unknown_items"],
+            filter_stats["empty_groups"],
+            filter_stats["empty_promotions"],
+        )
+
 
 def load_files(
     conn,
     files: list[tuple[Path, str]],
     feeds_dir: Path,
     log_changes: bool = True,
+    prod_filter: bool | None = None,
 ) -> list[Path]:
     """
     Load PromoFull and Promo files.
@@ -621,10 +838,20 @@ def load_files(
     Promo:
         upsert only
 
+    prod_filter:
+        True  -> apply the prod filter (see module docstring)
+        False -> unfiltered (dev/test behavior)
+        None  -> follow the environment: filtered only when ENV == "prod".
+                 This keeps the scheduler consistent with load_promos.py
+                 without having to pass the flag through it.
+
     Returns only files that were successfully loaded.
 
     file_tracking.loaded is handled by the caller.
     """
+
+    if prod_filter is None:
+        prod_filter = settings.ENV == "prod"
 
     parser = StoreXmlParser()
     chain_metadata = _load_chain_metadata()
@@ -642,6 +869,7 @@ def load_files(
                 file_type,
                 chain_metadata,
                 log_changes=log_changes,
+                prod_filter=prod_filter,
             )
 
             mark_files_loaded(

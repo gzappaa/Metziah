@@ -473,7 +473,7 @@ def test_normalize_mishnatyosef_listing_skips_missing_name_or_url():
 # HTML page fingerprint
 # ---------------------------------------------------------------------------
 
-def test_page_fingerprint_uses_filename_href_and_text():
+def test_page_fingerprint_uses_filenames():
     candidates = [
         Candidate(
             text="Price",
@@ -490,16 +490,8 @@ def test_page_fingerprint_uses_filename_href_and_text():
     ]
 
     assert _page_fingerprint(candidates) == (
-        (
-            "price.xml",
-            "https://example.com/price.xml",
-            "Price",
-        ),
-        (
-            "promo.xml",
-            "https://example.com/promo.xml",
-            "Promo",
-        ),
+        "price.xml",
+        "promo.xml",
     )
 
 

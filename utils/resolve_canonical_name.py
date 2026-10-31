@@ -213,7 +213,7 @@ def resolve_canonical_name(name_chain_counts: dict) -> str:
         return ""
 
     if len(name_chain_counts) == 1:
-        return next(iter(name_chain_counts))
+        return next(iter(name_chain_counts)).strip()
 
     # -----------------------------------------------------------------------
     # Step 1: quality gate
@@ -229,7 +229,7 @@ def resolve_canonical_name(name_chain_counts: dict) -> str:
         return ""
 
     if len(survivors) == 1:
-        return next(iter(survivors))
+        return next(iter(survivors)).strip()
 
     # -----------------------------------------------------------------------
     # Step 2: cluster near-duplicates
@@ -267,7 +267,7 @@ def resolve_canonical_name(name_chain_counts: dict) -> str:
     # Step 4: choose the best raw name inside the winning cluster
     # -----------------------------------------------------------------------
 
-    return best_cluster.best_name
+    return best_cluster.best_name.strip()
 
 
 if __name__ == "__main__":

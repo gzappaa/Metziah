@@ -18,3 +18,17 @@ respx==0.23.1
 
 # Monitoring / HTML parsing
 beautifulsoup4==4.15.0
+
+# Inspection / Data Analysis
+openpyxl
+
+# Scraping
+playwright
+
+#API 
+fastapi>=0.115.0
+uvicorn>=0.30.0
+jinja2>=3.1.4
+
+# Image processing
+Pillow

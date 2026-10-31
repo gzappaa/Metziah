@@ -52,11 +52,7 @@ def test_find_pricefull_files_returns_latest_file(
             "file_date": filename.split("-")[3],
         }
 
-    monkeypatch.setattr(
-        module,
-        "parse_filename",
-        fake_parse_filename,
-    )
+    monkeypatch.setattr(module, "parse_filename", fake_parse_filename)
     monkeypatch.setattr(
         module,
         "extract_time_suffix",
@@ -140,11 +136,7 @@ def test_find_pricefull_files_keeps_different_stores(
             "file_date": "20260101",
         }
 
-    monkeypatch.setattr(
-        module,
-        "parse_filename",
-        fake_parse_filename,
-    )
+    monkeypatch.setattr(module, "parse_filename", fake_parse_filename)
     monkeypatch.setattr(
         module,
         "extract_time_suffix",
@@ -185,11 +177,7 @@ def test_find_pricefull_files_keeps_different_subchains(
             "file_date": "20260101",
         }
 
-    monkeypatch.setattr(
-        module,
-        "parse_filename",
-        fake_parse_filename,
-    )
+    monkeypatch.setattr(module, "parse_filename", fake_parse_filename)
     monkeypatch.setattr(
         module,
         "extract_time_suffix",
@@ -284,6 +272,7 @@ def test_main_returns_when_no_files(
             {
                 "dev": False,
                 "test": True,
+                "prod": False,
                 "feeds_dir": Path("ignored"),
             },
         )(),
@@ -357,6 +346,7 @@ def test_main_loads_files(
             {
                 "dev": False,
                 "test": True,
+                "prod": False,
                 "feeds_dir": Path("ignored"),
             },
         )(),
@@ -370,42 +360,6 @@ def test_main_loads_files(
 
 
 def test_main_uses_default_feeds_dir(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(module.settings, "ENV", "test")
-    monkeypatch.setattr(module, "BASE_DIR", tmp_path)
-
-    captured = []
-
-    monkeypatch.setattr(
-        module,
-        "find_pricefull_files",
-        lambda feeds_dir: captured.append(feeds_dir) or [],
-    )
-
-    monkeypatch.setattr(
-        module.argparse.ArgumentParser,
-        "parse_args",
-        lambda self: type(
-            "Args",
-            (),
-            {
-                "dev": False,
-                "test": False,
-                "feeds_dir": Path("data/feeds"),
-            },
-        )(),
-    )
-
-    module.main()
-
-    assert captured == [
-        (tmp_path / "data" / "feeds").resolve()
-    ]
-
-
-def test_main_test_flag_overrides_feeds_dir(
     monkeypatch,
     tmp_path,
 ):
@@ -429,6 +383,48 @@ def test_main_test_flag_overrides_feeds_dir(
             {
                 "dev": False,
                 "test": True,
+                "prod": False,
+                "feeds_dir": Path("data/feeds"),
+            },
+        )(),
+    )
+
+    module.main()
+
+    assert captured == [
+        (tmp_path / "test_feeds").resolve()
+    ]
+
+
+def test_main_test_flag_overrides_feeds_dir(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(module.settings, "ENV", "test")
+    monkeypatch.setattr(
+        module,
+        "TEST_FEEDS_DIR",
+        tmp_path / "test_feeds",
+    )
+
+    captured = []
+
+    monkeypatch.setattr(
+        module,
+        "find_pricefull_files",
+        lambda feeds_dir: captured.append(feeds_dir) or [],
+    )
+
+    monkeypatch.setattr(
+        module.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: type(
+            "Args",
+            (),
+            {
+                "dev": False,
+                "test": True,
+                "prod": False,
                 "feeds_dir": Path("some/other/feeds"),
             },
         )(),
@@ -455,6 +451,7 @@ def test_main_rejects_dev_without_confirmation(
             {
                 "dev": False,
                 "test": False,
+                "prod": False,
                 "feeds_dir": Path("data/feeds"),
             },
         )(),
@@ -481,6 +478,7 @@ def test_main_rejects_dev_outside_dev_environment(
             {
                 "dev": True,
                 "test": False,
+                "prod": False,
                 "feeds_dir": Path("data/feeds"),
             },
         )(),
@@ -507,6 +505,7 @@ def test_main_rejects_test_outside_test_environment(
             {
                 "dev": False,
                 "test": True,
+                "prod": False,
                 "feeds_dir": Path("data/feeds"),
             },
         )(),

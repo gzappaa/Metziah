@@ -49,14 +49,43 @@ def test_iter_log_entries_ignores_blank_lines_between(tmp_path):
     assert entries[0].extra_lines == []
 
 
-def test_find_rotated_logs_matches_expected_patterns(tmp_path):
-    for name in ("scheduler.log", "scheduler.log.3", "scheduler.log.2026-09-26",
-                 "scheduler.test.log", "price_changes.log", "scheduler.logfoo"):
+def test_find_rotated_logs_returns_current_log(tmp_path):
+    for name in (
+        "scheduler.log",
+        "scheduler.log.3",
+        "scheduler.log.2026-09-26",
+        "scheduler.test.log",
+        "price_changes.log",
+        "scheduler.logfoo",
+    ):
         (tmp_path / name).write_text("x")
 
     found = {p.name for p in common.find_rotated_logs(tmp_path, "scheduler")}
-    assert found == {"scheduler.log", "scheduler.log.3", "scheduler.log.2026-09-26"}
+    assert found == {"scheduler.log"}
 
+
+def test_find_rotated_logs_returns_requested_date(tmp_path):
+    for name in (
+        "scheduler.log",
+        "scheduler.log.3",
+        "scheduler.log.2026-09-26",
+        "scheduler.log.2026-09-27",
+        "scheduler.test.log",
+        "price_changes.log",
+        "scheduler.logfoo",
+    ):
+        (tmp_path / name).write_text("x")
+
+    found = {
+        p.name
+        for p in common.find_rotated_logs(
+            tmp_path,
+            "scheduler",
+            "2026-09-26",
+        )
+    }
+
+    assert found == {"scheduler.log.2026-09-26"}
 
 def test_find_rotated_logs_missing_dir_returns_empty(tmp_path):
     assert common.find_rotated_logs(tmp_path / "nope", "scheduler") == []

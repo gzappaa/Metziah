@@ -163,30 +163,31 @@ def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
     """
     Resolve item_code -> name for logging.
 
-    Prefer the store-specific name from store_products and fall back
-    to the global product name from products.
+    Prefer the canonical global product name, then fall back to
+    store-specific and pharmacy product tables.
     """
     if not item_codes:
         return {}
 
     item_codes = list(item_codes)
+    names = {}
 
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT item_code, name
-            FROM store_products
-            WHERE chain_id = %s
-              AND store_id = %s
-              AND item_code = ANY(%s)
+            FROM products
+            WHERE item_code = ANY(%s)
             """,
-            (
-                chain_id,
-                store_id_text,
-                item_codes,
-            ),
+            (item_codes,),
         )
-        names = dict(cur.fetchall())
+        names.update(
+            {
+                item_code: name
+                for item_code, name in cur.fetchall()
+                if name is not None
+            }
+        )
 
     missing = [
         code
@@ -199,15 +200,84 @@ def _fetch_item_names(conn, chain_id, store_id_text, item_codes):
             cur.execute(
                 """
                 SELECT item_code, name
-                FROM products
-                WHERE item_code = ANY(%s)
+                FROM store_products
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND item_code = ANY(%s)
                 """,
-                (missing,),
+                (
+                    chain_id,
+                    store_id_text,
+                    missing,
+                ),
             )
-            names.update(dict(cur.fetchall()))
+            names.update(
+                {
+                    item_code: name
+                    for item_code, name in cur.fetchall()
+                    if name is not None
+                }
+            )
+
+    missing = [
+        code
+        for code in item_codes
+        if code not in names
+    ]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT item_code, name
+                FROM pharmacy_products
+                WHERE chain_id = %s
+                  AND item_code = ANY(%s)
+                """,
+                (
+                    chain_id,
+                    missing,
+                ),
+            )
+            names.update(
+                {
+                    item_code: name
+                    for item_code, name in cur.fetchall()
+                    if name is not None
+                }
+            )
+
+    missing = [
+        code
+        for code in item_codes
+        if code not in names
+    ]
+
+    if missing:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT item_code, name
+                FROM pharmacy_store_products
+                WHERE chain_id = %s
+                  AND store_id = %s
+                  AND item_code = ANY(%s)
+                """,
+                (
+                    chain_id,
+                    store_id_text,
+                    missing,
+                ),
+            )
+            names.update(
+                {
+                    item_code: name
+                    for item_code, name in cur.fetchall()
+                    if name is not None
+                }
+            )
 
     return names
-
 
 # ---------------------------------------------------------------------------
 # Existing prices

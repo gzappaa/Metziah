@@ -1,0 +1,225 @@
+
+{% extends "base.html" %}
+
+{% block title %}{{ product_name }} — מציאה השוואת מחירים{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 20px;">
+    <a href="/?tab=fresh&category={{ category_id }}&subcategory={{ subcategory_id }}"
+       style="font-size: 13px; color: var(--ink-secondary); text-decoration: none; font-weight: 700;">
+        ← חזרה למוצרים טריים
+    </a>
+</div>
+
+<!-- 1. PRODUCT HEADER -->
+
+<div class="product-detail-header">
+    <div class="product-detail-product">
+        <img
+            class="product-detail-image"
+            src="/img/{{ stores[0].item_code if stores else '' }}"
+            alt="{{ product_name }}"
+            width="160"
+            height="160"
+            onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+        >
+    </div>
+
+    <div class="product-detail-center">
+        <nav class="product-breadcrumbs" aria-label="ניווט">
+            {% if category %}
+                <span>{{ category }}</span>
+            {% endif %}
+            {% if subcategory %}
+                <span class="breadcrumb-separator">›</span>
+                <span>{{ subcategory }}</span>
+            {% endif %}
+        </nav>
+
+        <h1 class="product-detail-name">{{ product_name }}</h1>
+
+        <div class="product-detail-meta">
+            <span>סוג מוצר: מוצרים טריים</span>
+            {% if stores %}
+                <span>מספר חנויות שנמצאו: {{ stores|length }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="product-detail-price">
+        {% if lowest_price is not none %}
+            <div class="stamp-badge stamp-large">
+                ★ המחיר הזול ביותר ★
+                <div class="mono-nums" style="font-size: 18px; margin-top: 2px;">
+                    {{ "%.2f"|format(lowest_price) }} ₪
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 2. PRICE COMPARISON -->
+
+<section style="margin-bottom: 32px;">
+    <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+        <h2 style="font-size: 22px;">פירוט מחירי רשתות וסניפים</h2>
+        <span class="mono-nums" style="font-size: 12px; color: var(--ink-muted);">
+            {{ stores|length }} סניפים נמצאו
+        </span>
+    </div>
+
+    <div style="background-color: #ffffff; border: 1px solid var(--paper-border); padding: 16px 20px; border-radius: 4px;">
+        <div style="font-family: var(--receipt-mono); font-size: 11px; color: var(--ink-muted); border-bottom: 1px dashed var(--paper-dashed); padding-bottom: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 12px;">
+            <span>רשת שיווק וסניף</span>
+            <span>מחיר בסניף</span>
+        </div>
+
+        {% if stores %}
+            {% for store in stores %}
+                {% set is_lowest = (
+                    store.price is not none
+                    and store.price > 0
+                    and lowest_price is not none
+                    and store.price == lowest_price
+                ) %}
+
+                <div class="receipt-line {% if is_lowest %}best-line{% endif %}">
+                    <div class="receipt-col-label">
+                        <img
+                            class="receipt-brand-logo"
+                            src="/brand-logo/{{ (store.chain_name_he or store.chain_name_en or store.chain_id)|urlencode }}"
+                            alt=""
+                            loading="lazy"
+                            onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                        >
+
+                        <span class="receipt-store-brand">
+                            {{ store.chain_name_he or store.chain_name_en or store.chain_id }}
+                        </span>
+
+                        {% if store.store_name %}
+                            <span class="receipt-store-sub">
+                                ({{ store.store_name }})
+                            </span>
+                        {% endif %}
+
+                        {% if store.city %}
+                            <span class="receipt-store-sub">
+                                — {{ store.city }}
+                            </span>
+                        {% endif %}
+
+                        {% if is_lowest %}
+                            <span class="stamp-badge" style="font-size: 9px; padding: 1px 5px;">
+                                הזול ביותר
+                            </span>
+                        {% endif %}
+                    </div>
+
+                    <div class="receipt-dots"></div>
+
+                    <div class="receipt-price-box">
+                        {% if store.price is not none and store.price > 0 %}
+                            <span class="receipt-price"
+                                  {% if is_lowest %}style="color: var(--ink-stamp-red);"{% endif %}>
+                                {{ "%.2f"|format(store.price) }} ₪
+                            </span>
+                        {% else %}
+                            <span style="font-family: var(--receipt-mono); font-size: 12px; color: var(--ink-muted);">
+                                לא זמין
+                            </span>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p style="text-align: center; color: var(--ink-secondary);">
+                לא נמצאו חנויות למוצר זה.
+            </p>
+        {% endif %}
+    </div>
+</section>
+
+<!-- 3. PROMOTIONS -->
+
+{% set namespace_promos = namespace(items=[]) %}
+{% for store in stores %}
+    {% for promo in store.promotions or [] %}
+        {% if promo.discounted_price is not none and promo.discounted_price > 0 %}
+            {% set namespace_promos.items = namespace_promos.items + [{"store": store, "promo": promo}] %}
+        {% endif %}
+    {% endfor %}
+{% endfor %}
+
+{% if namespace_promos.items %}
+<section style="margin-bottom: 32px;">
+    <h2 style="font-size: 22px; margin-bottom: 12px;">
+        מבצעים פעילים בתוקף
+    </h2>
+
+    <div style="background-color: #fff9f0; border: 1px solid #e8cbb0; padding: 16px 20px; border-radius: 4px;">
+        {% for item in namespace_promos.items %}
+            {% set store = item.store %}
+            {% set promo = item.promo %}
+
+            <div class="receipt-line" style="align-items: flex-start; padding: 12px 0; border-bottom: 1px dashed #e8cbb0;">
+                <img
+                    class="receipt-brand-logo"
+                    src="/brand-logo/{{ (store.chain_name_he or store.chain_name_en or store.chain_id)|urlencode }}"
+                    alt=""
+                    loading="lazy"
+                    onerror="this.onerror=null;this.src='/static/image-placeholder.svg';"
+                >
+
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span class="stamp-badge stamp-badge-blue">מבצע</span>
+                        <strong style="font-size: 15px;">
+                            {{ promo.description or 'מבצע על המוצר' }}
+                        </strong>
+                    </div>
+
+                    <div style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">
+                        סניף:
+                        {{ store.chain_name_he or store.chain_name_en or store.chain_id }}
+                        {% if store.store_name %}({{ store.store_name }}){% endif %}
+                        {% if promo.min_qty and promo.min_qty > 1 %}
+                            • מינימום {{ promo.min_qty }} יח׳
+                        {% endif %}
+                        {% if promo.end_datetime %}
+                            • בתוקף עד
+                            {% if promo.end_datetime.strftime is defined %}
+                                {{ promo.end_datetime.strftime('%d/%m/%Y') }}
+                            {% else %}
+                                {% set end_date = promo.end_datetime|string %}
+                                {% if end_date|length >= 10 and end_date[4:5] == '-' and end_date[7:8] == '-' %}
+                                    {{ end_date[8:10] }}/{{ end_date[5:7] }}/{{ end_date[0:4] }}
+                                {% else %}
+                                    {{ end_date }}
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="receipt-dots" style="margin-top: 10px;"></div>
+
+                <div class="receipt-price-box" style="margin-top: 4px;">
+                    <span class="receipt-price" style="color: var(--ink-stamp-red);">
+                        {{ "%.2f"|format(promo.discounted_price) }} ₪
+                    </span>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</section>
+{% else %}
+<section style="margin-bottom: 32px;">
+    <h2 style="font-size: 22px; margin-bottom: 12px;">מבצעים פעילים</h2>
+    <div style="background-color: #ffffff; border: 1px dashed var(--paper-dashed); padding: 16px 20px; border-radius: 4px; color: var(--ink-secondary); font-size: 13px;">
+        לא נמצאו מבצעים פעילים עבור מוצר זה.
+    </div>
+</section>
+{% endif %}
+
+{% endblock %}

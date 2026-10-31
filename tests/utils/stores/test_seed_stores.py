@@ -195,12 +195,19 @@ def test_main_seeds_all_stores(monkeypatch, tmp_path):
     conn = MagicMock()
 
     ensure_chain = MagicMock()
+    ensure_chain_brands = MagicMock()
     upsert_stores = MagicMock()
 
     monkeypatch.setattr(
         seed_stores,
         "ensure_chain",
         ensure_chain,
+    )
+
+    monkeypatch.setattr(
+        seed_stores,
+        "ensure_chain_brands",
+        ensure_chain_brands,
     )
 
     monkeypatch.setattr(
@@ -256,7 +263,6 @@ def test_main_seeds_all_stores(monkeypatch, tmp_path):
         ),
     ]
 
-
     chains = _load_real_chains()
 
     assert ensure_chain.call_count == len(chains)
@@ -269,7 +275,17 @@ def test_main_seeds_all_stores(monkeypatch, tmp_path):
             chain["name_en_normalized"],
         )
 
+    assert ensure_chain_brands.call_count == len(chains)
+
+    for chain_id, chain in chains.items():
+        ensure_chain_brands.assert_any_call(
+            conn,
+            chain_id,
+            chain.get("brands"),
+        )
+
     conn.commit.assert_called_once()
+
 
 
 def test_main_test_mode_only_seeds_test_feed_stores(
@@ -335,12 +351,19 @@ def test_main_test_mode_only_seeds_test_feed_stores(
     conn = MagicMock()
 
     ensure_chain = MagicMock()
+    ensure_chain_brands = MagicMock()
     upsert_stores = MagicMock()
 
     monkeypatch.setattr(
         seed_stores,
         "ensure_chain",
         ensure_chain,
+    )
+
+    monkeypatch.setattr(
+        seed_stores,
+        "ensure_chain_brands",
+        ensure_chain_brands,
     )
 
     monkeypatch.setattr(
@@ -380,7 +403,6 @@ def test_main_test_mode_only_seeds_test_feed_stores(
         )
     ]
 
-
     chains = _load_real_chains()
 
     assert ensure_chain.call_count == len(chains)
@@ -391,6 +413,15 @@ def test_main_test_mode_only_seeds_test_feed_stores(
             chain_id,
             chain["name_he_normalized"],
             chain["name_en_normalized"],
+        )
+
+    assert ensure_chain_brands.call_count == len(chains)
+
+    for chain_id, chain in chains.items():
+        ensure_chain_brands.assert_any_call(
+            conn,
+            chain_id,
+            chain.get("brands"),
         )
 
     conn.commit.assert_called_once()

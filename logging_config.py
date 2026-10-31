@@ -100,6 +100,8 @@ def setup_logging(
 
     if ENV == "test":
         filename = f"{name}.test.log"
+    elif ENV == "prod":
+        filename = f"{name}.prod.log"
     else:
         filename = f"{name}.log"
 
@@ -147,6 +149,8 @@ def setup_isolated_logging(
 
     if ENV == "test":
         filename = f"{name}.test.log"
+    elif ENV == "prod":
+        filename = f"{name}.prod.log"
     else:
         filename = f"{name}.log"
 

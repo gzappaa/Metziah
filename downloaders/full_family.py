@@ -14,50 +14,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from downloaders.common import save_file, save_file_async
-from utils.file_tracking.parser_file_tracking import parse_filename
+from utils.file_tracking.parser_file_tracking import parse_filename, extract_time_suffix
 
 logger = logging.getLogger(__name__)
 
 
-def extract_time_suffix(filename: str) -> str:
-    """
-    Extract the time component from a full-file filename.
-
-    Supports:
-      YYYYMMDD-HHMMSS
-      YYYYMMDD-HHMM
-      YYYYMMDDHHMM
-    """
-
-    match = re.search(
-        r"-(\d{8})-(\d+)(?:\.[^.]+)?$",
-        filename,
-    )
-
-    if match:
-        value = match.group(2)
-
-    else:
-        match = re.search(
-            r"-(\d{8})(\d{4,6})(?:\.[^.]+)?$",
-            filename,
-        )
-
-        if not match:
-            return "000000"
-
-        value = match.group(2)
-
-    if len(value) == 3:
-        return value + "000"
-
-    if len(value) == 4:
-        return value + "00"
-
-    if len(value) == 6:
-        return value
-
-    return "000000"
 
 
 def find_latest_full_files_per_store(

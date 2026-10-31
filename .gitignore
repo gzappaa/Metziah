@@ -3,7 +3,6 @@ venv
 *.env
 **/__pycache__/
 *.pyc
-__init__.py
 notes.md
 data/reports/
 data/stores
@@ -32,3 +31,16 @@ monitoring/data/filename_chains.json
 monitoring/data/store_duplicates.json
 monitoring/data/stores_missing_from_registry.json
 python_tree.py
+shufersal/
+raw/
+inspection/data_quality/reports
+shufersal_nutrition.json
+monitoring/data/scraper_coverage.json
+inspection/sheets
+data/parsed
+data/images/*
+!data/images/brands/
+!data/images/brands/**
+llm_context
+scrapers/product_pages/product_urls.txt
+data/raw_product_pages

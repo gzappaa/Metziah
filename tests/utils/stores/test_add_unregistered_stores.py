@@ -1,3 +1,4 @@
+
 import json
 
 import pytest
@@ -27,7 +28,8 @@ def test_main_adds_unregistered_stores(monkeypatch, tmp_path):
     write_json(
         missing_file,
         {
-            "shufersal": {
+            "shufersal:7290027600007": {
+                "source": "shufersal",
                 "chain_id": "7290027600007",
                 "store_ids": ["041", "006"],
             }
@@ -85,6 +87,7 @@ def test_main_adds_unregistered_stores(monkeypatch, tmp_path):
     stores = upsert_calls[0]
 
     assert len(stores) == 2
+
     assert stores[0].chain_id == "7290027600007"
     assert stores[0].store_id == "41"
     assert stores[0].name == "Unregistered store - shufersal - 41"
@@ -110,7 +113,8 @@ def test_main_loads_chains_extra(monkeypatch, tmp_path):
     write_json(
         missing_file,
         {
-            "unknown_source": {
+            "unknown_source:7290999999999": {
+                "source": "unknown_source",
                 "chain_id": chain_id,
                 "store_ids": ["12"],
             }
@@ -118,6 +122,7 @@ def test_main_loads_chains_extra(monkeypatch, tmp_path):
     )
 
     write_json(chains_file, {})
+
     write_json(
         extra_file,
         {
@@ -176,7 +181,8 @@ def test_main_raises_for_unknown_chain(monkeypatch, tmp_path):
     write_json(
         missing_file,
         {
-            "unknown_source": {
+            "unknown_source:7290999999999": {
+                "source": "unknown_source",
                 "chain_id": chain_id,
                 "store_ids": ["1"],
             }
@@ -226,7 +232,8 @@ def test_main_commits(monkeypatch, tmp_path):
     write_json(
         missing_file,
         {
-            "source": {
+            "shufersal:7290027600007": {
+                "source": "shufersal",
                 "chain_id": chain_id,
                 "store_ids": ["123"],
             }
@@ -242,6 +249,7 @@ def test_main_commits(monkeypatch, tmp_path):
             }
         },
     )
+
     write_json(extra_file, {})
 
     monkeypatch.setattr(module, "MISSING_STORES_FILE", missing_file)

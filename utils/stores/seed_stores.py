@@ -1,7 +1,12 @@
 """
 utils/stores/seed_stores.py
 
-Seeds the `stores` table from geocoded stores JSON files under data/stores/.
+Seeds the `chains` and `stores` tables from reference and geocoded store
+JSON files.
+
+Chain metadata is loaded from data/reference/chains.json and
+data/reference/chains_extra.json. This includes normalized chain names and
+shopper-facing brands.
 
 In normal mode, all stores are seeded.
 
@@ -10,9 +15,6 @@ under data/test_feeds/ are seeded.
 
 Store IDs are matched ignoring leading zeroes:
     006 == 06 == 6
-
-Chain metadata is loaded from data/reference/chains.json, which is the
-source of truth for chain names.
 
 Safe to re-run any time (upsert on chain_id, store_id).
 
@@ -26,7 +28,7 @@ import json
 import logging
 from pathlib import Path
 
-from database.repository import ensure_chain, upsert_stores
+from database.repository import ensure_chain, ensure_chain_brands, upsert_stores
 from db import get_connection
 from models.store import Store
 
@@ -250,6 +252,12 @@ def main():
                 chain_id,
                 chain["name_he_normalized"],
                 chain["name_en_normalized"],
+            )
+
+            ensure_chain_brands(
+                conn,
+                chain_id,
+                chain.get("brands"),
             )
 
         upsert_stores(

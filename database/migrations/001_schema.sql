@@ -32,7 +32,8 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE TABLE chains (
     chain_id           TEXT PRIMARY KEY,
     name_he_normalized TEXT NOT NULL,
-    name_en_normalized TEXT NOT NULL
+    name_en_normalized TEXT NOT NULL,
+    brands             TEXT[] NOT NULL DEFAULT '{}'
 );
 
 
@@ -216,7 +217,6 @@ CREATE TABLE store_products (
     store_id              TEXT NOT NULL,
     item_code             TEXT NOT NULL,
     name                  TEXT,
-    name_count            INTEGER NOT NULL DEFAULT 1,
     manufacturer          TEXT,
     manufacturer_country  TEXT,
     item_type             INTEGER,

@@ -1,0 +1,120 @@
+
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}מציאה — השוואת מחירי סופרמרקטים בישראל{% endblock %}</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@700;800;900&family=Heebo:wght@400;500;600;700&family=Suez+One&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+    <div class="app-container">
+        <main class="receipt-paper">
+            <header class="receipt-header">
+                <div class="stamp-badge stamp-large" style="float: left;">סופר שקוף ★</div>
+
+                <h1 class="receipt-title">
+                    <a href="/" style="text-decoration: none; color: inherit;">מציאה • METZIAH</a>
+                </h1>
+
+                <div class="receipt-subtitle">
+                    קובץ התקנות 7442 • שקיפות מחירי רשתות המזון בישראל
+                </div>
+
+                <div class="mono-nums" style="font-size: 11px; color: var(--ink-muted); margin-top: 4px;">
+                    מס' מערכת: {{ app_version }} | תאריך עדכון: {{ data_updated() }}
+                </div>
+            </header>
+
+            <div class="receipt-body">
+                {% block content %}{% endblock %}
+            </div>
+
+            <footer class="receipt-footer">
+                <div class="receipt-barcode">||| | | |||| || | || |||| | ||| |||| |</div>
+
+                <p>הנתונים מתעדכנים ישירות ממאגרי המחירים הרשמיים של רשתות השיווק בישראל.</p>
+
+                <p style="margin-top: 4px;">
+                    <a href="/docs" style="color: var(--ink-secondary); text-decoration: underline;" target="_blank" rel="noopener noreferrer">תיעוד API</a>
+                    &nbsp;|&nbsp;
+                    <a href="/api/v1/health" style="color: var(--ink-secondary); text-decoration: underline;" target="_blank" rel="noopener noreferrer">בדיקת תקינות API</a>
+                </p>
+            </footer>
+        </main>
+    </div>
+
+
+    <script>
+    function setupReceiptPagination() {
+        document.querySelectorAll(".receipt-lines").forEach(container => {
+            if (container.dataset.paginationReady === "true") return;
+
+            const lines = Array.from(container.children).filter(
+                element => element.classList.contains("receipt-line")
+            );
+
+            if (lines.length <= 10) return;
+
+            container.dataset.paginationReady = "true";
+
+            let visibleCount = 10;
+
+            const controls = document.createElement("div");
+            controls.style.cssText =
+                "display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;";
+
+            const moreButton = document.createElement("button");
+            moreButton.type = "button";
+            moreButton.className = "nav-filter-btn";
+
+            const allButton = document.createElement("button");
+            allButton.type = "button";
+            allButton.className = "nav-filter-btn";
+
+            function render() {
+                lines.forEach((line, index) => {
+                    line.style.display = index < visibleCount ? "" : "none";
+                });
+
+                const remaining = lines.length - visibleCount;
+
+                moreButton.hidden = remaining <= 0;
+                allButton.hidden = remaining <= 0;
+
+                moreButton.textContent =
+                    `הצג עוד ${Math.min(10, remaining)}`;
+
+                allButton.textContent =
+                    `הצג את כל ${lines.length} הסניפים`;
+            }
+
+            moreButton.addEventListener("click", () => {
+                visibleCount = Math.min(visibleCount + 10, lines.length);
+                render();
+            });
+
+            allButton.addEventListener("click", () => {
+                visibleCount = lines.length;
+                render();
+            });
+
+            controls.append(moreButton, allButton);
+            container.after(controls);
+            render();
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", setupReceiptPagination);
+    } else {
+        setupReceiptPagination();
+    }
+    </script>

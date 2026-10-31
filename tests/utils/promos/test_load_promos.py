@@ -305,7 +305,7 @@ def test_main_rejects_test_flag_outside_test(
 
     with pytest.raises(
         RuntimeError,
-        match="--test was provided",
+        match="Production database selected",
     ):
         module.main()
 
@@ -334,6 +334,7 @@ def test_main_resolves_relative_feeds_dir(
         "sys.argv",
         [
             "load_promos.py",
+            "--prod",
             "--feeds-dir",
             "custom/feeds",
         ],
@@ -435,6 +436,7 @@ def test_main_loads_discovered_files(
         "sys.argv",
         [
             "load_promos.py",
+            "--prod",
             "--feeds-dir",
             str(feeds_dir),
         ],
@@ -451,6 +453,7 @@ def test_main_loads_discovered_files(
         files,
         feeds_dir.resolve(),
         log_changes=False,
+        prod_filter=True,
     )
 
 
@@ -482,6 +485,7 @@ def test_main_returns_when_no_files_found(
         "sys.argv",
         [
             "load_promos.py",
+            "--prod",
             "--feeds-dir",
             str(feeds_dir),
         ],
@@ -490,3 +494,75 @@ def test_main_returns_when_no_files_found(
     module.main()
 
     module.load_files.assert_not_called()
+
+
+def test_main_uses_default_prod_filter_in_prod(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        module.settings,
+        "ENV",
+        "prod",
+    )
+
+    feeds_dir = tmp_path / "feeds"
+
+    files = [
+        (
+            feeds_dir
+            / CHAIN_ID
+            / STORE_ID
+            / "promosfull"
+            / "PromoFull9999999999999-001-001-20260101-000000.xml",
+            "PromoFull",
+        )
+    ]
+
+    monkeypatch.setattr(
+        module,
+        "find_promofull_files",
+        Mock(return_value=files),
+    )
+
+    connection = Mock()
+
+    get_connection = Mock()
+    get_connection.return_value.__enter__ = Mock(
+        return_value=connection
+    )
+    get_connection.return_value.__exit__ = Mock(
+        return_value=False
+    )
+
+    monkeypatch.setattr(
+        module,
+        "get_connection",
+        get_connection,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "load_files",
+        Mock(),
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "load_promos.py",
+            "--prod",
+            "--feeds-dir",
+            str(feeds_dir),
+        ],
+    )
+
+    module.main()
+
+    module.load_files.assert_called_once_with(
+        connection,
+        files,
+        feeds_dir.resolve(),
+        log_changes=False,
+        prod_filter=True,
+    )

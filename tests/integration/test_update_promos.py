@@ -4,8 +4,8 @@ import pytest
 
 from models.promo import Promotion
 from parsers.xml import StoreXmlParser
-from utils.promos.update_promos import load_files, load_one_file
-
+from utils.promos.update_promos import load_files, load_one_file, _apply_prod_filter
+from models.promo import Promotion, PromotionGroup, PromotionItem
 
 def _promotions(conn, chain_id, store_id):
     with conn.cursor() as cur:
@@ -209,3 +209,100 @@ def test_unknown_chain_is_skipped(
     )
 
     assert loaded == []
+
+
+def _make_promotion(item_code, discounted_price):
+    item = PromotionItem(
+        chain_id="9999999999999",
+        promotion_id="0000000001",
+        store_id="001",
+        group_id="1",
+        item_code=item_code,
+        item_type=1,
+        reward_type=1,
+        min_qty=Decimal("1"),
+        max_qty=None,
+        discount_rate=Decimal("1.00"),
+        discounted_price=discounted_price,
+        discounted_price_per_mida=discounted_price,
+        is_weighted=False,
+    )
+
+    group = PromotionGroup(
+        chain_id="9999999999999",
+        promotion_id="0000000001",
+        store_id="001",
+        group_id="1",
+        min_purchase_amount=Decimal("0.00"),
+        discount_type=None,
+        items=[item],
+    )
+
+    return Promotion(
+        chain_id="9999999999999",
+        promotion_id="0000000001",
+        store_id="001",
+        description="test promotion",
+        start_datetime=None,
+        end_datetime=None,
+        start_hour=None,
+        end_hour=None,
+        promotion_days=None,
+        update_time=None,
+        club_id="0",
+        is_gift_item="0",
+        additional_is_coupon=False,
+        allow_multiple_discounts=False,
+        redemption_limit=None,
+        min_no_of_items_offered=1,
+        additional_restrictions=None,
+        remarks=None,
+        groups=[group],
+    )
+
+
+def test_prod_filter_removes_unknown_items(conn, create_store):
+    chain_id = "9999999999999"
+    store_id = "001"
+
+    create_store(chain_id, store_id)
+
+    promotion = _make_promotion(
+        item_code="7290000000001",
+        discounted_price=Decimal("6.90"),
+    )
+
+    filtered, stats = _apply_prod_filter(
+        conn,
+        [promotion],
+        chain_id,
+        store_id,
+    )
+
+    assert filtered == []
+    assert stats["unknown_items"] == 1
+    assert stats["empty_groups"] == 1
+    assert stats["empty_promotions"] == 1
+
+def test_prod_filter_removes_null_price_items(conn, create_store):
+    chain_id = "9999999999999"
+    store_id = "001"
+
+    create_store(chain_id, store_id)
+
+    promotion = _make_promotion(
+        item_code="7290000000001",
+        discounted_price=None,
+    )
+
+    filtered, stats = _apply_prod_filter(
+        conn,
+        [promotion],
+        chain_id,
+        store_id,
+    )
+
+    assert filtered == []
+    assert stats["null_price_items"] == 1
+    assert stats["empty_groups"] == 1
+    assert stats["empty_promotions"] == 1

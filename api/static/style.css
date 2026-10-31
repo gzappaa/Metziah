@@ -1,0 +1,823 @@
+/* ============================================================
+   Metziah (מציאה) — Receipt Concept Design System
+   Warm off-white paper, tabular monospace numbers, dashed dividers,
+   Hebrew display typography, stamped ink badges, and saturated tiles.
+   ============================================================ */
+
+:root {
+  --paper-bg: #f4efdf;
+  --paper-sheet: #fbf9f1;
+  --paper-sheet-alt: #f1ebd8;
+  --paper-border: #d2c7b0;
+  --paper-dashed: #a89a80;
+  --ink-primary: #1e1b18;
+  --ink-secondary: #5a5247;
+  --ink-muted: #827768;
+  --ink-stamp-red: #b31414;
+  --ink-stamp-blue: #0b4f8a;
+  --receipt-mono: 'Courier New', 'Lucida Console', Monaco, monospace;
+  --font-display: 'Frank Ruhl Libre', 'Suez One', serif;
+  --font-body: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--paper-bg);
+  color: var(--ink-primary);
+  font-family: var(--font-body);
+  direction: rtl;
+  text-align: right;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ------------------------------------------------------------
+   TYPOGRAPHY
+   ------------------------------------------------------------ */
+h1, h2, h3, h4, .display-font {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.mono-nums {
+  font-family: var(--receipt-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* ------------------------------------------------------------
+   LAYOUT & RECEIPT PAPER CONTAINERS
+   ------------------------------------------------------------ */
+.app-container {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 24px 16px 64px 16px;
+}
+
+/* The receipt paper roll effect */
+.receipt-paper {
+  background-color: var(--paper-sheet);
+  border: 1px solid var(--paper-border);
+  box-shadow: 0 4px 20px rgba(78, 68, 51, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+  position: relative;
+  border-radius: 4px;
+}
+
+/* Zig-zag jagged perforated edges for receipt paper */
+.receipt-paper::before,
+.receipt-paper::after {
+  content: "";
+  display: block;
+  height: 8px;
+  background-size: 16px 8px;
+  background-repeat: repeat-x;
+}
+
+.receipt-paper::before {
+  background-image: linear-gradient(135deg, transparent 50%, var(--paper-sheet) 50%),
+                    linear-gradient(-135deg, transparent 50%, var(--paper-sheet) 50%);
+  margin-top: -8px;
+}
+
+.receipt-paper::after {
+  background-image: linear-gradient(45deg, transparent 50%, var(--paper-sheet) 50%),
+                    linear-gradient(-45deg, transparent 50%, var(--paper-sheet) 50%);
+  margin-bottom: -8px;
+}
+
+.receipt-header {
+  padding: 32px 32px 20px 32px;
+  text-align: center;
+  border-bottom: 2px dashed var(--paper-dashed);
+}
+
+.receipt-title {
+  font-size: 38px;
+  font-weight: 900;
+  color: var(--ink-primary);
+  margin-bottom: 6px;
+}
+
+.receipt-subtitle {
+  font-size: 13px;
+  color: var(--ink-secondary);
+  font-family: var(--receipt-mono);
+  text-transform: uppercase;
+}
+
+.receipt-body {
+  padding: 28px 32px;
+}
+
+/* ------------------------------------------------------------
+   DASHED & DOTTED DIVIDERS
+   ------------------------------------------------------------ */
+.dashed-divider {
+  border: 0;
+  border-top: 2px dashed var(--paper-dashed);
+  margin: 24px 0;
+}
+
+.dotted-divider {
+  border: 0;
+  border-top: 1px dotted var(--ink-muted);
+  margin: 16px 0;
+}
+
+/* ------------------------------------------------------------
+   RECEIPT ITEM LINES (brand ................... price ₪)
+   ------------------------------------------------------------ */
+.receipt-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+  font-size: 15px;
+}
+
+.receipt-line.best-line {
+  background-color: rgba(179, 20, 20, 0.04);
+  padding: 10px 8px;
+  border-radius: 4px;
+}
+
+.receipt-col-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.receipt-store-brand {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink-primary);
+}
+
+.receipt-store-sub {
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+.receipt-dots {
+  flex: 1;
+  border-bottom: 1.5px dotted var(--ink-muted);
+  margin: 0 12px;
+  opacity: 0.55;
+  height: 1px;
+}
+
+.receipt-price-box {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-shrink: 0;
+  text-align: left;
+}
+
+.receipt-price {
+  font-family: var(--receipt-mono);
+  font-size: 18px;
+  font-weight: 800;
+  direction: ltr;
+  color: var(--ink-primary);
+}
+
+.receipt-unit-price {
+  font-family: var(--receipt-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  direction: ltr;
+}
+
+/* ------------------------------------------------------------
+   INK STAMPS (Lowest Price, Certified, Active Offer)
+   ------------------------------------------------------------ */
+.stamp-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 12px;
+  text-transform: uppercase;
+  border: 2px solid var(--ink-stamp-red);
+  color: var(--ink-stamp-red);
+  border-radius: 4px;
+  transform: rotate(-3.5deg);
+  box-shadow: inset 0 0 0 1px var(--ink-stamp-red);
+  letter-spacing: 0.5px;
+  background-color: rgba(255, 255, 255, 0.4);
+}
+
+.stamp-badge-blue {
+  border-color: var(--ink-stamp-blue);
+  color: var(--ink-stamp-blue);
+  box-shadow: inset 0 0 0 1px var(--ink-stamp-blue);
+  transform: rotate(2.5deg);
+}
+
+.stamp-large {
+  font-size: 15px;
+  padding: 6px 14px;
+  border-width: 2.5px;
+  transform: rotate(-4deg);
+}
+
+/* ------------------------------------------------------------
+   SATURATED CATEGORY TILES
+   ------------------------------------------------------------ */
+.category-tiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.category-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px;
+  min-height: 130px;
+  border-radius: 6px;
+  color: #ffffff;
+  text-decoration: none;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.category-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+.category-tile-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.category-tile-icon {
+  font-size: 32px;
+}
+
+.category-tile-pill {
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 11px;
+  font-family: var(--receipt-mono);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+.category-tile-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffffff;
+  line-height: 1.25;
+  margin-top: 10px;
+}
+
+.category-tile-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------------
+   SEARCH FIELD (Receipt Style)
+   ------------------------------------------------------------ */
+.receipt-search-box {
+  background-color: #ffffff;
+  border: 2px solid var(--ink-primary);
+  border-radius: 4px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 3px 3px 0 var(--ink-secondary);
+}
+
+.receipt-search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 17px;
+  font-family: var(--font-body);
+  color: var(--ink-primary);
+  direction: rtl;
+  outline: none;
+  padding: 8px 4px;
+}
+
+.receipt-search-input::placeholder {
+  color: var(--ink-muted);
+}
+
+.search-shortcut-pill {
+  font-family: var(--receipt-mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  background-color: var(--paper-sheet-alt);
+  border: 1px solid var(--paper-dashed);
+  border-radius: 3px;
+  color: var(--ink-secondary);
+}
+
+/* ------------------------------------------------------------
+   RECEIPT PRODUCT CARDS
+   ------------------------------------------------------------ */
+.products-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.product-receipt-card {
+  background-color: var(--paper-sheet);
+  border: 1px solid var(--paper-border);
+  padding: 16px;
+  border-radius: 3px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.product-receipt-card:hover {
+  border-color: var(--ink-primary);
+  box-shadow: 2px 2px 0 var(--ink-primary);
+}
+
+.product-receipt-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+
+.product-receipt-name {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink-primary);
+  margin-bottom: 12px;
+  line-height: 1.3;
+}
+
+.product-receipt-bottom {
+  border-top: 1px dashed var(--paper-dashed);
+  padding-top: 10px;
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+/* ------------------------------------------------------------
+   NAV & FILTER BUTTONS
+   ------------------------------------------------------------ */
+.nav-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.nav-filter-btn {
+  background-color: var(--paper-sheet);
+  border: 1px solid var(--paper-dashed);
+  padding: 6px 14px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.nav-filter-btn.active,
+.nav-filter-btn:hover {
+  background-color: var(--ink-primary);
+  color: var(--paper-sheet);
+  border-color: var(--ink-primary);
+}
+
+/* ------------------------------------------------------------
+   NUTRITION FACTS TABLE (Receipt Ticket)
+   ------------------------------------------------------------ */
+.nutrition-receipt {
+  border: 2px solid var(--ink-primary);
+  padding: 16px;
+  background-color: #ffffff;
+  border-radius: 3px;
+  max-width: 480px;
+}
+
+.nutrition-receipt-title {
+  font-size: 20px;
+  font-weight: 900;
+  border-bottom: 4px solid var(--ink-primary);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+.nutrition-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #dedede;
+  font-size: 13px;
+}
+
+.nutrition-row.heavy {
+  font-weight: 800;
+  border-bottom: 2px solid var(--ink-primary);
+}
+
+/* ------------------------------------------------------------
+   FOOTER (Receipt barcode and legal notice)
+   ------------------------------------------------------------ */
+.receipt-barcode {
+  font-family: var(--receipt-mono);
+  letter-spacing: 4px;
+  font-size: 24px;
+  text-align: center;
+  color: var(--ink-secondary);
+  padding: 12px 0 4px 0;
+}
+
+.receipt-footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-muted);
+  border-top: 2px dashed var(--paper-dashed);
+  padding-top: 16px;
+  margin-top: 32px;
+}
+
+
+/* PRODUCT DETAIL HEADER (RTL) */
+.product-detail-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(140px, 200px);
+    grid-template-areas:
+        "center price"
+        "product price";
+    direction: rtl;
+    column-gap: 24px;
+    row-gap: 16px;
+    align-items: start;
+    margin-bottom: 20px;
+}
+
+.product-detail-center {
+    grid-area: center;
+    min-width: 0;
+    text-align: right;
+}
+
+.product-breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px;
+    color: var(--ink-secondary);
+    font-size: 12px;
+}
+
+.product-breadcrumbs a {
+    color: var(--ink-secondary);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.breadcrumb-separator { color: var(--ink-muted); }
+
+.product-detail-name {
+    margin-bottom: 10px;
+    font-size: 30px;
+    font-weight: 900;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.product-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-top: 12px;
+    color: var(--ink-secondary);
+    font-size: 12px;
+}
+
+.product-detail-product {
+    grid-area: product;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+}
+
+.product-detail-image {
+    display: block;
+    width: 160px;
+    height: 160px;
+    max-width: 100%;
+    object-fit: contain;
+    background: #fff;
+    border: 1px solid var(--paper-border);
+    border-radius: 6px;
+}
+
+.product-detail-brand {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.product-detail-price {
+    grid-area: price;
+    display: flex;
+    justify-content: flex-start;
+    align-items: flex-start;
+}
+
+.product-detail-price .stamp-badge { text-align: center; }
+
+.receipt-brand-logo {
+    display: block;
+    flex: 0 0 54px;
+    width: 54px;
+    height: 32px;
+    object-fit: contain;
+    margin-inline-end: 10px;
+    align-self: center;
+}
+
+.product-detail-brand-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.product-detail-brand-logo {
+    display: block;
+    width: 54px;
+    height: 32px;
+    object-fit: contain;
+}
+
+@media (max-width: 700px) {
+    .product-detail-header {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "price"
+            "center"
+            "product";
+    }
+    .product-detail-price { justify-content: center; }
+    .product-detail-image { width: 120px; height: 120px; }
+    .product-detail-name { font-size: 22px; }
+}
+
+/* Category tiles: readable fallback when no category color is provided */
+.category-tile {
+  background-color: var(--paper-sheet-alt);
+  color: var(--ink-primary);
+}
+
+.category-tile-title {
+  color: var(--ink-primary);
+}
+
+.category-tile-sub {
+  color: var(--ink-secondary);
+}
+
+.category-tile-pill {
+  background-color: var(--paper-sheet);
+  color: var(--ink-primary);
+  border: 1px solid var(--paper-border);
+}
+
+
+/* ============================================================
+   HOMEPAGE — SEARCH, STATISTICS & CATALOG NAVIGATION
+   ============================================================ */
+
+.home-search {
+    margin-bottom: 24px;
+}
+
+/* Statistics: receipt-style information panels, not buttons */
+.home-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    padding: 20px 0;
+    margin: 0;
+    border-top: 1px solid var(--paper-border);
+    border-bottom: 1px solid var(--paper-border);
+}
+
+.home-stat {
+    display: block;
+    padding: 20px 12px;
+    text-align: center;
+    color: var(--ink-primary);
+    background: var(--paper-sheet-alt);
+    border: 1px solid var(--paper-border);
+    border-radius: 4px;
+}
+
+.home-stat-value {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--ink-stamp-red);
+    font-family: var(--receipt-mono);
+    font-size: clamp(25px, 4vw, 36px);
+    font-weight: 800;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+
+.home-stat-label {
+    display: block;
+    color: var(--ink-secondary);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+/* Catalog navigation: distinct, interactive tabs */
+.home-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px 0;
+    margin: 0 0 28px;
+    border-bottom: 2px dashed var(--paper-dashed);
+}
+
+.home-tab {
+    flex: 1;
+    max-width: 340px;
+    min-height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px 22px;
+    background: var(--paper-sheet);
+    color: var(--ink-primary);
+    border: 1px solid var(--paper-dashed);
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 18px;
+    font-weight: 800;
+    transition:
+        background 150ms ease,
+        border-color 150ms ease,
+        box-shadow 150ms ease;
+}
+
+.home-tab:hover {
+    background: var(--paper-sheet-alt);
+    border-color: var(--ink-stamp-red);
+}
+
+.home-tab.active {
+    background: var(--ink-primary);
+    color: var(--paper-sheet);
+    border-color: var(--ink-primary);
+    box-shadow: inset 0 -3px 0 var(--ink-stamp-red);
+}
+
+.home-tab-icon {
+    font-size: 25px;
+}
+
+/* Homepage section headings */
+.home-section-heading {
+    margin-bottom: 18px;
+}
+
+/* Responsive layout */
+@media (max-width: 600px) {
+    .home-search {
+        margin-bottom: 18px;
+    }
+
+    .home-stats {
+        gap: 6px;
+        padding: 14px 0;
+    }
+
+    .home-stat {
+        padding: 14px 4px;
+    }
+
+    .home-stat-value {
+        font-size: clamp(20px, 5vw, 28px);
+    }
+
+    .home-stat-label {
+        font-size: 12px;
+    }
+
+    .home-tabs {
+        gap: 8px;
+        padding: 18px 0;
+        margin-bottom: 22px;
+    }
+
+    .home-tab {
+        min-height: 60px;
+        gap: 6px;
+        padding: 12px 8px;
+        font-size: 15px;
+    }
+
+    .home-tab-icon {
+        font-size: 20px;
+    }
+}
+
+/* ------------------------------------------------------------
+   HOMEPAGE PRODUCT PAGINATION
+   ------------------------------------------------------------ */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 28px;
+    direction: ltr;
+}
+
+.pagination a,
+.pagination span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 1px solid var(--paper-border);
+    border-radius: 4px;
+    color: var(--ink-primary);
+    background: var(--paper-sheet);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.pagination a:hover {
+    border-color: var(--ink-stamp-red);
+    color: var(--ink-stamp-red);
+}
+
+.pagination .current {
+    color: var(--paper-sheet);
+    background: var(--ink-primary);
+    border-color: var(--ink-primary);
+}
+
+.pagination .disabled {
+    opacity: 0.4;
+}
+
+.pagination-info {
+    text-align: center;
+    margin-top: 10px;
+    font-family: var(--receipt-mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+}
+
+@media (max-width: 600px) {
+    .pagination {
+        gap: 5px;
+    }
+
+    .pagination a,
+    .pagination span {
+        min-width: 36px;
+        min-height: 36px;
+        padding: 6px 9px;
+        font-size: 12px;
+    }
+}

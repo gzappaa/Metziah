@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import csv
 import logging
+import re
 from datetime import date
 from pathlib import Path
 
@@ -61,6 +62,98 @@ REPORTS_DIR = BASE_DIR / "data" / "reference"
 
 SIZE_CONCURRENCY = 20
 
+# Set by update_file_tracking when --report is used. In report mode,
+# filenames the strict parser rejects fall back to a loose parser so
+# they still appear in the CSV. The DB path always stays strict.
+_REPORT_MODE = False
+
+_EXT_RE = re.compile(r"(\.(xml|gz|zip))+$", re.I)
+_TYPE_RE = re.compile(
+    r"promos?full|prices?full|storesfull|stores?|promos?|prices?",
+    re.I,
+)
+
+# TYPE + 13-digit chain, then optional -3digit and -3digit.
+# Two groups: sub_chain, store. One group: it is the store.
+_ID_RE = re.compile(
+    r"(?<!\d)(\d{13})(?!\d)"
+    r"(?:[-_](\d{3})(?!\d))?"
+    r"(?:[-_](\d{3})(?!\d))?"
+)
+
+# Date only (time ignored). Each pattern is tried, results validated.
+_DATE_PATTERNS = [
+    # YYYYMMDD / YYYY-MM-DD / YYYY_MM_DD / YYYY.MM.DD (time may follow)
+    (re.compile(r"(?<!\d)(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})"), "ymd"),
+    # DDMMYYYY / DD-MM-YYYY / DD_MM_YYYY / DD.MM.YYYY
+    (re.compile(r"(?<!\d)(\d{2})[-_.]?(\d{2})[-_.]?(20\d{2})(?!\d)"), "dmy"),
+]
+
+_FILE_TYPES = {
+    "price": "Price", "prices": "Price",
+    "pricefull": "PriceFull", "pricesfull": "PriceFull",
+    "promo": "Promo", "promos": "Promo",
+    "promofull": "PromoFull", "promosfull": "PromoFull",
+    "store": "Stores", "stores": "Stores",
+    "storesfull": "StoresFull",
+}
+
+
+def _parse_loose_date(text: str) -> str | None:
+    """Return YYYY-MM-DD or None. Invalid dates are skipped."""
+    for rx, order in _DATE_PATTERNS:
+        for m in rx.finditer(text):
+            a, b, c = (int(x) for x in m.groups())
+            y, mo, d = (a, b, c) if order == "ymd" else (c, b, a)
+            try:
+                return date(y, mo, d).isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _loose_normalize(filename: str, size=None) -> dict:
+    stem = _EXT_RE.sub("", filename)
+
+    m = _TYPE_RE.search(stem)
+    file_type = _FILE_TYPES.get(m.group(0).lower()) if m else None
+
+    chain_id = sub_chain_id = store_id = None
+    id_m = _ID_RE.search(stem)
+
+    if id_m:
+        chain_id, a, b = id_m.groups()
+        if a and b:
+            sub_chain_id, store_id = a, b
+        elif a:
+            store_id = a
+        # date is searched after the IDs so chain digits can't match
+        date_text = stem[id_m.end():]
+    else:
+        date_text = stem
+
+    file_date = _parse_loose_date(date_text)
+
+    return {
+        "filename": filename,
+        "file_type": file_type or "Unknown",
+        "chain_id": chain_id,
+        "sub_chain_id": sub_chain_id,
+        "store_id": store_id,
+        "file_date": file_date,
+        "file_size": size,
+        "parse_status": "loose" if (file_type or chain_id) else "unparsed",
+    }
+
+
+def _normalize(filename: str, size=None) -> dict | None:
+    record = normalize_file(filename, size)
+
+    if record is None and _REPORT_MODE:
+        record = _loose_normalize(filename, size)
+
+    return record
+
 
 def _add_record(
     records: list[dict],
@@ -69,7 +162,7 @@ def _add_record(
     size=None,
     **extra,
 ) -> None:
-    record = normalize_file(
+    record = _normalize(
         filename,
         size,
     )
@@ -201,7 +294,7 @@ async def get_binaprojects_files(
                 if not filename:
                     continue
 
-                record = normalize_file(
+                record = _normalize(
                     filename,
                     None,
                 )
@@ -554,7 +647,22 @@ def _is_downloaded_locally(record: dict) -> bool:
 
     Stores registry files:
         data/{feeds_dir}/{chain_id}/stores/{filename}
+
+    Loose (report-only) records may lack chain_id / store_id / a known
+    file_type; those are treated as not downloaded.
     """
+
+    if record.get("chain_id") is None or record.get("file_type") not in (
+        "Stores",
+        "Price",
+        "PriceFull",
+        "Promo",
+        "PromoFull",
+    ):
+        return False
+
+    if record["file_type"] != "Stores" and record.get("store_id") is None:
+        return False
 
     directory = _local_feed_directory(
         record["file_type"]
@@ -628,6 +736,7 @@ def generate_report(
         "file_date",
         "file_size",
         "downloaded",
+        "parse_status",
     ]
 
     with report_path.open(
@@ -644,12 +753,9 @@ def generate_report(
         writer.writeheader()
 
         for record in records:
-            writer.writerow(
-                {
-                    field: record.get(field)
-                    for field in fields
-                }
-            )
+            row = {f: record.get(f) for f in fields}
+            row["parse_status"] = record.get("parse_status", "strict")
+            writer.writerow(row)
 
     logger.info(
         "Report written to %s",
@@ -704,9 +810,15 @@ async def update_file_tracking(
     generate_report_file: bool = False,
     slow: bool = False,
 ) -> int:
-    records = await collect_all_files(
-        slow=slow,
-    )
+    global _REPORT_MODE
+    _REPORT_MODE = generate_report_file
+
+    try:
+        records = await collect_all_files(
+            slow=slow,
+        )
+    finally:
+        _REPORT_MODE = False
 
     if not records:
         logger.info(

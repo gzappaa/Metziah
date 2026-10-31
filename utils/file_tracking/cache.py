@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
-SHUFERSAL_CACHE = CACHE_DIR / "shufersal.json"
 
 
 def _html_cache_path(source_name: str) -> Path:
