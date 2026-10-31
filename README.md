@@ -10,6 +10,10 @@
 
 The main goal is an **accurate, reliable, continuously updated dataset**. The API and website exist to expose and demonstrate that data. They are intentionally simple (see [ADR 016](docs/decisions/016-REST_API_and_WEB_API.md)).
 
+<img width="800" height="392" alt="project" src="https://github.com/user-attachments/assets/c20da7bc-f9bd-495f-b148-fa62448b220e" />
+
+
+
 ## At a glance
 
 | | |
